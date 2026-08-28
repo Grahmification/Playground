@@ -35,10 +35,11 @@
 
             <!-- Non-Power-of-2 Handling Strategy -->
             <div class="mb-4">
-                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="padStrategy">Non-Power-of-2 Handling</label>
+                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="padStrategy">Data Framing / Length Strategy</label>
                 <select id="padStrategy" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
                     <option value="pad" selected>Pad with Zeros (Next Pow 2)</option>
                     <option value="truncate">Drop / Truncate (Prev Pow 2)</option>
+                    <option value="framing">Two Chunks (Next Smallest Pow 2 & Avg)</option>
                 </select>
             </div>
 
@@ -357,7 +358,15 @@
                     // Initial threshold range estimation setup
                     const padStrategy = document.getElementById('padStrategy').value;
                     const origLen = dataRows.length;
-                    const targetLen = padStrategy === 'truncate' ? Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen)))) : Math.pow(2, Math.ceil(Math.log2(origLen)));
+                    
+                    let targetLen;
+                    if (padStrategy === 'truncate') {
+                        targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
+                    } else if (padStrategy === 'framing') {
+                        targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
+                    } else {
+                        targetLen = Math.pow(2, Math.ceil(Math.log2(origLen)));
+                    }
                     
                     const tempAmps = new Array(targetLen).fill(0);
                     for(let i=0; i<Math.min(origLen, targetLen); i++) tempAmps[i] = dataRows[i][1];
@@ -504,94 +513,198 @@
         function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, padStrategy, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
             const originalLength = amplitudes.length;
             
-            // Determine target length based on strategy
+            let rawFrequencies = [];
+            let rawPeriods = [];
+            let rawMagnitudes = [];
+            let rawPsdValues = [];
+            let rawUnwrappedPhases = [];
+            let rawPhasesList = [];
+            let processedAmps = [];
+            let processedTimes = [];
+
             let targetLength;
-            if (padStrategy === 'truncate') {
-                targetLength = Math.pow(2, Math.floor(Math.log2(originalLength)));
-                if (targetLength < 2) targetLength = 2;
-            } else {
-                targetLength = Math.pow(2, Math.ceil(Math.log2(originalLength)));
-            }
 
-            const processedAmps = new Array(targetLength).fill(0);
-            const processedTimes = new Array(targetLength);
-            
-            const dt = times.length > 1 ? times[1] - times[0] : 1.0;
-            for (let i = 0; i < targetLength; i++) {
-                processedAmps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
-                processedTimes[i] = times[i] !== undefined ? times[i] : (times[0] + i * dt);
-            }
-
-            const { windowedData, gain, powerGain } = applyWindow(processedAmps, windowType);
-            const spectrum = fourierTransform(windowedData);
-
-            const halfN = targetLength / 2;
-            const rawPhases = [];
-            for (let i = 0; i < halfN; i++) {
-                const re = spectrum[i * 2];
-                const im = spectrum[i * 2 + 1];
-                rawPhases.push(Math.atan2(im, re));
-            }
-
-            // Compute Unwrapped Phase
-            const unwrappedPhases = new Array(halfN);
-            if (halfN > 0) {
-                unwrappedPhases[0] = rawPhases[0];
-                let cumulativeCorrection = 0;
-                for (let i = 1; i < halfN; i++) {
-                    let diff = rawPhases[i] - rawPhases[i - 1];
-                    if (diff > Math.PI) {
-                        cumulativeCorrection -= 2 * Math.PI;
-                    } else if (diff < -Math.PI) {
-                        cumulativeCorrection += 2 * Math.PI;
-                    }
-                    unwrappedPhases[i] = rawPhases[i] + cumulativeCorrection;
+            if (padStrategy === 'framing') {
+                // Next smallest power of 2 chunk size (e.g. 512 for 600 points)
+                targetLength = Math.max(2, Math.pow(2, Math.floor(Math.log2(originalLength))));
+                if (targetLength > originalLength) {
+                    targetLength = Math.max(2, Math.pow(2, Math.floor(Math.log2(originalLength))));
                 }
-            }
 
-            const rawFrequencies = [];
-            const rawPeriods = [];
-            const rawMagnitudes = [];
-            const rawPsdValues = [];
-            const rawUnwrappedPhases = [];
-            const rawPhasesList = [];
+                processedAmps = amplitudes;
+                processedTimes = times;
 
-            const peakIndices = new Set();
-            let totalMagnitudeSum = 0;
+                // Chunk 1: Starts at index 0 (points 1 to targetLength)
+                const chunk1Amps = new Array(targetLength);
+                for (let i = 0; i < targetLength; i++) {
+                    chunk1Amps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
+                }
 
-            for (let i = 0; i < halfN; i++) {
-                const freq = (i * sampleRate) / targetLength;
-                const period = freq > 0 ? (1.0 / freq) : Infinity;
-                rawFrequencies.push(freq);
-                rawPeriods.push(period);
+                // Chunk 2: Anchored so it ends at the very last data point (index originalLength - targetLength)
+                const startIdx2 = Math.max(0, originalLength - targetLength);
+                const chunk2Amps = new Array(targetLength);
+                for (let i = 0; i < targetLength; i++) {
+                    chunk2Amps[i] = amplitudes[startIdx2 + i] !== undefined ? amplitudes[startIdx2 + i] : 0;
+                }
 
-                const re = spectrum[i * 2];
-                const im = spectrum[i * 2 + 1];
+                const win1 = applyWindow(chunk1Amps, windowType);
+                const win2 = applyWindow(chunk2Amps, windowType);
+
+                const spec1 = fourierTransform(win1.windowedData);
+                const spec2 = fourierTransform(win2.windowedData);
+
+                const halfN = targetLength / 2;
+                const phase1 = [];
+                const phase2 = [];
+
+                for (let i = 0; i < halfN; i++) {
+                    phase1.push(Math.atan2(spec1[i * 2 + 1], spec1[i * 2]));
+                    phase2.push(Math.atan2(spec2[i * 2 + 1], spec2[i * 2]));
+                }
+
+                // Unwrap both phases independently
+                const unwrap1 = new Array(halfN);
+                const unwrap2 = new Array(halfN);
+                unwrap1[0] = phase1[0];
+                unwrap2[0] = phase2[0];
+                let c1 = 0, c2 = 0;
+                for (let i = 1; i < halfN; i++) {
+                    let d1 = phase1[i] - phase1[i - 1];
+                    if (d1 > Math.PI) c1 -= 2 * Math.PI; else if (d1 < -Math.PI) c1 += 2 * Math.PI;
+                    unwrap1[i] = phase1[i] + c1;
+
+                    let d2 = phase2[i] - phase2[i - 1];
+                    if (d2 > Math.PI) c2 -= 2 * Math.PI; else if (d2 < -Math.PI) c2 += 2 * Math.PI;
+                    unwrap2[i] = phase2[i] + c2;
+                }
+
+                let totalMagnitudeSum = 0;
+                const tempMagnitudes = [];
+                const tempPsd = [];
+                const tempUnwrapped = [];
+                const tempRawPhase = [];
+
+                for (let i = 0; i < halfN; i++) {
+                    const freq = (i * sampleRate) / targetLength;
+                    const period = freq > 0 ? (1.0 / freq) : Infinity;
+                    rawFrequencies.push(freq);
+                    rawPeriods.push(period);
+
+                    // Chunk 1 mag & psd
+                    let m1 = Math.sqrt(spec1[i * 2] ** 2 + spec1[i * 2 + 1] ** 2) / targetLength;
+                    if (i > 0) m1 *= 2;
+                    if (win1.gain > 0) m1 /= win1.gain;
+
+                    let psd1 = (spec1[i * 2] ** 2 + spec1[i * 2 + 1] ** 2) / (sampleRate * win1.powerGain * targetLength);
+                    if (i > 0 && i < halfN - 1) psd1 *= 2;
+
+                    // Chunk 2 mag & psd
+                    let m2 = Math.sqrt(spec2[i * 2] ** 2 + spec2[i * 2 + 1] ** 2) / targetLength;
+                    if (i > 0) m2 *= 2;
+                    if (win2.gain > 0) m2 /= win2.gain;
+
+                    let psd2 = (spec2[i * 2] ** 2 + spec2[i * 2 + 1] ** 2) / (sampleRate * win2.powerGain * targetLength);
+                    if (i > 0 && i < halfN - 1) psd2 *= 2;
+
+                    // Average magnitudes, phases, and PSDs
+                    const avgMag = (m1 + m2) / 2.0;
+                    const avgPsd = (psd1 + psd2) / 2.0;
+                    const avgUnwrapped = (unwrap1[i] + unwrap2[i]) / 2.0;
+                    const avgRawPhase = (phase1[i] + phase2[i]) / 2.0;
+
+                    tempMagnitudes.push(avgMag);
+                    tempPsd.push(avgPsd > 0 ? avgPsd : 1e-12);
+                    tempUnwrapped.push(avgUnwrapped);
+                    tempRawPhase.push(avgRawPhase);
+                    totalMagnitudeSum += avgMag;
+                }
+
+                rawMagnitudes = tempMagnitudes;
+                rawPsdValues = tempPsd;
+                rawUnwrappedPhases = tempUnwrapped;
+                rawPhasesList = tempRawPhase;
+
+                var finalHalfN = halfN;
+            } else {
+                if (padStrategy === 'truncate') {
+                    targetLength = Math.pow(2, Math.floor(Math.log2(originalLength)));
+                    if (targetLength < 2) targetLength = 2;
+                } else {
+                    targetLength = Math.pow(2, Math.ceil(Math.log2(originalLength)));
+                }
+
+                processedAmps = new Array(targetLength).fill(0);
+                processedTimes = new Array(targetLength);
                 
-                let mag = Math.sqrt(re ** 2 + im ** 2) / targetLength;
-                if (i > 0) mag *= 2;
-                if (gain > 0) mag /= gain;
-                rawMagnitudes.push(mag);
-                totalMagnitudeSum += mag;
+                const dt = times.length > 1 ? times[1] - times[0] : 1.0;
+                for (let i = 0; i < targetLength; i++) {
+                    processedAmps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
+                    processedTimes[i] = times[i] !== undefined ? times[i] : (times[0] + i * dt);
+                }
 
-                let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * targetLength);
-                if (i > 0 && i < halfN - 1) psd *= 2;
-                rawPsdValues.push(psd > 0 ? psd : 1e-12);
-                rawUnwrappedPhases.push(unwrappedPhases[i]);
-                rawPhasesList.push(rawPhases[i]);
+                const { windowedData, gain, powerGain } = applyWindow(processedAmps, windowType);
+                const spectrum = fourierTransform(windowedData);
+
+                const halfN = targetLength / 2;
+                const rawPhases = [];
+                for (let i = 0; i < halfN; i++) {
+                    const re = spectrum[i * 2];
+                    const im = spectrum[i * 2 + 1];
+                    rawPhases.push(Math.atan2(im, re));
+                }
+
+                const unwrappedPhases = new Array(halfN);
+                if (halfN > 0) {
+                    unwrappedPhases[0] = rawPhases[0];
+                    let cumulativeCorrection = 0;
+                    for (let i = 1; i < halfN; i++) {
+                        let diff = rawPhases[i] - rawPhases[i - 1];
+                        if (diff > Math.PI) {
+                            cumulativeCorrection -= 2 * Math.PI;
+                        } else if (diff < -Math.PI) {
+                            cumulativeCorrection += 2 * Math.PI;
+                        }
+                        unwrappedPhases[i] = rawPhases[i] + cumulativeCorrection;
+                    }
+                }
+
+                let totalMagnitudeSum = 0;
+                for (let i = 0; i < halfN; i++) {
+                    const freq = (i * sampleRate) / targetLength;
+                    const period = freq > 0 ? (1.0 / freq) : Infinity;
+                    rawFrequencies.push(freq);
+                    rawPeriods.push(period);
+
+                    const re = spectrum[i * 2];
+                    const im = spectrum[i * 2 + 1];
+                    
+                    let mag = Math.sqrt(re ** 2 + im ** 2) / targetLength;
+                    if (i > 0) mag *= 2;
+                    if (gain > 0) mag /= gain;
+                    rawMagnitudes.push(mag);
+                    totalMagnitudeSum += mag;
+
+                    let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * targetLength);
+                    if (i > 0 && i < halfN - 1) psd *= 2;
+                    rawPsdValues.push(psd > 0 ? psd : 1e-12);
+                    rawUnwrappedPhases.push(unwrappedPhases[i]);
+                    rawPhasesList.push(rawPhases[i]);
+                }
+                var finalHalfN = halfN;
             }
 
             const maxMag = Math.max(...rawMagnitudes);
             const peakThreshold = maxMag * sensitivity;
+            const peakIndices = new Set();
 
             if (isPeaksEnabled) {
                 if (includeDcInPeaks && unitType !== 'period') {
                     peakIndices.add(0);
                 }
-                if (includeBin1InPeaks && halfN > 1) {
+                if (includeBin1InPeaks && finalHalfN > 1) {
                     peakIndices.add(1);
                 }
-                for (let i = 1; i < halfN - 1; i++) {
+                for (let i = 1; i < finalHalfN - 1; i++) {
                     if (rawMagnitudes[i] > rawMagnitudes[i - 1] && rawMagnitudes[i] > rawMagnitudes[i + 1] && rawMagnitudes[i] >= peakThreshold) {
                         peakIndices.add(i);
                     }
@@ -599,14 +712,15 @@
             }
 
             const activeIndices = [];
-            for (let i = 0; i < halfN; i++) {
+            for (let i = 0; i < finalHalfN; i++) {
                 if (unitType === 'period' && rawFrequencies[i] === 0) continue;
                 activeIndices.push(i);
             }
 
+            let totalMagSumForTable = rawMagnitudes.reduce((a, b) => a + b, 0);
             currentSpectralRows = [];
-            for (let i = 0; i < halfN; i++) {
-                const pctContribution = totalMagnitudeSum > 0 ? (rawMagnitudes[i] / totalMagnitudeSum) * 100 : 0;
+            for (let i = 0; i < finalHalfN; i++) {
+                const pctContribution = totalMagSumForTable > 0 ? (rawMagnitudes[i] / totalMagSumForTable) * 100 : 0;
                 currentSpectralRows.push({
                     bin: i,
                     freq: rawFrequencies[i],
@@ -676,7 +790,7 @@
             const magThreshSignal = processedTimes.map(t => {
                 if (!isMagThreshEnabled) return null;
                 let sum = 0;
-                for (let i = 0; i < halfN; i++) {
+                for (let i = 0; i < finalHalfN; i++) {
                     if (rawMagnitudes[i] >= magThreshold) {
                         if (rawFrequencies[i] === 0) {
                             sum += rawMagnitudes[i];
