@@ -66,6 +66,12 @@
                     <input type="checkbox" id="includeDcPeaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer">
                     <label for="includeDcPeaks" class="text-xs text-gray-700 cursor-pointer">Include DC Offset in Summed Peaks</label>
                 </div>
+
+                <!-- Include Lowest Non-Zero Frequency Checkbox -->
+                <div class="flex items-center space-x-2 mt-2">
+                    <input type="checkbox" id="includeBin1Peaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer">
+                    <label for="includeBin1Peaks" class="text-xs text-gray-700 cursor-pointer">Include Lowest Non-Zero Frequency (Bin 1)</label>
+                </div>
             </div>
 
             <hr class="my-4 border-gray-200">
@@ -399,6 +405,7 @@
         });
 
         document.getElementById('includeDcPeaks').addEventListener('change', () => { if (globalData) triggerProcessing(); });
+        document.getElementById('includeBin1Peaks').addEventListener('change', () => { if (globalData) triggerProcessing(); });
         
         const enableMagThreshCheckbox = document.getElementById('enableMagThresh');
         const magThreshContainer = document.getElementById('magThreshContainer');
@@ -443,6 +450,7 @@
             const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
             const includeDcInPeaks = document.getElementById('includeDcPeaks').checked;
+            const includeBin1InPeaks = document.getElementById('includeBin1Peaks').checked;
             
             const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
             const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
@@ -451,10 +459,10 @@
             const minFreq = isGated ? parseFloat(document.getElementById('minFreqRange').value) : 0;
             const maxFreq = isGated ? parseFloat(document.getElementById('maxFreqRange').value) : (sampleRate / 2);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, includeDcInPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq) {
             const originalLength = amplitudes.length;
             const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             
@@ -474,6 +482,9 @@
             const tableRowsData = [];
 
             let dcMagnitude = 0;
+            let bin1Magnitude = 0;
+            let bin1Frequency = 0;
+            let bin1Phase = 0;
 
             for (let i = 0; i < halfN; i++) {
                 const freq = (i * sampleRate) / nextPower;
@@ -488,6 +499,11 @@
                 magnitudes.push(mag);
 
                 if (i === 0) dcMagnitude = mag;
+                if (i === 1) {
+                    bin1Magnitude = mag;
+                    bin1Frequency = freq;
+                    bin1Phase = Math.atan2(im, re);
+                }
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
@@ -539,7 +555,17 @@
                     });
                 }
 
+                if (includeBin1InPeaks && magnitudes.length > 1) {
+                    peakData[1] = magnitudes[1];
+                    detectedPeakObjects.push({
+                        freq: bin1Frequency,
+                        mag: bin1Magnitude,
+                        phase: bin1Phase
+                    });
+                }
+
                 for (let i = 1; i < magnitudes.length - 1; i++) {
+                    if (i === 1 && includeBin1InPeaks) continue; // Already added if checked
                     if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
                         peakData[i] = magnitudes[i];
                         detectedPeakObjects.push({
