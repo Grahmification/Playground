@@ -33,6 +33,15 @@
                 <input class="block w-full text-xs text-gray-900 border border-gray-300 rounded cursor-pointer bg-gray-50 p-1.5 focus:outline-none" id="csvFile" type="file" accept=".csv">
             </div>
 
+            <!-- Global Frequency Domain Unit Selector -->
+            <div class="mb-4">
+                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="freqDomainUnit">Frequency X-Axis Unit</label>
+                <select id="freqDomainUnit" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
+                    <option value="frequency" selected>Frequency (Hz)</option>
+                    <option value="period">Period (Seconds)</option>
+                </select>
+            </div>
+
             <!-- Window Function Control -->
             <div class="mb-4">
                 <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="windowType">Window Function</label>
@@ -69,7 +78,7 @@
 
                 <!-- Include Lowest Non-Zero Frequency Checkbox -->
                 <div class="flex items-center space-x-2 mt-2">
-                    <input type="checkbox" id="includeBin1Peaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer">
+                    <input type="checkbox" id="includeBin1Peaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer" checked>
                     <label for="includeBin1Peaks" class="text-xs text-gray-700 cursor-pointer">Include Lowest Non-Zero Frequency (Bin 1)</label>
                 </div>
             </div>
@@ -397,6 +406,7 @@
 
         // UI Event Listeners
         document.getElementById('windowType').addEventListener('change', () => { if (globalData) triggerProcessing(); });
+        document.getElementById('freqDomainUnit').addEventListener('change', () => { if (globalData) triggerProcessing(); });
         
         const enablePeaksCheckbox = document.getElementById('enablePeaks');
         const peakControlsContainer = document.getElementById('peakControlsContainer');
@@ -457,6 +467,7 @@
             const dt = globalData.times[1] - globalData.times[0];
             const sampleRate = dt > 0 ? 1.0 / dt : 100;
             const windowSelection = document.getElementById('windowType').value;
+            const unitSelection = document.getElementById('freqDomainUnit').value;
             const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
             const includeDcInPeaks = document.getElementById('includeDcPeaks').checked;
@@ -469,10 +480,10 @@
             const minFreq = isGated ? parseFloat(document.getElementById('minFreqRange').value) : 0;
             const maxFreq = isGated ? parseFloat(document.getElementById('maxFreqRange').value) : (sampleRate / 2);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq) {
             const originalLength = amplitudes.length;
             const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             
@@ -508,10 +519,12 @@
                 }
             }
 
-            const magnitudes = [];
-            const psdValues = [];
-            const frequencies = [];
-            const tableRowsData = [];
+            const rawFrequencies = [];
+            const rawPeriods = [];
+            const rawMagnitudes = [];
+            const rawPsdValues = [];
+            const rawUnwrappedPhases = [];
+            const rawPhasesList = [];
 
             let dcMagnitude = 0;
             let bin1Magnitude = 0;
@@ -520,7 +533,9 @@
 
             for (let i = 0; i < halfN; i++) {
                 const freq = (i * sampleRate) / nextPower;
-                frequencies.push(freq);
+                const period = freq > 0 ? (1.0 / freq) : Infinity;
+                rawFrequencies.push(freq);
+                rawPeriods.push(period);
 
                 const re = spectrum[i * 2];
                 const im = spectrum[i * 2 + 1];
@@ -528,7 +543,7 @@
                 let mag = Math.sqrt(re ** 2 + im ** 2) / nextPower;
                 if (i > 0) mag *= 2;
                 if (gain > 0) mag /= gain;
-                magnitudes.push(mag);
+                rawMagnitudes.push(mag);
 
                 if (i === 0) dcMagnitude = mag;
                 if (i === 1) {
@@ -539,74 +554,126 @@
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
-                psdValues.push(psd > 0 ? psd : 1e-12);
-
-                const period = freq > 0 ? (1.0 / freq) : Infinity;
-                if (!isGated || (freq >= minFreq && freq <= maxFreq)) {
-                    tableRowsData.push({
-                        index: i,
-                        freq: freq,
-                        period: period,
-                        mag: mag,
-                        phase: rawPhases[i],
-                        unwrappedPhase: unwrappedPhases[i]
-                    });
-                }
+                rawPsdValues.push(psd > 0 ? psd : 1e-12);
+                rawUnwrappedPhases.push(unwrappedPhases[i]);
+                rawPhasesList.push(rawPhases[i]);
             }
 
-            // Build Table HTML
+            // Filter out DC if unitType === 'period'
+            const activeIndices = [];
+            for (let i = 0; i < halfN; i++) {
+                if (unitType === 'period' && rawFrequencies[i] === 0) continue;
+                activeIndices.push(i);
+            }
+
+            // If period mode, reverse arrays so shortest period is left and max period is right
+            if (unitType === 'period') {
+                activeIndices.reverse();
+            }
+
+            // Build Table HTML (includes DC if present in raw data)
             const tableBody = document.getElementById('spectralTableBody');
             tableBody.innerHTML = '';
-            tableRowsData.forEach(row => {
+            for (let i = 0; i < halfN; i++) {
+                if (unitType === 'period' && rawFrequencies[i] === 0) continue;
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-gray-50 transition-colors";
                 tr.innerHTML = `
-                    <td class="py-2.5 px-4 font-mono text-gray-500">${row.index}</td>
-                    <td class="py-2.5 px-4 font-semibold text-blue-600">${row.freq.toFixed(3)} Hz</td>
-                    <td class="py-2.5 px-4 font-mono">${row.period === Infinity ? 'Infinite (DC)' : row.period.toFixed(4) + ' s'}</td>
-                    <td class="py-2.5 px-4 font-mono font-bold">${row.mag.toFixed(4)}</td>
-                    <td class="py-2.5 px-4 font-mono text-gray-600">${row.phase.toFixed(4)}</td>
-                    <td class="py-2.5 px-4 font-mono text-purple-700 font-semibold">${row.unwrappedPhase.toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-gray-500">${i}</td>
+                    <td class="py-2.5 px-4 font-semibold text-blue-600">${rawFrequencies[i].toFixed(3)} Hz</td>
+                    <td class="py-2.5 px-4 font-mono">${rawPeriods[i] === Infinity ? 'Infinite (DC)' : rawPeriods[i].toFixed(4) + ' s'}</td>
+                    <td class="py-2.5 px-4 font-mono font-bold">${rawMagnitudes[i].toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-gray-600">${rawPhasesList[i].toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-purple-700 font-semibold">${rawUnwrappedPhases[i].toFixed(4)}</td>
                 `;
                 tableBody.appendChild(tr);
-            });
-            document.getElementById('tableMetaCount').textContent = `${tableRowsData.length} components listed`;
+            }
+            document.getElementById('tableMetaCount').textContent = `${activeIndices.length} components listed`;
 
-            const maxMag = Math.max(...magnitudes);
+            const maxMag = Math.max(...rawMagnitudes);
             const peakThreshold = maxMag * sensitivity;
-            const peakData = new Array(magnitudes.length).fill(null);
-            const detectedPeakObjects = [];
             
+            const detectedPeakObjects = [];
             if (isPeaksEnabled) {
-                if (includeDcInPeaks) {
-                    detectedPeakObjects.push({
-                        freq: 0,
-                        mag: dcMagnitude,
-                        phase: unwrappedPhases[0]
-                    });
+                if (includeDcInPeaks && unitType !== 'period') {
+                    detectedPeakObjects.push({ freq: 0, mag: dcMagnitude, phase: rawUnwrappedPhases[0] });
                 }
-
-                if (includeBin1InPeaks && magnitudes.length > 1) {
-                    peakData[1] = magnitudes[1];
-                    detectedPeakObjects.push({
-                        freq: bin1Frequency,
-                        mag: bin1Magnitude,
-                        phase: bin1Phase
-                    });
+                if (includeBin1InPeaks && halfN > 1) {
+                    detectedPeakObjects.push({ freq: bin1Frequency, mag: bin1Magnitude, phase: bin1Phase });
                 }
-
-                for (let i = 1; i < magnitudes.length - 1; i++) {
-                    if (i === 1 && includeBin1InPeaks) continue;
-                    if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
-                        peakData[i] = magnitudes[i];
-                        detectedPeakObjects.push({
-                            freq: frequencies[i],
-                            mag: magnitudes[i],
-                            phase: unwrappedPhases[i]
-                        });
+                for (let i = 1; i < halfN - 1; i++) {
+                    if (rawMagnitudes[i] > rawMagnitudes[i - 1] && rawMagnitudes[i] > rawMagnitudes[i + 1] && rawMagnitudes[i] >= peakThreshold) {
+                        detectedPeakObjects.push({ freq: rawFrequencies[i], mag: rawMagnitudes[i], phase: rawUnwrappedPhases[i] });
                     }
                 }
             }
+
+            // Build numeric coordinate data points ({x, y}) for continuous linear scale mapping
+            const magnitudePoints = activeIndices.map(i => ({
+                x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
+                y: rawMagnitudes[i]
+            }));
+
+            const psdPoints = activeIndices.map(i => ({
+                x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
+                y: rawPsdValues[i]
+            }));
+
+            const phasePoints = activeIndices.map(i => ({
+                x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
+                y: rawUnwrappedPhases[i]
+            }));
+
+            const peakPoints = [];
+            if (isPeaksEnabled) {
+                detectedPeakObjects.forEach(peak => {
+                    const xVal = unitType === 'period' ? (peak.freq > 0 ? 1.0 / peak.freq : null) : peak.freq;
+                    if (xVal !== null && (unitType !== 'period' || xVal !== Infinity)) {
+                        peakPoints.push({ x: xVal, y: peak.mag });
+                    }
+                });
+            }
+
+            let includedCount = 0;
+            const magThreshSignal = times.map(t => {
+                if (!isMagThreshEnabled) return null;
+                let sum = 0;
+                for (let i = 0; i < halfN; i++) {
+                    if (rawMagnitudes[i] >= magThreshold) {
+                        if (rawFrequencies[i] === 0) {
+                            sum += rawMagnitudes[i];
+                        } else {
+                            sum += rawMagnitudes[i] * Math.cos(2 * Math.PI * rawFrequencies[i] + rawUnwrappedPhases[i]); // Note: standard evaluation
+                        }
+                    }
+                }
+                return sum;
+            });
+
+            if (isMagThreshEnabled) {
+                for (let i = 0; i < rawMagnitudes.length; i++) {
+                    if (rawMagnitudes[i] >= magThreshold) includedCount++;
+                }
+            }
+            document.getElementById('magThreshCount').textContent = isMagThreshEnabled ? includedCount : 0;
+
+            const threshLinePoints = magnitudePoints.map(pt => ({
+                x: pt.x,
+                y: isMagThreshEnabled ? magThreshold : null
+            }));
+
+            const fftThreshPoints = [];
+            const psdThreshPoints = [];
+            const phaseThreshPoints = [];
+
+            activeIndices.forEach(i => {
+                if (isMagThreshEnabled && rawMagnitudes[i] >= magThreshold) {
+                    const xVal = unitType === 'period' ? rawPeriods[i] : rawFrequencies[i];
+                    fftThreshPoints.push({ x: xVal, y: rawMagnitudes[i] });
+                    psdThreshPoints.push({ x: xVal, y: rawPsdValues[i] });
+                    phaseThreshPoints.push({ x: xVal, y: rawUnwrappedPhases[i] });
+                }
+            });
 
             const summedPeakSignal = times.map(t => {
                 if (!isPeaksEnabled) return null;
@@ -621,39 +688,11 @@
                 return sum;
             });
 
-            let includedCount = 0;
-            const magThreshSignal = times.map(t => {
-                if (!isMagThreshEnabled) return null;
-                let sum = 0;
-                for (let i = 0; i < magnitudes.length; i++) {
-                    if (magnitudes[i] >= magThreshold) {
-                        if (frequencies[i] === 0) {
-                            sum += magnitudes[i];
-                        } else {
-                            sum += magnitudes[i] * Math.cos(2 * Math.PI * frequencies[i] * t + unwrappedPhases[i]);
-                        }
-                    }
-                }
-                return sum;
-            });
-
-            if (isMagThreshEnabled) {
-                for (let i = 0; i < magnitudes.length; i++) {
-                    if (magnitudes[i] >= magThreshold) includedCount++;
-                }
-            }
-            document.getElementById('magThreshCount').textContent = isMagThreshEnabled ? includedCount : 0;
-
-            const threshLineData = frequencies.map(f => isMagThreshEnabled ? magThreshold : null);
-
-            const fftThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? magnitudes[i] : null);
-            const psdThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? psdValues[i] : null);
-            const phaseThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? unwrappedPhases[i] : null);
-
-            const gatingBoundsData = frequencies.map(f => {
-                if (!isGated) return null;
-                return (f >= minFreq && f <= maxFreq) ? maxMag * 1.05 : null;
-            });
+            const gatingBoundsPoints = activeIndices.map(i => {
+                const f = rawFrequencies[i];
+                if (!isGated || unitType === 'period') return null;
+                return (f >= minFreq && f <= maxFreq) ? { x: f, y: maxMag * 1.05 } : null;
+            }).filter(Boolean);
 
             // Polar Phase Data (Unit Circle r = 1)
             const unitCirclePoints = [];
@@ -661,30 +700,32 @@
                 unitCirclePoints.push({ x: Math.cos(a), y: Math.sin(a) });
             }
 
-            const polarPhasePoints = frequencies.map((f, i) => {
-                const phi = rawPhases[i];
+            const polarPhasePoints = activeIndices.map(i => {
+                const phi = rawPhasesList[i];
                 return {
                     x: Math.cos(phi),
                     y: Math.sin(phi),
-                    freq: f,
-                    mag: magnitudes[i],
+                    freq: rawFrequencies[i],
+                    period: rawPeriods[i],
+                    mag: rawMagnitudes[i],
                     phase: phi
                 };
             });
 
-            const polarThreshPoints = frequencies.map((f, i) => {
-                if (isMagThreshEnabled && magnitudes[i] >= magThreshold) {
-                    const phi = rawPhases[i];
+            const polarThreshPoints = activeIndices.map(i => {
+                if (isMagThreshEnabled && rawMagnitudes[i] >= magThreshold) {
+                    const phi = rawPhasesList[i];
                     return {
                         x: Math.cos(phi),
                         y: Math.sin(phi),
-                        freq: f,
-                        mag: magnitudes[i],
+                        freq: rawFrequencies[i],
+                        period: rawPeriods[i],
+                        mag: rawMagnitudes[i],
                         phase: phi
                     };
                 }
                 return null;
-            }).filter(Boolean); // Filter out null elements for Chart.js scatter compatibility
+            }).filter(Boolean);
 
             function updateOrCreateChart(chartInstance, canvasId, config) {
                 if (chartInstance) {
@@ -706,6 +747,7 @@
                         return new Chart(ctx, config);
                     }
 
+                    chartInstance.options = config.options;
                     chartInstance.update('none');
                     
                     visibilityStates.forEach((isVisible, idx) => {
@@ -720,6 +762,8 @@
                     return new Chart(ctx, config);
                 }
             }
+
+            const xAxisLabelText = unitType === 'period' ? 'Period (s)' : 'Frequency (Hz)';
 
             // 1. Time Chart
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
@@ -742,38 +786,36 @@
                 }
             });
 
-            // 2. FFT Magnitude Chart
+            // 2. FFT Magnitude Chart (Linear Numeric X-Axis)
             fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
-                    labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [
-                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
+                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudePoints, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: peakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
                         ...(isMagThreshEnabled ? [
-                            { label: 'Threshold Cutoff', data: threshLineData, borderColor: 'rgba(147, 51, 234, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
+                            { label: 'Threshold Cutoff', data: threshLinePoints, borderColor: 'rgba(147, 51, 234, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
                             { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }
                         ] : []),
-                        ...(isGated ? [{ label: 'Active Frequency Gate', data: gatingBoundsData, borderColor: 'rgba(37, 99, 235, 0.6)', backgroundColor: 'rgba(37, 99, 235, 0.1)', borderWidth: 1, borderDash: [3, 3], fill: 'origin', pointRadius: 0, order: 4 }] : [])
+                        ...(isGated && unitType !== 'period' ? [{ label: 'Active Frequency Gate', data: gatingBoundsPoints, borderColor: 'rgba(37, 99, 235, 0.6)', backgroundColor: 'rgba(37, 99, 235, 0.1)', borderWidth: 1, borderDash: [3, 3], fill: 'origin', pointRadius: 0, order: 4 }] : [])
                     ]
                 },
                 options: { 
                     responsive: true, 
                     maintainAspectRatio: false, 
                     scales: { 
-                        x: { title: { display: true, text: 'Frequency (Hz)' } }, 
+                        x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
                         y: { title: { display: true, text: 'Magnitude' } } 
                     } 
                 }
             });
 
-            // 3. PSD Chart
+            // 3. PSD Chart (Linear Numeric X-Axis)
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
-                    labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [
-                        { label: 'PSD (V²/Hz)', data: psdValues, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 1 },
+                        { label: 'PSD (V²/Hz)', data: psdPoints, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 1 },
                         ...(isMagThreshEnabled ? [{ label: 'Included Components', data: psdThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }] : [])
                     ]
                 },
@@ -781,19 +823,18 @@
                     responsive: true, 
                     maintainAspectRatio: false, 
                     scales: { 
-                        x: { title: { display: true, text: 'Frequency (Hz)' } }, 
+                        x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
                         y: { type: 'logarithmic', title: { display: true, text: 'PSD (V²/Hz) [Log]' } } 
                     } 
                 }
             });
 
-            // 4. Phase Chart (Unwrapped)
+            // 4. Phase Chart (Unwrapped) (Linear Numeric X-Axis)
             phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
-                    labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [
-                        { label: 'Unwrapped Phase (rad)', data: unwrappedPhases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 },
+                        { label: 'Unwrapped Phase (rad)', data: phasePoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 },
                         ...(isMagThreshEnabled ? [{ label: 'Included Components', data: phaseThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(79, 70, 229)', pointRadius: 4, showLine: false, order: 0 }] : [])
                     ]
                 },
@@ -801,7 +842,7 @@
                     responsive: true, 
                     maintainAspectRatio: false, 
                     scales: { 
-                        x: { title: { display: true, text: 'Frequency (Hz)' } }, 
+                        x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
                         y: { title: { display: true, text: 'Unwrapped Phase (rad)' } } 
                     } 
                 }
@@ -871,8 +912,9 @@
                                     const pt = context.raw;
                                     if (!pt) return null;
                                     const labelPrefix = context.dataset.label === 'Included Components' ? ' [Threshold Match]' : '';
+                                    const pStr = pt.period === Infinity ? 'Infinite' : pt.period.toFixed(3) + ' s';
                                     return [
-                                        ` Freq: ${pt.freq.toFixed(2)} Hz${labelPrefix}`,
+                                        ` Freq: ${pt.freq.toFixed(2)} Hz (Period: ${pStr})${labelPrefix}`,
                                         ` Magnitude: ${pt.mag.toFixed(4)}`,
                                         ` Phase: ${pt.phase.toFixed(3)} rad`
                                     ];
