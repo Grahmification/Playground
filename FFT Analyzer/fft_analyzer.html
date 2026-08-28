@@ -24,7 +24,7 @@
             </div>
             
             <p class="text-xs text-gray-600 mb-4">
-                Upload time-series data to view standardized spectral charts.
+                Upload time-series data to view standardized spectral charts and data tables.
             </p>
 
             <!-- File Upload Control -->
@@ -98,18 +98,24 @@
         </div>
     </aside>
 
-    <!-- Main Content: Maximized Plot Area -->
+    <!-- Main Content Area -->
     <main class="flex-1 p-3 md:p-4 flex flex-col gap-4 w-full">
-        <!-- Status Bar -->
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white px-4 py-2.5 rounded-lg shadow-sm border border-gray-200 gap-2">
+        <!-- Top Navigation Bar & Status -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white px-4 py-2.5 rounded-lg shadow-sm border border-gray-200 gap-3">
             <div>
                 <h2 class="text-sm font-bold text-gray-800">Analysis Output</h2>
                 <p id="statusText" class="text-xs text-gray-500">Awaiting dataset upload...</p>
             </div>
+
+            <!-- Tab Switcher -->
+            <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                <button id="tabChartsBtn" onclick="switchTab('charts')" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer">Charts View</button>
+                <button id="tabTableBtn" onclick="switchTab('table')" class="px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer">Spectral Table</button>
+            </div>
         </div>
 
-        <!-- Grid of 4 Large Charts -->
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
+        <!-- Tab 1: Charts View -->
+        <div id="viewCharts" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
                 <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Time Domain (Original & Summed Peaks)</h3>
@@ -142,6 +148,32 @@
                 </div>
             </div>
         </div>
+
+        <!-- Tab 2: Spectral Data Table View -->
+        <div id="viewTable" class="hidden bg-white rounded-lg shadow-sm border border-gray-200 flex-1 flex flex-col overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Spectral Components Analysis Matrix</h3>
+                <span id="tableMetaCount" class="text-xs text-gray-500 font-medium">0 components listed</span>
+            </div>
+            <div class="overflow-y-auto flex-1 max-h-[720px]">
+                <table class="w-full text-left border-collapse text-xs">
+                    <thead class="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider sticky top-0 border-b border-gray-200">
+                        <tr>
+                            <th class="py-2.5 px-4">Bin Index</th>
+                            <th class="py-2.5 px-4">Frequency (Hz)</th>
+                            <th class="py-2.5 px-4">Period (s)</th>
+                            <th class="py-2.5 px-4">Magnitude</th>
+                            <th class="py-2.5 px-4">Phase (rad)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="spectralTableBody" class="divide-y divide-gray-100 text-gray-700">
+                        <tr>
+                            <td colspan="5" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </main>
 
     <script>
@@ -150,6 +182,27 @@
         let psdChart = null;
         let phaseChart = null;
         let globalData = null;
+
+        function switchTab(tabName) {
+            const chartsBtn = document.getElementById('tabChartsBtn');
+            const tableBtn = document.getElementById('tabTableBtn');
+            const viewCharts = document.getElementById('viewCharts');
+            const viewTable = document.getElementById('viewTable');
+
+            if (tabName === 'charts') {
+                chartsBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer";
+                tableBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer";
+                viewCharts.classList.remove('hidden');
+                viewCharts.classList.add('grid');
+                viewTable.classList.add('hidden');
+            } else {
+                tableBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer";
+                chartsBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer";
+                viewTable.classList.remove('hidden');
+                viewCharts.classList.remove('grid');
+                viewCharts.classList.add('hidden');
+            }
+        }
 
         // Cooley-Tukey Radix-2 FFT Implementation
         function fourierTransform(signal) {
@@ -349,6 +402,7 @@
             const psdValues = [];
             const phases = [];
             const frequencies = [];
+            const tableRowsData = [];
 
             for (let i = 0; i < halfN; i++) {
                 const freq = (i * sampleRate) / nextPower;
@@ -357,25 +411,47 @@
                 const re = spectrum[i * 2];
                 const im = spectrum[i * 2 + 1];
                 
-                // Base magnitude calculation
                 let mag = Math.sqrt(re ** 2 + im ** 2) / nextPower;
-                
-                // Single-sided spectrum scaling: multiply AC components by 2, leave DC (i=0) alone
-                if (i > 0) {
-                    mag *= 2;
-                }
-
-                // Account for window energy loss
+                if (i > 0) mag *= 2;
                 if (gain > 0) mag /= gain;
                 magnitudes.push(mag);
 
-                // PSD Scaling (Energy normalized)
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
                 psdValues.push(psd > 0 ? psd : 1e-12);
 
-                phases.push(Math.atan2(im, re));
+                const phase = Math.atan2(im, re);
+                phases.push(phase);
+
+                // Populate table dataset (include DC and gated range components)
+                const period = freq > 0 ? (1.0 / freq) : Infinity;
+                if (!isGated || (freq >= minFreq && freq <= maxFreq)) {
+                    tableRowsData.push({
+                        index: i,
+                        freq: freq,
+                        period: period,
+                        mag: mag,
+                        phase: phase
+                    });
+                }
             }
+
+            // Build Table HTML
+            const tableBody = document.getElementById('spectralTableBody');
+            tableBody.innerHTML = '';
+            tableRowsData.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-gray-50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-2.5 px-4 font-mono text-gray-500">${row.index}</td>
+                    <td class="py-2.5 px-4 font-semibold text-blue-600">${row.freq.toFixed(3)} Hz</td>
+                    <td class="py-2.5 px-4 font-mono">${row.period === Infinity ? 'Infinite (DC)' : row.period.toFixed(4) + ' s'}</td>
+                    <td class="py-2.5 px-4 font-mono font-bold">${row.mag.toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-gray-600">${row.phase.toFixed(4)}</td>
+                `;
+                tableBody.appendChild(tr);
+            });
+            document.getElementById('tableMetaCount').textContent = `${tableRowsData.length} components listed`;
 
             const maxMag = Math.max(...magnitudes);
             const peakThreshold = maxMag * sensitivity;
