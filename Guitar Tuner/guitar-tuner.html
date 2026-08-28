@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Guitar Tuner with History Chart</title>
+    <title>Interactive Guitar Tuner with Alternate Tunings</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -26,8 +26,25 @@
         }
         h1 {
             font-size: 1.5rem;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
             color: #ffffff;
+        }
+        .tuning-selector {
+            margin-bottom: 20px;
+        }
+        select {
+            background-color: #2c2c2c;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            font-size: 0.95rem;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+        }
+        select:focus {
+            outline: none;
+            border-color: #bb86fc;
         }
         button {
             background-color: #bb86fc;
@@ -39,6 +56,7 @@
             border-radius: 8px;
             cursor: pointer;
             transition: background 0.2s;
+            width: 100%;
         }
         button:hover {
             background-color: #9965f4;
@@ -118,6 +136,18 @@
 
 <div class="container">
     <h1>Guitar Tuner</h1>
+    
+    <div class="tuning-selector">
+        <select id="tuningSelect">
+            <option value="standard">Standard (E A D G B E)</option>
+            <option value="dropD">Drop D (D A D G B E)</option>
+            <option value="halfStepDown">Half Step Down (Eb Ab Db Gb Bb Eb)</option>
+            <option value="openG">Open G (D G D G B D)</option>
+            <option value="openD">Open D (D A D F# A D)</option>
+            <option value="DADGAD">DADGAD (D A D G A D)</option>
+        </select>
+    </div>
+
     <button id="startBtn">Start Tuner</button>
     
     <div class="display-area" id="displayArea">
@@ -138,20 +168,65 @@
 </div>
 
 <script>
-    const guitarNotes = [
-        { name: "E2", freq: 82.41 },
-        { name: "A2", freq: 110.00 },
-        { name: "D3", freq: 146.83 },
-        { name: "G3", freq: 196.00 },
-        { name: "B3", freq: 246.94 },
-        { name: "E4", freq: 329.63 }
-    ];
+    // Dictionary of common 6-string guitar tunings (frequencies in Hz)
+    const tunings = {
+        standard: [
+            { name: "E2", freq: 82.41 },
+            { name: "A2", freq: 110.00 },
+            { name: "D3", freq: 146.83 },
+            { name: "G3", freq: 196.00 },
+            { name: "B3", freq: 246.94 },
+            { name: "E4", freq: 329.63 }
+        ],
+        dropD: [
+            { name: "D2", freq: 73.42 },
+            { name: "A2", freq: 110.00 },
+            { name: "D3", freq: 146.83 },
+            { name: "G3", freq: 196.00 },
+            { name: "B3", freq: 246.94 },
+            { name: "E4", freq: 329.63 }
+        ],
+        halfStepDown: [
+            { name: "Eb2", freq: 77.78 },
+            { name: "Ab2", freq: 103.83 },
+            { name: "Db3", freq: 138.59 },
+            { name: "Gb3", freq: 185.00 },
+            { name: "Bb3", freq: 233.08 },
+            { name: "Eb4", freq: 311.13 }
+        ],
+        openG: [
+            { name: "D2", freq: 73.42 },
+            { name: "G2", freq: 98.00 },
+            { name: "D3", freq: 146.83 },
+            { name: "G3", freq: 196.00 },
+            { name: "B3", freq: 246.94 },
+            { name: "D4", freq: 293.66 }
+        ],
+        openD: [
+            { name: "D2", freq: 73.42 },
+            { name: "A2", freq: 110.00 },
+            { name: "D3", freq: 146.83 },
+            { name: "F#3", freq: 185.00 },
+            { name: "A3", freq: 220.00 },
+            { name: "D4", freq: 293.66 }
+        ],
+        DADGAD: [
+            { name: "D2", freq: 73.42 },
+            { name: "A2", freq: 110.00 },
+            { name: "D3", freq: 146.83 },
+            { name: "G3", freq: 196.00 },
+            { name: "A3", freq: 220.00 },
+            { name: "D4", freq: 293.66 }
+        ]
+    };
 
+    let activeTuningNotes = tunings.standard;
     let audioContext, analyser, microphone, javascriptNode;
     let isRunning = false;
-    let pitchHistory = []; // Stores recent cents errors
+    let pitchHistory = [];
 
     const startBtn = document.getElementById('startBtn');
+    const tuningSelect = document.getElementById('tuningSelect');
     const displayArea = document.getElementById('displayArea');
     const noteNameEl = document.getElementById('noteName');
     const frequencyDisplayEl = document.getElementById('frequencyDisplay');
@@ -159,6 +234,11 @@
     const centsDisplayEl = document.getElementById('centsDisplay');
     const canvas = document.getElementById('historyCanvas');
     const canvasCtx = canvas.getContext('2d');
+
+    tuningSelect.addEventListener('change', (e) => {
+        activeTuningNotes = tunings[e.target.value];
+        pitchHistory = []; // Clear chart history on switch
+    });
 
     startBtn.addEventListener('click', toggleTuner);
 
@@ -249,14 +329,14 @@
     function updateUI(freq) {
         frequencyDisplayEl.textContent = `${freq.toFixed(1)} Hz`;
 
-        let closest = guitarNotes[0];
+        let closest = activeTuningNotes[0];
         let minDiff = Math.abs(freq - closest.freq);
 
-        for (let i = 1; i < guitarNotes.length; i++) {
-            let diff = Math.abs(freq - guitarNotes[i].freq);
+        for (let i = 1; i < activeTuningNotes.length; i++) {
+            let diff = Math.abs(freq - activeTuningNotes[i].freq);
             if (diff < minDiff) {
                 minDiff = diff;
-                closest = guitarNotes[i];
+                closest = activeTuningNotes[i];
             }
         }
 
@@ -278,10 +358,9 @@
         centsDisplayEl.textContent = `${cents > 0 ? '+' : ''}${cents.toFixed(0)} cents`;
         centsDisplayEl.style.color = Math.abs(cents) < 3 ? "#03dac6" : "#a0a0a0";
 
-        // Push to history for scrolling graph
         pitchHistory.push(clampedCents);
         if (pitchHistory.length > 100) {
-            pitchHistory.shift(); // Keep latest 100 data points
+            pitchHistory.shift();
         }
 
         drawChart();
@@ -293,11 +372,9 @@
 
         canvasCtx.clearRect(0, 0, width, height);
 
-        // Draw background grid lines
         canvasCtx.strokeStyle = '#222';
         canvasCtx.lineWidth = 1;
 
-        // Center line (0 cents / in-tune)
         canvasCtx.beginPath();
         canvasCtx.moveTo(0, height / 2);
         canvasCtx.lineTo(width, height / 2);
@@ -305,7 +382,6 @@
 
         if (pitchHistory.length < 2) return;
 
-        // Draw rolling history line
         canvasCtx.strokeStyle = '#03dac6';
         canvasCtx.lineWidth = 2;
         canvasCtx.beginPath();
@@ -313,7 +389,6 @@
         const step = width / 100;
         for (let i = 0; i < pitchHistory.length; i++) {
             const x = i * step;
-            // Map cents (-50 to +50) to canvas height (height to 0)
             const y = height / 2 - (pitchHistory[i] / 50) * (height / 2 - 10);
 
             if (i === 0) {
