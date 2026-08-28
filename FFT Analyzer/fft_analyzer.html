@@ -24,7 +24,7 @@
             </div>
             
             <p class="text-sm text-gray-600 mb-6">
-                Upload time-series data to view spectral analysis, windowing, and smooth high-res frequency gating.
+                Upload time-series data to view spectral analysis, summed peak reconstitution, and frequency gating.
             </p>
 
             <!-- File Upload Control -->
@@ -41,6 +41,18 @@
                     <option value="hann" selected>Hann</option>
                     <option value="hamming">Hamming</option>
                 </select>
+            </div>
+
+            <hr class="my-6 border-gray-200">
+
+            <!-- Peak Detection Sensitivity Control -->
+            <div class="mb-5">
+                <div class="flex justify-between text-xs text-gray-600 mb-1">
+                    <span class="font-semibold uppercase tracking-wider text-gray-500">Peak Sensitivity:</span>
+                    <span id="sensVal" class="font-bold">5%</span>
+                </div>
+                <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-red-600">
+                <span class="text-[11px] text-gray-400">Min prominence % of max magnitude</span>
             </div>
 
             <hr class="my-6 border-gray-200">
@@ -83,7 +95,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Time Domain (Original, Windowed & Smooth Gated)</h3>
+                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Time Domain (Original, Gated & Summed Peaks)</h3>
                 <div class="relative flex-1 w-full h-[280px]">
                     <canvas id="timeChart"></canvas>
                 </div>
@@ -91,7 +103,7 @@
 
             <!-- Frequency Domain Chart Card -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Frequency Domain (FFT Magnitude)</h3>
+                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Frequency Domain (FFT Magnitude & Peak Detection)</h3>
                 <div class="relative flex-1 w-full h-[280px]">
                     <canvas id="fftChart"></canvas>
                 </div>
@@ -176,14 +188,12 @@
             return results;
         }
 
-        // IFFT with zero-padding interpolation support for smooth high-res curves
         function computeSmoothIFFT(gatedBins, originalN, interpolationFactor) {
             const highN = originalN * interpolationFactor;
             const real = new Array(highN).fill(0);
             const imag = new Array(highN).fill(0);
 
             const halfN = originalN / 2;
-            // Map original bins into zero-padded high-resolution spectrum
             for (let i = 0; i < halfN; i++) {
                 real[i] = gatedBins[i].re * interpolationFactor;
                 imag[i] = gatedBins[i].im * interpolationFactor;
@@ -194,7 +204,6 @@
                 }
             }
 
-            // Perform Inverse FFT on highN points
             const res = computeFFT_internal(real, imag.map(v => -v), highN);
             const reconstructed = new Array(highN);
             for (let i = 0; i < highN; i++) {
@@ -315,6 +324,10 @@
         });
 
         document.getElementById('windowType').addEventListener('change', () => { if (globalData) triggerProcessing(); });
+        document.getElementById('sensRange').addEventListener('input', (e) => {
+            document.getElementById('sensVal').textContent = e.target.value + '%';
+            if (globalData) triggerProcessing();
+        });
         document.getElementById('minFreqRange').addEventListener('input', (e) => {
             document.getElementById('minFreqVal').textContent = parseFloat(e.target.value).toFixed(1) + ' Hz';
             if (globalData) triggerProcessing();
@@ -328,13 +341,14 @@
             const dt = globalData.times[1] - globalData.times[0];
             const sampleRate = dt > 0 ? 1.0 / dt : 100;
             const windowSelection = document.getElementById('windowType').value;
+            const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
             const minFreq = parseFloat(document.getElementById('minFreqRange').value);
             const maxFreq = parseFloat(document.getElementById('maxFreqRange').value);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, sensitivity, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, sensitivity, minFreq, maxFreq) {
             const power = Math.floor(Math.log2(amplitudes.length));
             const n = Math.pow(2, power);
             
@@ -377,7 +391,23 @@
                 }
             }
 
-            // Generate high-resolution smooth gated signal via interpolation factor of 4
+            // Dynamic Peak Detection & Summed Sinusoidal Peak Components Generation
+            const maxMag = Math.max(...magnitudes);
+            const peakThreshold = maxMag * sensitivity;
+            const peakData = new Array(magnitudes.length).fill(null);
+            const detectedPeakObjects = [];
+            
+            for (let i = 1; i < magnitudes.length - 1; i++) {
+                if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
+                    peakData[i] = magnitudes[i];
+                    detectedPeakObjects.push({
+                        freq: frequencies[i],
+                        mag: magnitudes[i],
+                        phase: phases[i]
+                    });
+                }
+            }
+
             const interpFactor = 4;
             const smoothGatedSignal = computeSmoothIFFT(gatedFFT, n, interpFactor);
             const dt = truncatedTimes[1] - truncatedTimes[0];
@@ -387,46 +417,53 @@
                 smoothTimes[i] = t0 + i * (dt / interpFactor);
             }
 
-            // 1. Time Chart with 3 distinct lines
+            // Sum all detected peak sinewave components into a single array
+            const summedPeakSignal = smoothTimes.map(t => {
+                let sum = 0;
+                for (let peak of detectedPeakObjects) {
+                    sum += peak.mag * Math.cos(2 * Math.PI * peak.freq * t + peak.phase);
+                }
+                return sum;
+            });
+
+            // 1. Time Chart datasets setup
+            const timeDatasets = [
+                { 
+                    label: 'Original Data', 
+                    data: smoothTimes.map(t => {
+                        let idx = Math.round((t - t0) / dt);
+                        return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
+                    }), 
+                    borderColor: 'rgba(156, 163, 175, 0.4)', 
+                    borderWidth: 1.5, 
+                    borderDash: [4, 4], 
+                    pointRadius: 0,
+                    spanGaps: true
+                },
+                { 
+                    label: `Gated Reconstitution (${minFreq}-${maxFreq} Hz)`, 
+                    data: smoothGatedSignal, 
+                    borderColor: 'rgb(37, 99, 235)', 
+                    borderWidth: 2, 
+                    pointRadius: 0 
+                },
+                {
+                    label: 'Summed Peak Components',
+                    data: summedPeakSignal,
+                    borderColor: 'rgb(16, 185, 129)',
+                    borderWidth: 2,
+                    borderDash: [2, 2],
+                    pointRadius: 0
+                }
+            ];
+
             const timeCtx = document.getElementById('timeChart').getContext('2d');
             if (timeChart) timeChart.destroy();
             timeChart = new Chart(timeCtx, {
                 type: 'line',
                 data: {
                     labels: smoothTimes.map(t => t.toFixed(2)),
-                    datasets: [
-                        { 
-                            label: 'Original Data', 
-                            data: smoothTimes.map(t => {
-                                // Map original points to high-res time grid for alignment
-                                let idx = Math.round((t - t0) / dt);
-                                return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
-                            }), 
-                            borderColor: 'rgba(156, 163, 175, 0.4)', 
-                            borderWidth: 1.5, 
-                            borderDash: [4, 4], 
-                            pointRadius: 0,
-                            spanGaps: true
-                        },
-                        { 
-                            label: `Windowed Data (${windowType})`, 
-                            data: smoothTimes.map(t => {
-                                let idx = Math.round((t - t0) / dt);
-                                return (idx >= 0 && idx < windowedData.length) ? windowedData[idx] : null;
-                            }), 
-                            borderColor: 'rgb(249, 115, 22)', 
-                            borderWidth: 1.2, 
-                            pointRadius: 0,
-                            spanGaps: true
-                        },
-                        { 
-                            label: `Gated Reconstitution (${minFreq}-${maxFreq} Hz)`, 
-                            data: smoothGatedSignal, 
-                            borderColor: 'rgb(37, 99, 235)', 
-                            borderWidth: 2, 
-                            pointRadius: 0 
-                        }
-                    ]
+                    datasets: timeDatasets
                 },
                 options: { 
                     responsive: true, 
@@ -434,28 +471,45 @@
                     scales: { 
                         x: { 
                             title: { display: true, text: 'Time (s)' },
-                            ticks: {
-                                callback: function(val, index) {
-                                    // Show tick labels sparsely to avoid crowding
-                                    return index % 20 === 0 ? this.getLabelForValue(val) + 's' : '';
-                                }
-                            }
+                            ticks: { callback: function(val, index) { return index % 20 === 0 ? this.getLabelForValue(val) + 's' : ''; } }
                         }, 
                         y: { title: { display: true, text: 'Amplitude' } } 
                     } 
                 }
             });
 
-            // 2. FFT Magnitude Chart
+            // 2. FFT Magnitude Chart with Adjustable Peak Detection
             const fftCtx = document.getElementById('fftChart').getContext('2d');
             if (fftChart) fftChart.destroy();
             fftChart = new Chart(fftCtx, {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: [{ label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 1 }]
+                    datasets: [
+                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0 },
+                        { label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, pointHoverRadius: 7, showLine: false }
+                    ]
                 },
-                options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'Frequency (Hz)' } }, y: { title: { display: true, text: 'Magnitude' } } } }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    scales: { 
+                        x: { title: { display: true, text: 'Frequency (Hz)' } }, 
+                        y: { title: { display: true, text: 'Magnitude' } } 
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.datasetIndex === 1 && context.raw !== null) {
+                                        return ` Peak: ${context.raw.toFixed(2)} at ${frequencies[context.dataIndex].toFixed(1)} Hz`;
+                                    }
+                                    return ` Magnitude: ${context.raw.toFixed(2)}`;
+                                }
+                            }
+                        }
+                    }
+                }
             });
 
             // 3. PSD Chart
