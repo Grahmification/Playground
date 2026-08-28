@@ -227,21 +227,21 @@
 
         <!-- Stock Setup Panel -->
         <div class="panel">
-            <div class="panel-title">Stock Setup (Optional)</div>
+            <div class="panel-title">Stock Setup</div>
             <div class="control-group">
                 <label>Dimensions X, Y, Z (mm)</label>
                 <div class="input-row">
-                    <input type="number" id="stock-x" placeholder="X (100)" min="1" step="1">
-                    <input type="number" id="stock-y" placeholder="Y (100)" min="1" step="1">
-                    <input type="number" id="stock-z" placeholder="Z (20)" min="1" step="1">
+                    <input type="number" id="stock-x" placeholder="X" min="1" step="1" value="100">
+                    <input type="number" id="stock-y" placeholder="Y" min="1" step="1" value="100">
+                    <input type="number" id="stock-z" placeholder="Z" min="1" step="1" value="20">
                 </div>
             </div>
             <div class="control-group">
                 <label>Origin Min X, Y, Z (mm)</label>
                 <div class="input-row">
-                    <input type="number" id="stock-orig-x" placeholder="Min X (0)" step="1">
-                    <input type="number" id="stock-orig-y" placeholder="Min Y (0)" step="1">
-                    <input type="number" id="stock-orig-z" placeholder="Min Z (-20)" step="1">
+                    <input type="number" id="stock-orig-x" placeholder="Min X" step="1" value="0">
+                    <input type="number" id="stock-orig-y" placeholder="Min Y" step="1" value="0">
+                    <input type="number" id="stock-orig-z" placeholder="Min Z" step="1" value="-20">
                 </div>
             </div>
             <div class="btn-row">
@@ -258,8 +258,8 @@
                 <button id="btn-reset" class="btn btn-secondary">Reset</button>
             </div>
             <div class="control-group">
-                <label for="tool-diameter">Tool Diameter (mm) [Optional]</label>
-                <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1">
+                <label for="tool-diameter">Tool Diameter (mm)</label>
+                <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1" value="6">
             </div>
             <div class="control-group">
                 <label for="sim-speed">Simulation Speed</label>
@@ -300,10 +300,11 @@
         // --- 3D Scene Setup ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1a1a1a);
+        scene.background = new THREE.Color(0x1e1e1e);
 
         const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 10000);
-        camera.position.set(100, 100, 100);
+        camera.position.set(150, -150, 120);
+        camera.up.set(0, 0, 1);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(container.clientWidth, container.clientHeight);
@@ -314,15 +315,19 @@
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
 
-        // Lighting & Grid Helper
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        // Enhanced Ambient & Directional Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
         scene.add(ambientLight);
 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-        dirLight.position.set(1, 1, 2);
-        scene.add(dirLight);
+        const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight1.position.set(200, -200, 300);
+        scene.add(dirLight1);
 
-        const gridHelper = new THREE.GridHelper(200, 50, 0x444444, 0x222222);
+        const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight2.position.set(-200, 200, -100);
+        scene.add(dirLight2);
+
+        const gridHelper = new THREE.GridHelper(200, 50, 0x666666, 0x333333);
         gridHelper.rotation.x = Math.PI / 2;
         scene.add(gridHelper);
 
@@ -331,8 +336,8 @@
 
         // --- Tool Mesh setup ---
         const toolMaterial = new THREE.MeshStandardMaterial({ 
-            color: 0xffa500, 
-            roughness: 0.3,
+            color: 0xff3300, 
+            roughness: 0.2,
             metalness: 0.8
         });
         
@@ -344,23 +349,27 @@
         let parsedSegments = [];
         let minFeed = Infinity;
         let maxFeed = -Infinity;
-        let bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+        let bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
 
         let totalPathLength = 0;
         let isSimulating = false;
         let currentDistance = 0;
         let lastTimestamp = null;
-        let currentToolDiameter = null;
+        let currentToolDiameter = 6;
         const DEFAULT_RAPID_FEED = 5000;
 
         // --- Stock Removal Voxel System ---
-        let stockMesh = null;
         let voxelInstancedMesh = null;
-        let stockParams = null; // { dimX, dimY, dimZ, origX, origY, origZ }
-        let voxelGrid = null;   // Uint8Array state (1 = active, 0 = removed)
+        let stockParams = null;
+        let voxelGrid = null;
         let voxelsX = 0, voxelsY = 0, voxelsZ = 0;
-        let voxelSize = 1;      // Resolution step in mm
-        let matrixDummy = new THREE.Matrix4();
+        let voxelSize = 1;
+        
+        const dummyPos = new THREE.Vector3();
+        const dummyScale = new THREE.Vector3(1, 1, 1);
+        const dummyRot = new THREE.Quaternion(0, 0, 0, 1);
+        const matrixDummy = new THREE.Matrix4();
+        const zeroScale = new THREE.Vector3(0, 0, 0);
 
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
@@ -368,7 +377,7 @@
             renderer.setSize(container.clientWidth, container.clientHeight);
         });
 
-        // Main Animation Loop
+        // Animation Loop
         function animate(timestamp) {
             requestAnimationFrame(animate);
 
@@ -416,6 +425,7 @@
                 renderToolpath();
                 updateLegend();
                 fitCameraToBounds();
+                applyStockFromUI();
                 resetSimulation();
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('status').innerText = 'Loaded';
@@ -442,10 +452,8 @@
             const targetDist = targetPct * totalPathLength;
 
             if (targetDist < currentDistance) {
-                // Moving back requires rebuilding stock state up to that point
                 rebuildStockUpToDistance(targetDist);
             } else {
-                // Moving forward removes stock between current and target distance
                 subtractStockBetween(currentDistance, targetDist);
             }
 
@@ -458,20 +466,16 @@
             toolMesh.geometry.dispose();
 
             if (currentToolDiameter) {
-                // Square End Mill: Cylinder with diameter and height = 3 * diameter
                 const radius = currentToolDiameter / 2;
                 const height = currentToolDiameter * 3;
                 
                 const geom = new THREE.CylinderGeometry(radius, radius, height, 32);
-                
-                // Align cylinder so its cutting tip sits exactly at (0,0,0) and extends upward (+Z)
                 geom.rotateX(Math.PI / 2);
                 geom.translate(0, 0, height / 2);
                 
                 toolMesh.geometry = geom;
             } else {
-                // Default fallback: Sphere scaled to part size
-                const maxDim = (bounds.minX !== Infinity) ? Math.max(
+                const maxDim = (bounds.minX !== Infinity && !isNaN(bounds.minX)) ? Math.max(
                     bounds.maxX - bounds.minX,
                     bounds.maxY - bounds.minY,
                     bounds.maxZ - bounds.minZ
@@ -545,10 +549,9 @@
             clearStock();
             if (!stockParams) return;
 
-            // Target around ~40k to 120k voxels for responsive performance
-            const targetResolution = 45;
+            const targetResolution = 35;
             const maxDim = Math.max(stockParams.dimX, stockParams.dimY, stockParams.dimZ);
-            voxelSize = Math.max(0.75, maxDim / targetResolution);
+            voxelSize = Math.max(1.0, maxDim / targetResolution);
 
             voxelsX = Math.ceil(stockParams.dimX / voxelSize);
             voxelsY = Math.ceil(stockParams.dimY / voxelSize);
@@ -559,23 +562,29 @@
             voxelGrid.fill(1);
 
             const geom = new THREE.BoxGeometry(voxelSize * 0.98, voxelSize * 0.98, voxelSize * 0.98);
+            
+            // High visibility material
             const mat = new THREE.MeshStandardMaterial({
-                color: 0x8b5a2b, // Wood/Stock brownish hue
-                roughness: 0.8,
-                metalness: 0.1
+                color: 0xd9a752,
+                roughness: 0.4,
+                metalness: 0.1,
+                side: THREE.DoubleSide
             });
 
             voxelInstancedMesh = new THREE.InstancedMesh(geom, mat, totalVoxels);
+            voxelInstancedMesh.frustumCulled = false; // Prevents Three.js from dropping stock visibility
 
             let idx = 0;
             for (let ix = 0; ix < voxelsX; ix++) {
                 for (let iy = 0; iy < voxelsY; iy++) {
                     for (let iz = 0; iz < voxelsZ; iz++) {
-                        const px = stockParams.origX + (ix + 0.5) * voxelSize;
-                        const py = stockParams.origY + (iy + 0.5) * voxelSize;
-                        const pz = stockParams.origZ + (iz + 0.5) * voxelSize;
+                        dummyPos.set(
+                            stockParams.origX + (ix + 0.5) * voxelSize,
+                            stockParams.origY + (iy + 0.5) * voxelSize,
+                            stockParams.origZ + (iz + 0.5) * voxelSize
+                        );
 
-                        matrixDummy.setPosition(px, py, pz);
+                        matrixDummy.compose(dummyPos, dummyRot, dummyScale);
                         voxelInstancedMesh.setMatrixAt(idx++, matrixDummy);
                     }
                 }
@@ -591,7 +600,6 @@
             const toolRadius = currentToolDiameter / 2;
             const toolHeight = currentToolDiameter * 3;
 
-            // Compute local index boundaries touching the tool bounding box
             const minIx = Math.max(0, Math.floor((toolPos.x - toolRadius - stockParams.origX) / voxelSize));
             const maxIx = Math.min(voxelsX - 1, Math.ceil((toolPos.x + toolRadius - stockParams.origX) / voxelSize));
 
@@ -611,18 +619,22 @@
                     const vy = stockParams.origY + (iy + 0.5) * voxelSize;
                     const dy = vy - toolPos.y;
 
-                    // Check cylinder radius in XY plane
                     if ((dx * dx + dy * dy) <= (toolRadius * toolRadius)) {
                         for (let iz = minIz; iz <= maxIz; iz++) {
                             const vz = stockParams.origZ + (iz + 0.5) * voxelSize;
 
-                            // Check cylinder height along +Z
                             if (vz >= toolPos.z && vz <= toolPos.z + toolHeight) {
                                 const idx = ix * (voxelsY * voxelsZ) + iy * voxelsZ + iz;
                                 if (voxelGrid[idx] === 1) {
                                     voxelGrid[idx] = 0;
-                                    matrixDummy.setLineWidth = 0;
-                                    matrixDummy.makeScale(0, 0, 0); // Hide voxel instance
+
+                                    dummyPos.set(
+                                        stockParams.origX + (ix + 0.5) * voxelSize,
+                                        stockParams.origY + (iy + 0.5) * voxelSize,
+                                        stockParams.origZ + (iz + 0.5) * voxelSize
+                                    );
+                                    
+                                    matrixDummy.compose(dummyPos, dummyRot, zeroScale);
                                     voxelInstancedMesh.setMatrixAt(idx, matrixDummy);
                                     modified = true;
                                 }
@@ -646,7 +658,7 @@
             while (dist < endDist) {
                 dist = Math.min(dist + stepSize, endDist);
                 const seg = getCurrentSegment(dist);
-                if (seg && seg.motion !== 'G0') { // Only cut stock on cutting feeds (G1/G2/G3)
+                if (seg && seg.motion !== 'G0') {
                     const segProgress = (dist - seg.startDist) / seg.length;
                     const t = Math.min(Math.max(segProgress, 0), 1);
 
@@ -846,9 +858,7 @@
                 btnPlay.innerText = 'Play';
             }
 
-            // Real-time Stock Cutting
             subtractStockBetween(previousDistance, currentDistance);
-
             updateToolPositionByDistance(currentDistance);
         }
 
@@ -877,7 +887,6 @@
             toolMesh.position.set(posX, posY, posZ);
             toolMesh.visible = true;
 
-            // Update UI Metrics
             const pct = (dist / totalPathLength) * 100;
             progressSlider.value = pct.toFixed(1);
 
@@ -1030,12 +1039,13 @@
                 const maxDim = Math.max(sizeX, sizeY, sizeZ);
                 
                 controls.target.set(centerX, centerY, centerZ);
-                camera.position.set(centerX + maxDim, centerY - maxDim, centerZ + maxDim);
+                camera.position.set(centerX + maxDim * 1.5, centerY - maxDim * 1.5, centerZ + maxDim * 1.5);
                 controls.update();
             }
         }
 
-        // Initialize Legend
+        // Initialize default stock & legend immediately
+        applyStockFromUI();
         updateLegend();
     </script>
 </body>
