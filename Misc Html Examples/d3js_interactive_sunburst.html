@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive D3 Sunburst Diagram</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-blue: #38bdf8;
+            --border-color: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            max-width: 800px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.5rem;
+            color: #f1f5f9;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            position: relative;
+        }
+
+        #breadcrumb {
+            height: 30px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--accent-blue);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(15, 23, 42, 0.6);
+            padding: 4px 16px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+        }
+
+        #chart {
+            position: relative;
+        }
+
+        path {
+            cursor: pointer;
+            transition: opacity 0.2s ease, filter 0.2s ease;
+        }
+
+        path:hover {
+            opacity: 0.85;
+            filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.3));
+        }
+
+        .tooltip {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(15, 23, 42, 0.9);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+            opacity: 0;
+            transition: opacity 0.15s ease-in-out;
+            z-index: 10;
+        }
+
+        .center-label {
+            text-anchor: middle;
+            pointer-events: none;
+        }
+
+        .center-label .title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            fill: var(--text-main);
+        }
+
+        .center-label .value {
+            font-size: 0.85rem;
+            fill: var(--text-muted);
+        }
+
+        .instructions {
+            margin-top: 1.5rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            display: flex;
+            gap: 1rem;
+        }
+
+        .instructions span {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .instructions span::before {
+            content: "•";
+            color: var(--accent-blue);
+            font-size: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Global Technology Taxonomy</h1>
+        <p class="subtitle">An interactive D3.js sunburst partition diagram showing hierarchical market distribution. Click on any segment to zoom in, click the center circle to zoom out.</p>
+    </header>
+
+    <div class="container">
+        <div id="breadcrumb">World Market</div>
+        <div id="chart"></div>
+        <div class="instructions">
+            <span>Click slice to zoom</span>
+            <span>Hover for details</span>
+            <span>Click center to return</span>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        // Sample Hierarchical Data
+        const data = {
+            name: "Global Tech",
+            children: [
+                {
+                    name: "Software & Cloud",
+                    children: [
+                        {
+                            name: "Cloud Platforms",
+                            children: [
+                                { name: "IaaS", value: 120 },
+                                { name: "PaaS", value: 85 },
+                                { name: "Serverless", value: 45 }
+                            ]
+                        },
+                        {
+                            name: "Enterprise SaaS",
+                            children: [
+                                { name: "CRM Systems", value: 95 },
+                                { name: "ERP Solutions", value: 110 },
+                                { name: "HR Tech", value: 60 }
+                            ]
+                        },
+                        {
+                            name: "Cybersecurity",
+                            children: [
+                                { name: "Identity & Access", value: 75 },
+                                { name: "Endpoint Security", value: 80 },
+                                { name: "Cloud Security", value: 90 }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    name: "Hardware & Devices",
+                    children: [
+                        {
+                            name: "Consumer Electronics",
+                            children: [
+                                { name: "Smartphones", value: 210 },
+                                { name: "Laptops & PCs", value: 140 },
+                                { name: "Wearables", value: 85 }
+                            ]
+                        },
+                        {
+                            name: "Semiconductors",
+                            children: [
+                                { name: "GPUs & AI Chips", value: 190 },
+                                { name: "CPUs", value: 130 },
+                                { name: "Memory & Storage", value: 105 }
+                            ]
+                        },
+                        {
+                            name: "Networking",
+                            children: [
+                                { name: "5G Infrastructure", value: 115 },
+                                { name: "Routers & Switches", value: 70 }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    name: "Artificial Intelligence",
+                    children: [
+                        {
+                            name: "Generative Models",
+                            children: [
+                                { name: "LLMs", value: 180 },
+                                { name: "Image & Video Synthesis", value: 95 },
+                                { name: "Audio Models", value: 50 }
+                            ]
+                        },
+                        {
+                            name: "Autonomous Systems",
+                            children: [
+                                { name: "Self-Driving Vehicles", value: 140 },
+                                { name: "Robotics", value: 110 },
+                                { name: "Drones", value: 65 }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    name: "Emerging Tech",
+                    children: [
+                        {
+                            name: "Quantum Computing",
+                            children: [
+                                { name: "Quantum Hardware", value: 40 },
+                                { name: "Quantum Software", value: 30 }
+                            ]
+                        },
+                        {
+                            name: "Clean Tech",
+                            children: [
+                                { name: "Battery Storage", value: 125 },
+                                { name: "Solar & Wind Tech", value: 115 },
+                                { name: "Grid Tech", value: 70 }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        // Dimensions
+        const width = 650;
+        const height = 650;
+        const radius = width / 6;
+
+        // Color Scale
+        const color = d3.scaleOrdinal(d3.quantize(d3.interpolateRainbow, data.children.length + 1));
+
+        // Create Hierarchy and Partition Layout
+        const hierarchy = d3.hierarchy(data)
+            .sum(d => d.value)
+            .sort((a, b) => b.value - a.value);
+
+        const root = d3.partition()
+            .size([2 * Math.PI, hierarchy.height + 1])
+            (hierarchy);
+
+        root.each(d => d.current = d);
+
+        // Arc Generator
+        const arc = d3.arc()
+            .startAngle(d => d.x0)
+            .endAngle(d => d.x1)
+            .padAngle(d => Math.min((d.x1 - d.x0) / 2, 0.005))
+            .padRadius(radius * 1.5)
+            .innerRadius(d => d.y0 * radius)
+            .outerRadius(d => Math.max(d.y0 * radius, d.y1 * radius - 1));
+
+        // SVG Canvas
+        const svg = d3.select("#chart")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .attr("viewBox", [-width / 2, -height / 2, width, height])
+            .style("font", "10px sans-serif");
+
+        // Paths (Arcs)
+        const path = svg.append("g")
+            .selectAll("path")
+            .data(root.descendants().slice(1))
+            .join("path")
+            .attr("fill", d => {
+                while (d.depth > 1) d = d.parent;
+                return color(d.data.name);
+            })
+            .attr("fill-opacity", d => arcVisible(d.current) ? (d.children ? 0.8 : 0.6) : 0)
+            .attr("pointer-events", d => arcVisible(d.current) ? "auto" : "none")
+            .attr("d", d => arc(d.current));
+
+        path.filter(d => d.children)
+            .style("cursor", "pointer")
+            .on("click", clicked);
+
+        // Center Clickable Circle (Zoom Out)
+        const parent = svg.append("circle")
+            .datum(root)
+            .attr("r", radius)
+            .attr("fill", "transparent")
+            .attr("pointer-events", "all")
+            .style("cursor", "pointer")
+            .on("click", clicked);
+
+        // Center Text Indicator
+        const centerGroup = svg.append("g").attr("class", "center-label");
+        const centerTitle = centerGroup.append("text")
+            .attr("class", "title")
+            .attr("y", -5)
+            .text(root.data.name);
+
+        const centerValue = centerGroup.append("text")
+            .attr("class", "value")
+            .attr("y", 15)
+            .text(`Total: ${root.value}`);
+
+        // Tooltip setup
+        const tooltip = d3.select("#tooltip");
+
+        path.on("mousemove", (event, d) => {
+            const percentage = ((100 * d.value) / root.value).toFixed(1);
+            tooltip.style("opacity", 1)
+                .html(`<strong>${d.data.name}</strong><br/>Value: ${d.value} (${percentage}%)`)
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 15) + "px");
+        })
+        .on("mouseleave", () => {
+            tooltip.style("opacity", 0);
+        });
+
+        // Zoom Click Handler
+        function clicked(event, p) {
+            parent.datum(p.parent || root);
+
+            root.each(d => d.target = {
+                x0: Math.max(0, Math.min(1, (d.x0 - p.x0) / (p.x1 - p.x0))) * 2 * Math.PI,
+                x1: Math.max(0, Math.min(1, (d.x1 - p.x0) / (p.x1 - p.x0))) * 2 * Math.PI,
+                y0: Math.max(0, d.y0 - p.depth),
+                y1: Math.max(0, d.y1 - p.depth)
+            });
+
+            const t = svg.transition().duration(750);
+
+            path.transition(t)
+                .tween("data", d => {
+                    const i = d3.interpolate(d.current, d.target);
+                    return t => d.current = i(t);
+                })
+                .filter(function(d) {
+                    return +this.getAttribute("fill-opacity") || arcVisible(d.target);
+                })
+                .attr("fill-opacity", d => arcVisible(d.target) ? (d.children ? 0.8 : 0.6) : 0)
+                .attr("pointer-events", d => arcVisible(d.target) ? "auto" : "none")
+                .attrTween("d", d => () => arc(d.current));
+
+            // Update Labels & Breadcrumb
+            centerTitle.text(p.data.name);
+            centerValue.text(`Value: ${p.value}`);
+            updateBreadcrumb(p);
+        }
+
+        function arcVisible(d) {
+            return d.y1 <= 3 && d.y0 >= 1 && d.x1 > d.x0;
+        }
+
+        function updateBreadcrumb(node) {
+            const ancestors = node.ancestors().reverse();
+            const breadcrumbText = ancestors.map(a => a.data.name).join("  →  ");
+            d3.select("#breadcrumb").text(breadcrumbText);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive D3.js Treeview</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f7fafc;
+            color: #2d3748;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 0;
+            color: #1a202c;
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }
+
+        p {
+            color: #718096;
+            margin-bottom: 30px;
+            font-size: 1rem;
+        }
+
+        .tree-wrapper {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            position: relative;
+        }
+
+        svg {
+            display: block;
+            margin: 0 auto;
+        }
+
+        /* D3 Elements Styling */
+        .node circle {
+            fill: #fff;
+            stroke: #3182ce;
+            stroke-width: 3px;
+            cursor: pointer;
+        }
+
+        .node--collapsed circle {
+            fill: #3182ce;
+        }
+
+        .node text {
+            font-size: 13px;
+            fill: #2d3748;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .link {
+            fill: none;
+            stroke: #cbd5e0;
+            stroke-width: 2px;
+        }
+
+        .instructions {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #a0aec0;
+            font-style: italic;
+        }
+    </style>
+    <!-- Load D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <h1>Interactive D3.js Treeview</h1>
+    <p>Click on any parent node (filled circles) to expand or collapse its sub-branches.</p>
+
+    <div class="tree-wrapper">
+        <svg id="tree-svg"></svg>
+    </div>
+    <div class="instructions">Nodes with solid blue centers are collapsed branches.</div>
+</div>
+
+<script>
+    // Sample hierarchical data
+    const treeData = {
+        name: "Root Project",
+        children: [
+            {
+                name: "Analytics Module",
+                children: [
+                    { name: "Dashboard" },
+                    { name: "Report Generator" },
+                    { name: "Export Service" }
+                ]
+            },
+            {
+                name: "User Management",
+                children: [
+                    {
+                        name: "Authentication",
+                        children: [
+                            { name: "Login Flow" },
+                            { name: "OAuth Integration" },
+                            { name: "MFA Setup" }
+                        ]
+                    },
+                    { name: "Profile Manager" },
+                    { name: "Permissions API" }
+                ]
+            },
+            {
+                name: "Billing System",
+                children: [
+                    { name: "Stripe Gateway" },
+                    { name: "Invoicing Worker" }
+                ]
+            }
+        ]
+    };
+
+    // Set chart dimensions and margins
+    const margin = { top: 20, right: 90, bottom: 30, left: 90 };
+    const width = 800 - margin.left - margin.right;
+    const height = 450 - margin.top - margin.bottom;
+
+    // Append the svg object to the wrapper
+    const svg = d3.select("#tree-svg")
+        .attr("width", width + margin.right + margin.left)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+    let i = 0;
+    const duration = 750;
+    let root;
+
+    // Declares a tree layout and assigns the size
+    const treemap = d3.tree().size([height, width]);
+
+    // Assigns parent, children, height, depth
+    root = d3.hierarchy(treeData, d => d.children);
+    root.x0 = height / 2;
+    root.y0 = 0;
+
+    // Collapse some branches initially
+    root.children.forEach(collapse);
+
+    update(root);
+
+    // Collapse helper
+    function collapse(d) {
+        if(d.children) {
+            d._children = d.children;
+            d._children.forEach(collapse);
+            d.children = null;
+        }
+    }
+
+    function update(source) {
+        // Assigns the x and y position for the nodes
+        const treeDataStructure = treemap(root);
+
+        // Compute the new tree layout
+        const nodes = treeDataStructure.descendants();
+        const links = treeDataStructure.descendants().slice(1);
+
+        // Normalize for fixed-depth
+        nodes.forEach(d => d.y = d.depth * 180);
+
+        // ****************** Nodes Section ******************
+
+        // Update the nodes
+        const node = svg.selectAll('g.node')
+            .data(nodes, d => d.id || (d.id = ++i));
+
+        // Enter any new nodes at the parent's previous position
+        const nodeEnter = node.enter().append('g')
+            .attr('class', d => `node ${d._children ? 'node--collapsed' : ''}`)
+            .attr('transform', d => `translate(${source.y0},${source.x0})`)
+            .on('click', (event, d) => click(event, d));
+
+        // Add Circle for the nodes
+        nodeEnter.append('circle')
+            .attr('r', 1e-6);
+
+        // Add labels for the nodes
+        nodeEnter.append('text')
+            .attr("dy", ".35em")
+            .attr("x", d => d.children || d._children ? -13 : 13)
+            .attr("text-anchor", d => d.children || d._children ? "end" : "start")
+            .text(d => d.data.name);
+
+        // UPDATE
+        const nodeUpdate = nodeEnter.merge(node);
+
+        // Transition to the proper position and style
+        nodeUpdate.transition()
+            .duration(duration)
+            .attr('transform', d => `translate(${d.y},${d.x})`)
+            .attr('class', d => `node ${d._children ? 'node--collapsed' : ''}`);
+
+        // Update node attributes and style
+        nodeUpdate.select('circle')
+            .attr('r', 8)
+            .style("fill", d => d._children ? "#3182ce" : "#fff");
+
+        // Remove any exiting nodes
+        const nodeExit = node.exit().transition()
+            .duration(duration)
+            .attr('transform', d => `translate(${source.y},${source.x})`)
+            .remove();
+
+        // On exit reduce the node circles size to 0
+        nodeExit.select('circle')
+            .attr('r', 1e-6);
+
+        // On exit reduce the opacity of text labels
+        nodeExit.select('text')
+            .style('fill-opacity', 1e-6);
+
+        // ****************** Links Section ******************
+
+        // Update the links
+        const link = svg.selectAll('path.link')
+            .data(links, d => d.id);
+
+        // Enter any new links at the parent's previous position
+        const linkEnter = link.enter().insert('path', "g")
+            .attr("class", "link")
+            .attr('d', d => {
+                const o = {x: source.x0, y: source.y0};
+                return diagonal(o, o);
+            });
+
+        // UPDATE
+        const linkUpdate = linkEnter.merge(link);
+
+        // Transition back to the parent element position
+        linkUpdate.transition()
+            .duration(duration)
+            .attr('d', d => diagonal(d, d.parent));
+
+        // Remove any exiting links
+        link.exit().transition()
+            .duration(duration)
+            .attr('d', d => {
+                const o = {x: source.x, y: source.y};
+                return diagonal(o, o);
+            })
+            .remove();
+
+        // Store the old positions for transition
+        nodes.forEach(d => {
+            d.x0 = d.x;
+            d.y0 = d.y;
+        });
+
+        // Creates a curved (diagonal) path from parent to the child nodes
+        function diagonal(s, d) {
+            return `M ${s.y} ${s.x}
+                    C ${(s.y + d.y) / 2} ${s.x},
+                      ${(s.y + d.y) / 2} ${d.x},
+                      ${d.y} ${d.x}`;
+        }
+    }
+
+    // Toggle children on click.
+    function click(event, d) {
+        if (d.children) {
+            d._children = d.children;
+            d.children = null;
+        } else {
+            d.children = d._children;
+            d._children = null;
+        }
+        update(d);
+    }
+</script>
+</body>
+</html>
