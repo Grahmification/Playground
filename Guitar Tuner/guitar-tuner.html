@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Guitar Tuner</title>
+    <title>Interactive Guitar Tuner with History Chart</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -13,7 +13,7 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
         }
         .container {
@@ -22,7 +22,7 @@
             border-radius: 16px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.5);
             text-align: center;
-            width: 350px;
+            width: 380px;
         }
         h1 {
             font-size: 1.5rem;
@@ -48,25 +48,25 @@
             display: none;
         }
         .note-name {
-            font-size: 4rem;
+            font-size: 3.5rem;
             font-weight: bold;
             color: #03dac6;
             margin: 0;
         }
         .frequency {
-            font-size: 1.1rem;
+            font-size: 1rem;
             color: #a0a0a0;
-            margin: 5px 0 20px 0;
+            margin: 5px 0 15px 0;
         }
         /* Tuner Meter Styling */
         .meter {
             position: relative;
             width: 100%;
-            height: 40px;
+            height: 35px;
             background: #2c2c2c;
-            border-radius: 20px;
+            border-radius: 18px;
             overflow: hidden;
-            margin-top: 15px;
+            margin-top: 10px;
         }
         .meter-center {
             position: absolute;
@@ -91,9 +91,26 @@
             border-radius: 3px;
         }
         .cents {
-            margin-top: 10px;
+            margin-top: 8px;
             font-size: 0.9rem;
             font-weight: bold;
+        }
+        /* Canvas Chart Styling */
+        .chart-container {
+            margin-top: 20px;
+            position: relative;
+        }
+        canvas {
+            background: #121212;
+            border-radius: 8px;
+            width: 100%;
+            height: 120px;
+        }
+        .chart-label {
+            font-size: 0.75rem;
+            color: #777;
+            margin-top: 4px;
+            text-align: left;
         }
     </style>
 </head>
@@ -112,11 +129,15 @@
             <div class="needle" id="needle"></div>
         </div>
         <div class="cents" id="centsDisplay">0 cents</div>
+
+        <div class="chart-container">
+            <canvas id="historyCanvas" width="380" height="120"></canvas>
+            <div class="chart-label">Pitch Error History (±50 cents over time)</div>
+        </div>
     </div>
 </div>
 
 <script>
-    // Standard Guitar Tuning Frequencies (E2 to E4)
     const guitarNotes = [
         { name: "E2", freq: 82.41 },
         { name: "A2", freq: 110.00 },
@@ -128,6 +149,7 @@
 
     let audioContext, analyser, microphone, javascriptNode;
     let isRunning = false;
+    let pitchHistory = []; // Stores recent cents errors
 
     const startBtn = document.getElementById('startBtn');
     const displayArea = document.getElementById('displayArea');
@@ -135,6 +157,8 @@
     const frequencyDisplayEl = document.getElementById('frequencyDisplay');
     const needleEl = document.getElementById('needle');
     const centsDisplayEl = document.getElementById('centsDisplay');
+    const canvas = document.getElementById('historyCanvas');
+    const canvasCtx = canvas.getContext('2d');
 
     startBtn.addEventListener('click', toggleTuner);
 
@@ -150,7 +174,6 @@
                 microphone = audioContext.createMediaStreamSource(stream);
                 microphone.connect(analyser);
                 
-                // Use ScriptProcessor for real-time analysis loop
                 javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
                 javascriptNode.onaudioprocess = processAudio;
                 
@@ -168,6 +191,7 @@
             isRunning = false;
             startBtn.textContent = "Start Tuner";
             displayArea.style.display = "none";
+            pitchHistory = [];
         }
     }
 
@@ -182,7 +206,6 @@
         }
     }
 
-    // Auto-correlation algorithm for pitch detection
     function autoCorrelate(buffer, sampleRate) {
         let SIZE = buffer.length;
         let sumOfSquares = 0;
@@ -190,7 +213,7 @@
             sumOfSquares += buffer[i] * buffer[i];
         }
         let rootMeanSquare = Math.sqrt(sumOfSquares / SIZE);
-        if (rootMeanSquare < 0.01) return -1; // Amplitude too low (silence)
+        if (rootMeanSquare < 0.01) return -1;
 
         let r1 = 0, r2 = SIZE - 1, threshold = 0.2;
         for (let i = 0; i < SIZE / 2; i++) {
@@ -226,7 +249,6 @@
     function updateUI(freq) {
         frequencyDisplayEl.textContent = `${freq.toFixed(1)} Hz`;
 
-        // Find the closest guitar note
         let closest = guitarNotes[0];
         let minDiff = Math.abs(freq - closest.freq);
 
@@ -240,17 +262,11 @@
 
         noteNameEl.textContent = closest.name;
 
-        // Calculate error in cents ($1200 \times \log_2(f / f_{ref})$)
         const cents = 1200 * Math.log2(freq / closest.freq);
-        
-        // Clamp cents between -50 and 50 for the visual needle representation
         const clampedCents = Math.max(-50, Math.min(50, cents));
-        
-        // Map cents to percentage across the meter bar (0% to 100%)
-        const needlePercent = 50 + (clampedCents);
+        const needlePercent = 50 + clampedCents;
         needleEl.style.left = `${needlePercent}%`;
 
-        // Color shift based on tuning accuracy (Green if within ±3 cents)
         if (Math.abs(cents) < 3) {
             needleEl.style.backgroundColor = "#03dac6";
             noteNameEl.style.color = "#03dac6";
@@ -261,6 +277,52 @@
 
         centsDisplayEl.textContent = `${cents > 0 ? '+' : ''}${cents.toFixed(0)} cents`;
         centsDisplayEl.style.color = Math.abs(cents) < 3 ? "#03dac6" : "#a0a0a0";
+
+        // Push to history for scrolling graph
+        pitchHistory.push(clampedCents);
+        if (pitchHistory.length > 100) {
+            pitchHistory.shift(); // Keep latest 100 data points
+        }
+
+        drawChart();
+    }
+
+    function drawChart() {
+        const width = canvas.width;
+        const height = canvas.height;
+
+        canvasCtx.clearRect(0, 0, width, height);
+
+        // Draw background grid lines
+        canvasCtx.strokeStyle = '#222';
+        canvasCtx.lineWidth = 1;
+
+        // Center line (0 cents / in-tune)
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(0, height / 2);
+        canvasCtx.lineTo(width, height / 2);
+        canvasCtx.stroke();
+
+        if (pitchHistory.length < 2) return;
+
+        // Draw rolling history line
+        canvasCtx.strokeStyle = '#03dac6';
+        canvasCtx.lineWidth = 2;
+        canvasCtx.beginPath();
+
+        const step = width / 100;
+        for (let i = 0; i < pitchHistory.length; i++) {
+            const x = i * step;
+            // Map cents (-50 to +50) to canvas height (height to 0)
+            const y = height / 2 - (pitchHistory[i] / 50) * (height / 2 - 10);
+
+            if (i === 0) {
+                canvasCtx.moveTo(x, y);
+            } else {
+                canvasCtx.lineTo(x, y);
+            }
+        }
+        canvasCtx.stroke();
     }
 </script>
 
