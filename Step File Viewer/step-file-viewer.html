@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D STEP CAD Viewer</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load OCCT global bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.12/dist/occt-import-js.js"></script>
+
+    <!-- Import maps polyfill & Three.js setup -->
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; color: #f8fafc; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: relative; }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        /* Loading Spinner */
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #38bdf8;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <!-- Floating Header Controls -->
+        <div class="absolute top-4 left-4 z-10 glass-panel p-4 rounded-xl shadow-2xl max-w-sm w-full">
+            <h1 class="text-xl font-bold text-sky-400 mb-1 flex items-center gap-2">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                STEP CAD Viewer
+            </h1>
+            <p class="text-xs text-slate-400 mb-4">Upload a <code>.stp</code> or <code>.step</code> file to view and inspect the 3D model.</p>
+            
+            <label class="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 hover:border-sky-400 transition-all">
+                <div class="flex flex-col items-center justify-center pt-2 pb-3">
+                    <svg class="w-8 h-8 mb-2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 0115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    <p class="text-xs text-slate-300 font-medium"><span class="font-semibold text-sky-400">Click to upload</span> or drag STEP file</p>
+                </div>
+                <input id="file-input" type="file" accept=".step, .stp" class="hidden" />
+            </label>
+
+            <!-- Display Info -->
+            <div id="file-info" class="hidden mt-3 pt-3 border-t border-slate-700/50 text-xs text-slate-300">
+                <div class="flex justify-between py-0.5"><span class="text-slate-400">File Name:</span><span id="info-name" class="font-medium truncate max-w-[150px]"></span></div>
+                <div class="flex justify-between py-0.5"><span class="text-slate-400">Meshes:</span><span id="info-meshes" class="font-medium"></span></div>
+            </div>
+        </div>
+
+        <!-- Render Controls Overlay -->
+        <div id="controls-panel" class="hidden absolute top-4 right-4 z-10 glass-panel p-3 rounded-xl shadow-2xl flex-col gap-2 text-xs">
+            <button id="btn-reset-view" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 transition">Reset View</button>
+            <button id="btn-toggle-wireframe" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 transition">Toggle Wireframe</button>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="hidden absolute inset-0 z-20 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
+            <div class="spinner"></div>
+            <div id="loading-text" class="text-sm font-medium text-slate-200">Processing STEP File...</div>
+        </div>
+    </div>
+
+    <!-- Main Logic using Three.js & OCCT-import-js -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // Variables
+        let scene, camera, renderer, controls;
+        let currentModel = null;
+        let occt = null;
+        let wireframeEnabled = false;
+
+        // UI Elements
+        const fileInput = document.getElementById('file-input');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        const fileInfo = document.getElementById('file-info');
+        const infoName = document.getElementById('info-name');
+        const infoMeshes = document.getElementById('info-meshes');
+        const controlsPanel = document.getElementById('controls-panel');
+
+        // Initialize Scene
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a); // Slate-900
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(100, 100, 100);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight1.position.set(100, 200, 100);
+            scene.add(dirLight1);
+
+            const dirLight2 = new THREE.DirectionalLight(0x90b0ff, 0.4);
+            dirLight2.position.set(-100, -100, -100);
+            scene.add(dirLight2);
+
+            // Grid & Axes Helper
+            const gridHelper = new THREE.GridHelper(500, 50, 0x334155, 0x1e293b);
+            gridHelper.position.y = -0.01;
+            scene.add(gridHelper);
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize);
+            fileInput.addEventListener('change', handleFileSelect);
+            
+            // Drag and drop handling
+            window.addEventListener('dragover', (e) => e.preventDefault());
+            window.addEventListener('drop', handleDrop);
+
+            document.getElementById('btn-reset-view').addEventListener('click', fitModelToView);
+            document.getElementById('btn-toggle-wireframe').addEventListener('click', toggleWireframe);
+
+            // Animation Loop
+            animate();
+
+            // Pre-initialize OpenCASCADE WASM
+            initOCCT();
+        }
+
+        async function initOCCT() {
+            try {
+                occt = await window.occtimportjs({
+                    locateFile: (name) => `https://cdn.jsdelivr.net/npm/occt-import-js@0.0.12/dist/${name}`
+                });
+            } catch (err) {
+                console.error("Failed to load OCCT library:", err);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            if (e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (file.name.toLowerCase().endsWith('.step') || file.name.toLowerCase().endsWith('.stp')) {
+                    processFile(file);
+                } else {
+                    alert('Please upload a valid .STEP or .STP file.');
+                }
+            }
+        }
+
+        function handleFileSelect(e) {
+            if (e.target.files.length > 0) {
+                processFile(e.target.files[0]);
+            }
+        }
+
+        async function processFile(file) {
+            showLoading(true, "Loading WASM & Reading File...");
+
+            if (!occt) {
+                await initOCCT();
+            }
+
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    showLoading(true, "Tessellating STEP Data...");
+                    
+                    // Convert file content to Uint8Array for OCCT
+                    const fileBuffer = new Uint8Array(e.target.result);
+                    const result = occt.ReadStepFile(fileBuffer);
+
+                    if (!result || !result.success) {
+                        throw new Error("Failed to parse STEP file.");
+                    }
+
+                    renderCADResult(result, file.name);
+                } catch (error) {
+                    alert("Error loading STEP file: " + error.message);
+                    console.error(error);
+                } finally {
+                    showLoading(false);
+                }
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+        function renderCADResult(result, fileName) {
+            // Remove previous model if exists
+            if (currentModel) {
+                scene.remove(currentModel);
+            }
+
+            currentModel = new THREE.Group();
+
+            let meshCount = 0;
+
+            // Iterate over returned CAD meshes
+            result.meshes.forEach((meshData) => {
+                const geometry = new THREE.BufferGeometry();
+
+                // Set Attributes
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+                
+                if (meshData.attributes.normal) {
+                    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                } else {
+                    geometry.computeVertexNormals();
+                }
+
+                if (meshData.index) {
+                    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                }
+
+                // Material Settings
+                let color = 0x94a3b8; // Default Slate Light
+                if (meshData.color) {
+                    color = new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2]);
+                }
+
+                const material = new THREE.MeshStandardMaterial({
+                    color: color,
+                    roughness: 0.4,
+                    metalness: 0.3,
+                    side: THREE.DoubleSide,
+                    wireframe: wireframeEnabled
+                });
+
+                const mesh = new THREE.Mesh(geometry, material);
+                currentModel.add(mesh);
+                meshCount++;
+            });
+
+            scene.add(currentModel);
+
+            // Update UI Stats
+            infoName.textContent = fileName;
+            infoMeshes.textContent = meshCount;
+            fileInfo.classList.remove('hidden');
+            controlsPanel.classList.remove('hidden');
+            controlsPanel.classList.add('flex');
+
+            // Adjust Camera View
+            fitModelToView();
+        }
+
+        function fitModelToView() {
+            if (!currentModel) return;
+
+            const box = new THREE.Box3().setFromObject(currentModel);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+
+            // Center Model
+            currentModel.position.x = -center.x;
+            currentModel.position.y = -center.y;
+            currentModel.position.z = -center.z;
+
+            // Adjust Camera Position
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.8;
+
+            cameraZ = Math.max(cameraZ, 10); // Minimum distance fallback
+
+            camera.position.set(cameraZ * 0.8, cameraZ * 0.8, cameraZ);
+            camera.lookAt(0, 0, 0);
+
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        function toggleWireframe() {
+            wireframeEnabled = !wireframeEnabled;
+            if (currentModel) {
+                currentModel.traverse((child) => {
+                    if (child.isMesh) {
+                        child.material.wireframe = wireframeEnabled;
+                    }
+                });
+            }
+        }
+
+        function showLoading(show, text = "") {
+            if (show) {
+                loadingText.textContent = text;
+                loadingOverlay.classList.remove('hidden');
+            } else {
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        // Run Init
+        init();
+    </script>
+</body>
+</html>
