@@ -22,7 +22,7 @@
                 </svg>
                 <h1 class="text-lg font-bold text-gray-800">Spectral Dashboard</h1>
             </div>
-            
+
             <p class="text-xs text-gray-600 mb-4">
                 Upload time-series data to view standardized spectral charts and data tables.
             </p>
@@ -217,6 +217,7 @@
                 <table class="w-full text-left border-collapse text-xs">
                     <thead class="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider sticky top-0 border-b border-gray-200 select-none">
                         <tr>
+                            <th class="py-2.5 px-4 text-center">Included</th>
                             <th onclick="sortTable('bin')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Bin Index <span id="sort-bin" class="text-gray-400"></span></th>
                             <th onclick="sortTable('freq')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Frequency (Hz) <span id="sort-freq" class="text-gray-400"></span></th>
                             <th onclick="sortTable('period')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Period (s) <span id="sort-period" class="text-gray-400"></span></th>
@@ -228,7 +229,7 @@
                     </thead>
                     <tbody id="spectralTableBody" class="divide-y divide-gray-100 text-gray-700">
                         <tr>
-                            <td colspan="7" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
+                            <td colspan="8" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -516,11 +517,29 @@
                 return 0;
             });
 
+            const isPeaksEnabled = document.getElementById('enablePeaks').checked;
+            const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
+            const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
+
             sortedRows.forEach(row => {
                 if (unitType === 'period' && row.freq === 0) return;
+                
+                // Determine inclusions for dot indicators
+                const isPeak = isPeaksEnabled && currentPeakIndices.has(row.bin);
+                const isThresh = isMagThreshEnabled && row.mag >= magThreshold;
+
+                const peakDot = isPeak 
+                    ? `<span class="inline-block w-2.5 h-2.5 bg-yellow-500 rounded-full" title="Included in Peak Detection"></span>` 
+                    : `<span class="inline-block w-2.5 h-2.5 bg-gray-200 rounded-full" title="Not in Peak Detection"></span>`;
+                
+                const threshDot = isThresh 
+                    ? `<span class="inline-block w-2.5 h-2.5 bg-red-600 rounded-full" title="Included in Mag Threshold"></span>` 
+                    : `<span class="inline-block w-2.5 h-2.5 bg-gray-200 rounded-full" title="Not in Mag Threshold"></span>`;
+
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-gray-50 transition-colors";
                 tr.innerHTML = `
+                    <td class="py-2.5 px-4 text-center space-x-1">${peakDot}${threshDot}</td>
                     <td class="py-2.5 px-4 font-mono text-gray-500">${row.bin}</td>
                     <td class="py-2.5 px-4 font-semibold text-blue-600">${row.freq.toFixed(3)} Hz</td>
                     <td class="py-2.5 px-4 font-mono">${row.period === Infinity ? 'Infinite (DC)' : row.period.toFixed(4) + ' s'}</td>
@@ -1173,7 +1192,7 @@
                                     return [
                                         ` Freq: ${pt.freq.toFixed(2)} Hz (Period: ${pStr})${labelPrefix}`,
                                         ` Magnitude: ${pt.mag.toFixed(4)}`,
-                                        ` Phase: ${pt.phase.theta ? pt.phase.toFixed(3) : pt.phase.toFixed(3)} rad`
+                                        ` Phase: ${pt.phase.theta ? pt.phase.theta.toFixed(3) : pt.phase.toFixed(3)} rad`
                                     ];
                                 }
                             }
