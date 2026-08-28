@@ -176,7 +176,7 @@
 
             <!-- Phase Information Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Phase Spectrum (Radians)</h3>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Unwrapped Phase Spectrum (Radians)</h3>
                 <div class="relative w-full h-[360px]">
                     <canvas id="phaseChart"></canvas>
                 </div>
@@ -198,11 +198,12 @@
                             <th class="py-2.5 px-4">Period (s)</th>
                             <th class="py-2.5 px-4">Magnitude</th>
                             <th class="py-2.5 px-4">Phase (rad)</th>
+                            <th class="py-2.5 px-4">Unwrapped Phase (rad)</th>
                         </tr>
                     </thead>
                     <tbody id="spectralTableBody" class="divide-y divide-gray-100 text-gray-700">
                         <tr>
-                            <td colspan="5" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
+                            <td colspan="6" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -475,9 +476,31 @@
             const spectrum = fourierTransform(windowedData);
 
             const halfN = nextPower / 2;
+            const rawPhases = [];
+            for (let i = 0; i < halfN; i++) {
+                const re = spectrum[i * 2];
+                const im = spectrum[i * 2 + 1];
+                rawPhases.push(Math.atan2(im, re));
+            }
+
+            // Compute Unwrapped Phase
+            const unwrappedPhases = new Array(halfN);
+            if (halfN > 0) {
+                unwrappedPhases[0] = rawPhases[0];
+                let cumulativeCorrection = 0;
+                for (let i = 1; i < halfN; i++) {
+                    let diff = rawPhases[i] - rawPhases[i - 1];
+                    if (diff > Math.PI) {
+                        cumulativeCorrection -= 2 * Math.PI;
+                    } else if (diff < -Math.PI) {
+                        cumulativeCorrection += 2 * Math.PI;
+                    }
+                    unwrappedPhases[i] = rawPhases[i] + cumulativeCorrection;
+                }
+            }
+
             const magnitudes = [];
             const psdValues = [];
-            const phases = [];
             const frequencies = [];
             const tableRowsData = [];
 
@@ -502,15 +525,12 @@
                 if (i === 1) {
                     bin1Magnitude = mag;
                     bin1Frequency = freq;
-                    bin1Phase = Math.atan2(im, re);
+                    bin1Phase = unwrappedPhases[1];
                 }
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
                 psdValues.push(psd > 0 ? psd : 1e-12);
-
-                const phase = Math.atan2(im, re);
-                phases.push(phase);
 
                 const period = freq > 0 ? (1.0 / freq) : Infinity;
                 if (!isGated || (freq >= minFreq && freq <= maxFreq)) {
@@ -519,7 +539,8 @@
                         freq: freq,
                         period: period,
                         mag: mag,
-                        phase: phase
+                        phase: rawPhases[i],
+                        unwrappedPhase: unwrappedPhases[i]
                     });
                 }
             }
@@ -536,6 +557,7 @@
                     <td class="py-2.5 px-4 font-mono">${row.period === Infinity ? 'Infinite (DC)' : row.period.toFixed(4) + ' s'}</td>
                     <td class="py-2.5 px-4 font-mono font-bold">${row.mag.toFixed(4)}</td>
                     <td class="py-2.5 px-4 font-mono text-gray-600">${row.phase.toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-purple-700 font-semibold">${row.unwrappedPhase.toFixed(4)}</td>
                 `;
                 tableBody.appendChild(tr);
             });
@@ -551,7 +573,7 @@
                     detectedPeakObjects.push({
                         freq: 0,
                         mag: dcMagnitude,
-                        phase: phases[0]
+                        phase: unwrappedPhases[0]
                     });
                 }
 
@@ -571,7 +593,7 @@
                         detectedPeakObjects.push({
                             freq: frequencies[i],
                             mag: magnitudes[i],
-                            phase: phases[i]
+                            phase: unwrappedPhases[i]
                         });
                     }
                 }
@@ -600,7 +622,7 @@
                         if (frequencies[i] === 0) {
                             sum += magnitudes[i];
                         } else {
-                            sum += magnitudes[i] * Math.cos(2 * Math.PI * frequencies[i] * t + phases[i]);
+                            sum += magnitudes[i] * Math.cos(2 * Math.PI * frequencies[i] * t + unwrappedPhases[i]);
                         }
                     }
                 }
@@ -619,7 +641,7 @@
             // Highlighted point arrays across all frequency domain plots
             const fftThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? magnitudes[i] : null);
             const psdThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? psdValues[i] : null);
-            const phaseThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? phases[i] : null);
+            const phaseThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? unwrappedPhases[i] : null);
 
             const gatingBoundsData = frequencies.map(f => {
                 if (!isGated) return null;
@@ -827,9 +849,9 @@
                 }
             });
 
-            // 4. Phase Chart Datasets
+            // 4. Phase Chart Datasets (Unwrapped Phase)
             const phaseDatasets = [
-                { label: 'Phase (rad)', data: phases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 }
+                { label: 'Unwrapped Phase (rad)', data: unwrappedPhases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 }
             ];
             if (isMagThreshEnabled) {
                 phaseDatasets.push({
@@ -850,7 +872,14 @@
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: phaseDatasets
                 },
-                options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'Frequency (Hz)' } }, y: { title: { display: true, text: 'Phase (rad)', min: -Math.PI, max: Math.PI } } } }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    scales: { 
+                        x: { title: { display: true, text: 'Frequency (Hz)' } }, 
+                        y: { title: { display: true, text: 'Unwrapped Phase (rad)' } } 
+                    } 
+                }
             });
         }
     </script>
