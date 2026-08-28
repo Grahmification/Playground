@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FFT Analysis Tool with Windowing</title>
+    <title>FFT Analysis Dashboard</title>
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Chart.js for plotting -->
@@ -11,19 +11,31 @@
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 </head>
-<body class="bg-gray-100 min-h-screen p-6">
-    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-md p-8">
-        <h1 class="text-2xl font-bold text-gray-800 mb-4">CSV FFT Analyzer with Windowing</h1>
-        <p class="text-gray-600 mb-6">Upload your CSV file (Time_s, Amplitude), choose a window function to reduce spectral leakage, and analyze the resulting frequency spectrum.</p>
+<body class="bg-gray-100 min-h-screen flex flex-col md:flex-row font-sans">
 
-        <!-- Controls: File Upload & Window Selection -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div>
-                <label class="block mb-2 text-sm font-medium text-gray-700" for="csvFile">Select CSV File</label>
+    <!-- Sidebar Controls -->
+    <aside class="w-full md:w-80 bg-white border-r border-gray-200 p-6 flex flex-col justify-between shadow-sm shrink-0">
+        <div>
+            <div class="flex items-center space-x-2 mb-6">
+                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                </svg>
+                <h1 class="text-xl font-bold text-gray-800">FFT Dashboard</h1>
+            </div>
+            
+            <p class="text-sm text-gray-600 mb-6">
+                Upload time-series data to perform real-time spectral analysis.
+            </p>
+
+            <!-- File Upload Control -->
+            <div class="mb-5">
+                <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500" for="csvFile">CSV Dataset</label>
                 <input class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2 focus:outline-none" id="csvFile" type="file" accept=".csv">
             </div>
-            <div>
-                <label class="block mb-2 text-sm font-medium text-gray-700" for="windowType">Window Function</label>
+
+            <!-- Window Function Control -->
+            <div class="mb-5">
+                <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500" for="windowType">Window Function</label>
                 <select id="windowType" class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-gray-50 p-2.5 focus:outline-none">
                     <option value="none">None (Rectangular)</option>
                     <option value="hann" selected>Hann</option>
@@ -32,35 +44,46 @@
             </div>
         </div>
 
-        <!-- Charts Container -->
-        <div class="space-y-8">
-            <div>
-                <h3 class="text-lg font-semibold text-gray-700 mb-2">Time Domain (Raw Signal)</h3>
-                <div class="h-64 relative">
-                    <canvas id="timeChart"></canvas>
-                </div>
-            </div>
+        <div class="text-xs text-gray-400 mt-8 pt-4 border-t border-gray-100">
+            Powered by Chart.js & PapaParse
+        </div>
+    </aside>
 
+    <!-- Main Content: Expanded Plot Area -->
+    <main class="flex-1 p-6 md:p-10 flex flex-col gap-8 max-w-7xl">
+        <!-- Header status / Title info -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 gap-4">
             <div>
-                <h3 class="text-lg font-semibold text-gray-700 mb-2">Frequency Domain (FFT Magnitude)</h3>
-                <div class="h-64 relative">
-                    <canvas id="fftChart"></canvas>
-                </div>
+                <h2 class="text-lg font-bold text-gray-800">Analysis Output</h2>
+                <p id="statusText" class="text-sm text-gray-500">Awaiting dataset upload...</p>
             </div>
         </div>
-    </div>
+
+        <!-- Time Domain Chart Card -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col flex-1 min-h-[350px]">
+            <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Time Domain (Raw vs Windowed Signal)</h3>
+            <div class="relative flex-1 w-full h-[300px]">
+                <canvas id="timeChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Frequency Domain Chart Card -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col flex-1 min-h-[350px]">
+            <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Frequency Domain (FFT Magnitude Spectrum)</h3>
+            <div class="relative flex-1 w-full h-[300px]">
+                <canvas id="fftChart"></canvas>
+            </div>
+        </div>
+    </main>
 
     <script>
         let timeChart = null;
         let fftChart = null;
-        let globalData = null; // Store loaded data globally to re-plot on window change
+        let globalData = null;
 
-        // Iterative Cooley-Tukey Radix-2 FFT Implementation
         function computeFFT(real) {
             const n = real.length;
-            if ((n & (n - 1)) !== 0) {
-                throw new Error("FFT length must be a power of 2");
-            }
+            if ((n & (n - 1)) !== 0) throw new Error("FFT length must be a power of 2");
 
             const imag = new Array(n).fill(0);
             let j = 0;
@@ -84,8 +107,7 @@
                 let wStepI = Math.sin(angle);
 
                 for (let i = 0; i < n; i += len) {
-                    let wR = 1.0;
-                    let wI = 0.0;
+                    let wR = 1.0, wI = 0.0;
                     for (let m = 0; m < halfLen; m++) {
                         let uIdx = i + m;
                         let vIdx = i + m + halfLen;
@@ -113,7 +135,6 @@
             return results;
         }
 
-        // Apply Window Function and return windowed data + coherent gain compensation factor
         function applyWindow(signal, type) {
             const n = signal.length;
             const windowed = new Array(n);
@@ -129,8 +150,6 @@
                 windowed[i] = signal[i] * w;
                 sumWeights += w;
             }
-
-            // Coherent gain normalization factor so peak amplitudes stay accurate
             const coherentGain = sumWeights / n;
             return { windowedData: windowed, gain: coherentGain };
         }
@@ -153,19 +172,19 @@
                     }
 
                     globalData = {
+                        fileName: file.name,
                         times: dataRows.map(row => row[0]),
                         amplitudes: dataRows.map(row => row[1])
                     };
 
+                    document.getElementById('statusText').textContent = `Loaded: ${file.name} (${dataRows.length} points)`;
                     triggerProcessing();
                 }
             });
         });
 
         document.getElementById('windowType').addEventListener('change', function() {
-            if (globalData) {
-                triggerProcessing();
-            }
+            if (globalData) triggerProcessing();
         });
 
         function triggerProcessing() {
@@ -183,26 +202,21 @@
             const truncatedAmps = amplitudes.slice(0, n);
             const truncatedTimes = times.slice(0, n);
 
-            // Apply selected window function
             const { windowedData, gain } = applyWindow(truncatedAmps, windowType);
-
-            // Compute FFT on windowed signal
             const fftResult = computeFFT([...windowedData]);
 
-            // Calculate magnitude spectrum for positive frequencies up to Nyquist
             const halfN = n / 2;
             const magnitudes = [];
             const frequencies = [];
 
             for (let i = 0; i < halfN; i++) {
-                // Normalize by halfN and adjust for window coherent gain
                 let mag = Math.sqrt(fftResult[i].re ** 2 + fftResult[i].im ** 2) / halfN;
                 if (gain > 0) mag /= gain;
                 magnitudes.push(mag);
                 frequencies.push((i * sampleRate) / n);
             }
 
-            // Plot Time Domain (showing windowed waveform shape)
+            // Time Chart
             const timeCtx = document.getElementById('timeChart').getContext('2d');
             if (timeChart) timeChart.destroy();
             timeChart = new Chart(timeCtx, {
@@ -211,16 +225,16 @@
                     labels: truncatedTimes.map(t => t.toFixed(2) + 's'),
                     datasets: [
                         {
-                            label: 'Windowed Amplitude',
+                            label: 'Windowed Signal',
                             data: windowedData,
-                            borderColor: 'rgb(59, 130, 246)',
+                            borderColor: 'rgb(37, 99, 235)',
                             borderWidth: 1.5,
                             pointRadius: 0
                         },
                         {
-                            label: 'Original Signal (Reference)',
+                            label: 'Original Reference',
                             data: truncatedAmps,
-                            borderColor: 'rgba(156, 163, 175, 0.5)',
+                            borderColor: 'rgba(156, 163, 175, 0.4)',
                             borderWidth: 1,
                             borderDash: [4, 4],
                             pointRadius: 0
@@ -237,7 +251,7 @@
                 }
             });
 
-            // Plot Frequency Domain
+            // FFT Chart
             const fftCtx = document.getElementById('fftChart').getContext('2d');
             if (fftChart) fftChart.destroy();
             fftChart = new Chart(fftCtx, {
@@ -245,9 +259,9 @@
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [{
-                        label: `Magnitude Spectrum (${windowType.toUpperCase()} Window)`,
+                        label: `Magnitude Spectrum (${windowType.toUpperCase()})`,
                         data: magnitudes,
-                        borderColor: 'rgb(239, 68, 68)',
+                        borderColor: 'rgb(220, 38, 38)',
                         borderWidth: 1.5,
                         pointRadius: 2
                     }]
