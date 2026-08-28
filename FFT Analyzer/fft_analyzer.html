@@ -91,6 +91,14 @@
                     <input type="checkbox" id="includeBin1Peaks" class="w-4 h-4 text-yellow-500 border-gray-300 rounded focus:ring-yellow-400 cursor-pointer" checked>
                     <label for="includeBin1Peaks" class="text-xs text-gray-700 cursor-pointer">Include Lowest Non-Zero Frequency (Bin 1)</label>
                 </div>
+
+                <!-- Export Peaks Button -->
+                <button id="exportPeaksBtn" onclick="exportSubsetCsv('peaks')" class="w-full mt-3 px-3 py-1.5 text-xs font-semibold rounded-md bg-yellow-600 text-white hover:bg-yellow-700 shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    Export Peak Components
+                </button>
             </div>
 
             <hr class="my-4 border-gray-200">
@@ -110,10 +118,18 @@
                     <span id="magThreshVal" class="font-bold">0.00</span>
                 </div>
                 <input type="range" id="magThreshRange" min="0" max="100" step="0.1" value="0" class="w-full accent-red-600 mb-2">
-                <div class="text-xs text-red-700 font-medium bg-red-50 px-2.5 py-1.5 rounded border border-red-100 flex justify-between items-center">
+                <div class="text-xs text-red-700 font-medium bg-red-50 px-2.5 py-1.5 rounded border border-red-100 flex justify-between items-center mb-3">
                     <span>Included Components:</span>
                     <span id="magThreshCount" class="font-bold">0</span>
                 </div>
+
+                <!-- Export Threshold Button -->
+                <button id="exportThreshBtn" onclick="exportSubsetCsv('threshold')" class="w-full px-3 py-1.5 text-xs font-semibold rounded-md bg-red-600 text-white hover:bg-red-700 shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    Export Threshold Components
+                </button>
             </div>
         </div>
 
@@ -131,10 +147,20 @@
                 <p id="statusText" class="text-xs text-gray-500">Awaiting dataset upload...</p>
             </div>
 
-            <!-- Tab Switcher -->
-            <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                <button id="tabChartsBtn" onclick="switchTab('charts')" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer">Charts View</button>
-                <button id="tabTableBtn" onclick="switchTab('table')" class="px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer">Spectral Table</button>
+            <div class="flex items-center gap-3">
+                <!-- Export CSV Button -->
+                <button id="exportCsvBtn" onclick="exportSpectralCsv()" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    Export CSV
+                </button>
+
+                <!-- Tab Switcher -->
+                <div class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                    <button id="tabChartsBtn" onclick="switchTab('charts')" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer">Charts View</button>
+                    <button id="tabTableBtn" onclick="switchTab('table')" class="px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer">Spectral Table</button>
+                </div>
             </div>
         </div>
 
@@ -218,6 +244,7 @@
         let polarPhaseChart = null;
         let globalData = null;
         let currentSpectralRows = [];
+        let currentPeakIndices = new Set();
         let currentSortColumn = 'bin';
         let currentSortAscending = true;
 
@@ -386,6 +413,7 @@
                     document.getElementById('magThreshVal').textContent = parseFloat(magThreshRange.value).toFixed(2);
 
                     document.getElementById('statusText').textContent = `Loaded: ${file.name} (${origLen} points, fs = ${sampleRate}Hz)`;
+                    document.getElementById('exportCsvBtn').removeAttribute('disabled');
                     triggerProcessing();
                 }
             });
@@ -506,6 +534,87 @@
 
             const visibleCount = unitType === 'period' ? sortedRows.filter(r => r.freq !== 0).length : sortedRows.length;
             document.getElementById('tableMetaCount').textContent = `${visibleCount} components listed`;
+        }
+
+        function exportSpectralCsv() {
+            if (!currentSpectralRows || currentSpectralRows.length === 0) return;
+
+            const csvRows = [];
+            csvRows.push(['Bin Index', 'Frequency (Hz)', 'Period (s)', 'Magnitude', 'Percentage Contribution (%)', 'Phase (rad)', 'Unwrapped Phase (rad)']);
+
+            currentSpectralRows.forEach(row => {
+                csvRows.push([
+                    row.bin,
+                    row.freq,
+                    row.period === Infinity ? 'Infinity' : row.period,
+                    row.mag,
+                    row.contrib,
+                    row.phase,
+                    row.unwrappedPhase
+                ]);
+            });
+
+            const csvString = Papa.unparse(csvRows);
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            
+            const baseName = globalData && globalData.fileName ? globalData.fileName.replace(/\.[^/.]+$/, "") : "spectral_analysis";
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', `${baseName}_spectral_results.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function exportSubsetCsv(type) {
+            if (!currentSpectralRows || currentSpectralRows.length === 0) return;
+
+            let subsetRows = [];
+            let suffix = "";
+
+            if (type === 'peaks') {
+                if (!document.getElementById('enablePeaks').checked) return;
+                subsetRows = currentSpectralRows.filter(row => currentPeakIndices.has(row.bin));
+                suffix = "peak_components";
+            } else if (type === 'threshold') {
+                if (!document.getElementById('enableMagThresh').checked) return;
+                const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
+                subsetRows = currentSpectralRows.filter(row => row.mag >= magThreshold);
+                suffix = "threshold_components";
+            }
+
+            if (subsetRows.length === 0) {
+                alert('No components match the current export criteria.');
+                return;
+            }
+
+            const csvRows = [];
+            csvRows.push(['Bin Index', 'Frequency (Hz)', 'Period (s)', 'Magnitude', 'Percentage Contribution (%)', 'Phase (rad)', 'Unwrapped Phase (rad)']);
+
+            subsetRows.forEach(row => {
+                csvRows.push([
+                    row.bin,
+                    row.freq,
+                    row.period === Infinity ? 'Infinity' : row.period,
+                    row.mag,
+                    row.contrib,
+                    row.phase,
+                    row.unwrappedPhase
+                ]);
+            });
+
+            const csvString = Papa.unparse(csvRows);
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            
+            const baseName = globalData && globalData.fileName ? globalData.fileName.replace(/\.[^/.]+$/, "") : "spectral_analysis";
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', `${baseName}_${suffix}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, padStrategy, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
@@ -686,18 +795,18 @@
 
             const maxMag = Math.max(...rawMagnitudes);
             const peakThreshold = maxMag * sensitivity;
-            const peakIndices = new Set();
+            currentPeakIndices.clear();
 
             if (isPeaksEnabled) {
                 if (includeDcInPeaks && unitType !== 'period') {
-                    peakIndices.add(0);
+                    currentPeakIndices.add(0);
                 }
                 if (includeBin1InPeaks && finalHalfN > 1) {
-                    peakIndices.add(1);
+                    currentPeakIndices.add(1);
                 }
                 for (let i = 1; i < finalHalfN - 1; i++) {
                     if (rawMagnitudes[i] > rawMagnitudes[i - 1] && rawMagnitudes[i] > rawMagnitudes[i + 1] && rawMagnitudes[i] >= peakThreshold) {
-                        peakIndices.add(i);
+                        currentPeakIndices.add(i);
                     }
                 }
             }
@@ -725,7 +834,7 @@
             renderTable();
 
             const detectedPeakObjects = [];
-            peakIndices.forEach(i => {
+            currentPeakIndices.forEach(i => {
                 detectedPeakObjects.push({
                     freq: rawFrequencies[i],
                     mag: rawMagnitudes[i],
@@ -754,7 +863,7 @@
             const polarPeakPoints = [];
 
             if (isPeaksEnabled) {
-                peakIndices.forEach(i => {
+                currentPeakIndices.forEach(i => {
                     const f = rawFrequencies[i];
                     const p = rawPeriods[i];
                     const xVal = unitType === 'period' ? p : f;
@@ -901,7 +1010,7 @@
 
             const xAxisLabelText = unitType === 'period' ? 'Period (s)' : 'Frequency (Hz)';
 
-            // 1. Time Chart (Solid Green for Original, Solid Yellow for Summed Peaks, Red for Mag Threshold)
+            // 1. Time Chart
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
@@ -922,7 +1031,7 @@
                 }
             });
 
-            // 2. FFT Magnitude Chart (Purple)
+            // 2. FFT Magnitude Chart
             fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
@@ -945,7 +1054,7 @@
                 }
             });
 
-            // 3. PSD Chart (Purple)
+            // 3. PSD Chart
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
@@ -965,7 +1074,7 @@
                 }
             });
 
-            // 4. Phase Chart (Unwrapped) (Blue)
+            // 4. Phase Chart (Unwrapped)
             phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
@@ -985,7 +1094,7 @@
                 }
             });
 
-            // 5. Polar Phase Plot (Blue components, Yellow peaks, Red threshold)
+            // 5. Polar Phase Plot
             polarPhaseChart = updateOrCreateChart(polarPhaseChart, 'polarPhaseChart', {
                 type: 'scatter',
                 data: {
@@ -1064,7 +1173,7 @@
                                     return [
                                         ` Freq: ${pt.freq.toFixed(2)} Hz (Period: ${pStr})${labelPrefix}`,
                                         ` Magnitude: ${pt.mag.toFixed(4)}`,
-                                        ` Phase: ${pt.phase.toFixed(3)} rad`
+                                        ` Phase: ${pt.phase.theta ? pt.phase.toFixed(3) : pt.phase.toFixed(3)} rad`
                                     ];
                                 }
                             }
