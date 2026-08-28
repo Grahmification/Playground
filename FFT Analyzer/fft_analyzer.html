@@ -54,13 +54,18 @@
                 </label>
             </div>
 
-            <div id="peakControlsContainer" class="mb-4 transition-opacity duration-200">
+            <div id="peakControlsContainer" class="mb-3 transition-opacity duration-200">
                 <div class="flex justify-between text-xs text-gray-600 mb-1">
                     <span class="text-gray-500">Sensitivity:</span>
                     <span id="sensVal" class="font-bold">5%</span>
                 </div>
-                <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-red-600">
-                <span class="text-[10px] text-gray-400">Min prominence % of max magnitude</span>
+                <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-red-600 mb-2">
+                
+                <!-- Include DC Offset Checkbox -->
+                <div class="flex items-center space-x-2 mt-2">
+                    <input type="checkbox" id="includeDcPeaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer">
+                    <label for="includeDcPeaks" class="text-xs text-gray-700 cursor-pointer">Include DC Offset in Summed Peaks</label>
+                </div>
             </div>
 
             <hr class="my-4 border-gray-200">
@@ -351,6 +356,8 @@
             document.getElementById('sensVal').textContent = e.target.value + '%';
             if (globalData) triggerProcessing();
         });
+
+        document.getElementById('includeDcPeaks').addEventListener('change', () => { if (globalData) triggerProcessing(); });
         
         const enableGateCheckbox = document.getElementById('enableGate');
         const gateContainer = document.getElementById('gateControlsContainer');
@@ -378,14 +385,15 @@
             const windowSelection = document.getElementById('windowType').value;
             const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
+            const includeDcInPeaks = document.getElementById('includeDcPeaks').checked;
             const isGated = document.getElementById('enableGate').checked;
             const minFreq = isGated ? parseFloat(document.getElementById('minFreqRange').value) : 0;
             const maxFreq = isGated ? parseFloat(document.getElementById('maxFreqRange').value) : (sampleRate / 2);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, isGated, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, isGated, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, isGated, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, includeDcInPeaks, isGated, minFreq, maxFreq) {
             const originalLength = amplitudes.length;
             const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             
@@ -404,6 +412,8 @@
             const frequencies = [];
             const tableRowsData = [];
 
+            let dcMagnitude = 0;
+
             for (let i = 0; i < halfN; i++) {
                 const freq = (i * sampleRate) / nextPower;
                 frequencies.push(freq);
@@ -416,6 +426,8 @@
                 if (gain > 0) mag /= gain;
                 magnitudes.push(mag);
 
+                if (i === 0) dcMagnitude = mag;
+
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
                 psdValues.push(psd > 0 ? psd : 1e-12);
@@ -423,7 +435,6 @@
                 const phase = Math.atan2(im, re);
                 phases.push(phase);
 
-                // Populate table dataset (include DC and gated range components)
                 const period = freq > 0 ? (1.0 / freq) : Infinity;
                 if (!isGated || (freq >= minFreq && freq <= maxFreq)) {
                     tableRowsData.push({
@@ -459,6 +470,15 @@
             const detectedPeakObjects = [];
             
             if (isPeaksEnabled) {
+                // Optionally add DC component (Bin 0) as a peak/offset baseline
+                if (includeDcInPeaks) {
+                    detectedPeakObjects.push({
+                        freq: 0,
+                        mag: dcMagnitude,
+                        phase: phases[0]
+                    });
+                }
+
                 for (let i = 1; i < magnitudes.length - 1; i++) {
                     if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
                         peakData[i] = magnitudes[i];
@@ -475,7 +495,11 @@
                 if (!isPeaksEnabled) return null;
                 let sum = 0;
                 for (let peak of detectedPeakObjects) {
-                    sum += peak.mag * Math.cos(2 * Math.PI * peak.freq * t + peak.phase);
+                    if (peak.freq === 0) {
+                        sum += peak.mag; // DC component contribution
+                    } else {
+                        sum += peak.mag * Math.cos(2 * Math.PI * peak.freq * t + peak.phase);
+                    }
                 }
                 return sum;
             });
