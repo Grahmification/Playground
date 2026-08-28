@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FlowJo v10 Web Workspace & Gating Hierarchy</title>
+    <title>FCS Workspace & Gating Hierarchy</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- D3.js -->
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <!-- FontAwesome for FlowJo-like icons -->
+    <!-- FontAwesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* FlowJo Classic Gray Palette with modern touches */
+        /* Classic Gray Palette with modern touches */
         :root {
             --fj-bg: #f3f4f6;
             --fj-panel-border: #d1d5db;
@@ -45,7 +45,7 @@
             background: #94a3b8;
         }
 
-        /* FlowJo gating tree line connections */
+        /* Gating tree line connections */
         .tree-node-wrapper::before {
             content: '';
             position: absolute;
@@ -99,19 +99,19 @@
 </head>
 <body class="flex flex-col">
 
-    <!-- Top Ribbon / Toolbar (FlowJo Style) -->
+    <!-- Top Ribbon / Toolbar -->
     <header class="bg-gray-200 border-b border-gray-300 flex flex-col shrink-0">
         <!-- Application Title Bar -->
         <div class="px-4 py-1.5 flex justify-between items-center bg-slate-800 text-white text-xs">
             <div class="flex items-center gap-2">
                 <i class="fa-solid fa-circle-nodes text-blue-400 text-sm"></i>
-                <span class="font-bold tracking-wide">FlowJo™ v10 Web Workspace Viewer</span>
+                <span class="font-bold tracking-wide">FCS Web Workspace Viewer</span>
                 <span class="text-slate-400">|</span>
                 <span class="text-slate-300 font-mono text-[10px]" id="loaded-file-name">No file loaded</span>
             </div>
             <div class="flex items-center gap-4">
                 <span id="event-counter" class="text-blue-300 font-semibold bg-slate-700 px-2 py-0.5 rounded text-[10px]">0 / 0 Events</span>
-                <span class="text-slate-400">Version 10.8.1 (Web Edition)</span>
+                <span class="text-slate-400">Version 0.0.1</span>
             </div>
         </div>
 
@@ -183,7 +183,7 @@
     <!-- Main Workspace Area -->
     <main class="flex flex-1 overflow-hidden">
         
-        <!-- Left Sidebar: FlowJo Workspace Panel -->
+        <!-- Left Sidebar: Workspace Panel -->
         <section class="w-96 border-r border-gray-300 flex flex-col bg-white shrink-0">
             <!-- Groups List Panel -->
             <div class="h-32 border-b border-gray-300 flex flex-col shrink-0 bg-gray-50">
@@ -932,7 +932,7 @@
             document.getElementById('event-counter').innerText = `${eventFilterCache[currentSelectedNode].length.toLocaleString()} / ${events.length.toLocaleString()} Events`;
         }
 
-        // Render FlowJo Gating Tree
+        // Render Gating Tree
         function renderGatingTree() {
             const container = document.getElementById('gating-tree-gates');
             container.innerHTML = '';
@@ -1797,7 +1797,7 @@ function getAsinhTicks(minVal, maxVal, cofactor = 1000) {
             const blob = new Blob([JSON.stringify(exportData, null, 4)], {type: 'application/json'});
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `flowjo_workspace_${exportData.fileName.replace('.fcs', '')}.json`;
+            a.download = `fcs_workspace_${exportData.fileName.replace('.fcs', '')}.json`;
             a.click();
         }
     </script>
