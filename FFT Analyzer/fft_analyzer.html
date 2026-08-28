@@ -179,19 +179,20 @@
             </div>
             <div class="overflow-y-auto flex-1 max-h-[720px]">
                 <table class="w-full text-left border-collapse text-xs">
-                    <thead class="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider sticky top-0 border-b border-gray-200">
+                    <thead class="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider sticky top-0 border-b border-gray-200 select-none">
                         <tr>
-                            <th class="py-2.5 px-4">Bin Index</th>
-                            <th class="py-2.5 px-4">Frequency (Hz)</th>
-                            <th class="py-2.5 px-4">Period (s)</th>
-                            <th class="py-2.5 px-4">Magnitude</th>
-                            <th class="py-2.5 px-4">Phase (rad)</th>
-                            <th class="py-2.5 px-4">Unwrapped Phase (rad)</th>
+                            <th onclick="sortTable('bin')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Bin Index <span id="sort-bin" class="text-gray-400"></span></th>
+                            <th onclick="sortTable('freq')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Frequency (Hz) <span id="sort-freq" class="text-gray-400"></span></th>
+                            <th onclick="sortTable('period')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Period (s) <span id="sort-period" class="text-gray-400"></span></th>
+                            <th onclick="sortTable('mag')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Magnitude <span id="sort-mag" class="text-gray-400"></span></th>
+                            <th onclick="sortTable('contrib')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">% Contribution <span id="sort-contrib" class="text-gray-400"></span></th>
+                            <th onclick="sortTable('phase')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Phase (rad) <span id="sort-phase" class="text-gray-400"></span></th>
+                            <th onclick="sortTable('unwrappedPhase')" class="py-2.5 px-4 cursor-pointer hover:bg-gray-200 transition-colors">Unwrapped Phase (rad) <span id="sort-unwrappedPhase" class="text-gray-400"></span></th>
                         </tr>
                     </thead>
                     <tbody id="spectralTableBody" class="divide-y divide-gray-100 text-gray-700">
                         <tr>
-                            <td colspan="6" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
+                            <td colspan="7" class="py-6 text-center text-gray-400">No data loaded yet. Upload a CSV dataset to populate table.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -206,6 +207,9 @@
         let phaseChart = null;
         let polarPhaseChart = null;
         let globalData = null;
+        let currentSpectralRows = [];
+        let currentSortColumn = 'bin';
+        let currentSortAscending = true;
 
         function switchTab(tabName) {
             const chartsBtn = document.getElementById('tabChartsBtn');
@@ -420,6 +424,64 @@
             processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold);
         }
 
+        function sortTable(columnKey) {
+            if (currentSortColumn === columnKey) {
+                currentSortAscending = !currentSortAscending;
+            } else {
+                currentSortColumn = columnKey;
+                currentSortAscending = true;
+            }
+            renderTable();
+        }
+
+        function renderTable() {
+            const unitType = document.getElementById('freqDomainUnit').value;
+            const tableBody = document.getElementById('spectralTableBody');
+            tableBody.innerHTML = '';
+
+            const keys = ['bin', 'freq', 'period', 'mag', 'contrib', 'phase', 'unwrappedPhase'];
+            keys.forEach(k => {
+                const indicator = document.getElementById(`sort-${k}`);
+                if (indicator) {
+                    if (currentSortColumn === k) {
+                        indicator.textContent = currentSortAscending ? ' ▲' : ' ▼';
+                    } else {
+                        indicator.textContent = '';
+                    }
+                }
+            });
+
+            const sortedRows = [...currentSpectralRows].sort((a, b) => {
+                let valA = a[currentSortColumn];
+                let valB = b[currentSortColumn];
+                if (valA === Infinity) valA = Number.MAX_VALUE;
+                if (valB === Infinity) valB = Number.MAX_VALUE;
+                
+                if (valA < valB) return currentSortAscending ? -1 : 1;
+                if (valA > valB) return currentSortAscending ? 1 : -1;
+                return 0;
+            });
+
+            sortedRows.forEach(row => {
+                if (unitType === 'period' && row.freq === 0) return;
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-gray-50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-2.5 px-4 font-mono text-gray-500">${row.bin}</td>
+                    <td class="py-2.5 px-4 font-semibold text-blue-600">${row.freq.toFixed(3)} Hz</td>
+                    <td class="py-2.5 px-4 font-mono">${row.period === Infinity ? 'Infinite (DC)' : row.period.toFixed(4) + ' s'}</td>
+                    <td class="py-2.5 px-4 font-mono font-bold">${row.mag.toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-emerald-600 font-semibold">${row.contrib.toFixed(2)}%</td>
+                    <td class="py-2.5 px-4 font-mono text-gray-600">${row.phase.toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-purple-700 font-semibold">${row.unwrappedPhase.toFixed(4)}</td>
+                `;
+                tableBody.appendChild(tr);
+            });
+
+            const visibleCount = unitType === 'period' ? sortedRows.filter(r => r.freq !== 0).length : sortedRows.length;
+            document.getElementById('tableMetaCount').textContent = `${visibleCount} components listed`;
+        }
+
         function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
             const originalLength = amplitudes.length;
             const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
@@ -464,6 +526,7 @@
             const rawPhasesList = [];
 
             const peakIndices = new Set();
+            let totalMagnitudeSum = 0;
 
             for (let i = 0; i < halfN; i++) {
                 const freq = (i * sampleRate) / nextPower;
@@ -478,6 +541,7 @@
                 if (i > 0) mag *= 2;
                 if (gain > 0) mag /= gain;
                 rawMagnitudes.push(mag);
+                totalMagnitudeSum += mag;
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
@@ -510,28 +574,21 @@
                 activeIndices.push(i);
             }
 
-            if (unitType === 'period') {
-                activeIndices.reverse();
-            }
-
-            // Build Table HTML
-            const tableBody = document.getElementById('spectralTableBody');
-            tableBody.innerHTML = '';
+            // Populate spectral rows dataset for sorting
+            currentSpectralRows = [];
             for (let i = 0; i < halfN; i++) {
-                if (unitType === 'period' && rawFrequencies[i] === 0) continue;
-                const tr = document.createElement('tr');
-                tr.className = "hover:bg-gray-50 transition-colors";
-                tr.innerHTML = `
-                    <td class="py-2.5 px-4 font-mono text-gray-500">${i}</td>
-                    <td class="py-2.5 px-4 font-semibold text-blue-600">${rawFrequencies[i].toFixed(3)} Hz</td>
-                    <td class="py-2.5 px-4 font-mono">${rawPeriods[i] === Infinity ? 'Infinite (DC)' : rawPeriods[i].toFixed(4) + ' s'}</td>
-                    <td class="py-2.5 px-4 font-mono font-bold">${rawMagnitudes[i].toFixed(4)}</td>
-                    <td class="py-2.5 px-4 font-mono text-gray-600">${rawPhasesList[i].toFixed(4)}</td>
-                    <td class="py-2.5 px-4 font-mono text-purple-700 font-semibold">${rawUnwrappedPhases[i].toFixed(4)}</td>
-                `;
-                tableBody.appendChild(tr);
+                const pctContribution = totalMagnitudeSum > 0 ? (rawMagnitudes[i] / totalMagnitudeSum) * 100 : 0;
+                currentSpectralRows.push({
+                    bin: i,
+                    freq: rawFrequencies[i],
+                    period: rawPeriods[i],
+                    mag: rawMagnitudes[i],
+                    contrib: pctContribution,
+                    phase: rawPhasesList[i],
+                    unwrappedPhase: rawUnwrappedPhases[i]
+                });
             }
-            document.getElementById('tableMetaCount').textContent = `${activeIndices.length} components listed`;
+            renderTable();
 
             const detectedPeakObjects = [];
             peakIndices.forEach(i => {
