@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D STEP CAD Viewer with Interactive Selection</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load OCCT global bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.12/dist/occt-import-js.js"></script>
+
+    <!-- Import maps polyfill & Three.js setup -->
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; color: #f8fafc; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: relative; }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.5); border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.8); }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #38bdf8;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Highlighted row state */
+        .tree-header.selected {
+            background-color: rgba(56, 189, 248, 0.2);
+            border: 1px solid rgba(56, 189, 248, 0.5);
+            color: #38bdf8;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <!-- Sidebar Panel on the Left -->
+        <div class="absolute top-4 left-4 bottom-4 z-10 glass-panel p-4 rounded-xl shadow-2xl w-80 flex flex-col gap-3 pointer-events-auto">
+            <div>
+                <h1 class="text-xl font-bold text-sky-400 mb-1 flex items-center gap-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                    STEP CAD Viewer
+                </h1>
+                <p class="text-xs text-slate-400">Upload a <code>.stp</code> or <code>.step</code> file to inspect structure.</p>
+            </div>
+
+            <!-- Upload Button Area -->
+            <label class="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 hover:border-sky-400 transition-all shrink-0">
+                <div class="flex flex-col items-center justify-center pt-1 pb-1">
+                    <svg class="w-6 h-6 mb-1 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 0115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    <p class="text-xs text-slate-300 font-medium"><span class="font-semibold text-sky-400">Click to upload</span> or drag STEP</p>
+                </div>
+                <input id="file-input" type="file" accept=".step, .stp" class="hidden" />
+            </label>
+
+            <!-- File Details Stats -->
+            <div id="file-info" class="hidden text-xs text-slate-300 bg-slate-900/50 p-2 rounded border border-slate-700/50 shrink-0">
+                <div class="flex justify-between py-0.5"><span class="text-slate-400">File Name:</span><span id="info-name" class="font-medium truncate max-w-[140px]"></span></div>
+                <div class="flex justify-between py-0.5"><span class="text-slate-400">Bodies/Meshes:</span><span id="info-meshes" class="font-medium"></span></div>
+            </div>
+
+            <!-- Assembly & Feature Tree View Container -->
+            <div class="flex-1 flex flex-col min-h-0 bg-slate-900/60 rounded-lg border border-slate-700/60 p-2">
+                <div class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-800 pb-1 flex items-center justify-between">
+                    <span>Model Hierarchy</span>
+                    <span id="tree-count" class="text-[10px] text-slate-500 font-mono"></span>
+                </div>
+                <div id="tree-view" class="flex-1 overflow-y-auto custom-scrollbar text-xs space-y-1 pr-1">
+                    <div class="text-slate-500 italic text-center py-4 text-xs">No STEP file loaded</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Render Controls Overlay (Top Right) -->
+        <div id="controls-panel" class="hidden absolute top-4 right-4 z-10 glass-panel p-3 rounded-xl shadow-2xl flex-col gap-2 text-xs">
+            <button id="btn-reset-view" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 transition">Reset View</button>
+            <button id="btn-toggle-wireframe" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 transition">Toggle Wireframe</button>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="hidden absolute inset-0 z-20 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
+            <div class="spinner"></div>
+            <div id="loading-text" class="text-sm font-medium text-slate-200">Processing STEP File...</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls;
+        let currentModel = null;
+        let occt = null;
+        let wireframeEnabled = false;
+
+        // Selection & Highlight State
+        let selectedMesh = null;
+        let selectedHeaderElem = null;
+        const highlightColor = new THREE.Color(0x38bdf8); // Sky blue glow
+        const originalMaterialsMap = new Map();
+
+        const fileInput = document.getElementById('file-input');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        const fileInfo = document.getElementById('file-info');
+        const infoName = document.getElementById('info-name');
+        const infoMeshes = document.getElementById('info-meshes');
+        const controlsPanel = document.getElementById('controls-panel');
+        const treeView = document.getElementById('tree-view');
+        const treeCount = document.getElementById('tree-count');
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(100, 100, 100);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight1.position.set(100, 200, 100);
+            scene.add(dirLight1);
+
+            const dirLight2 = new THREE.DirectionalLight(0x90b0ff, 0.4);
+            dirLight2.position.set(-100, -100, -100);
+            scene.add(dirLight2);
+
+            const gridHelper = new THREE.GridHelper(500, 50, 0x334155, 0x1e293b);
+            gridHelper.position.y = -0.01;
+            scene.add(gridHelper);
+
+            window.addEventListener('resize', onWindowResize);
+            fileInput.addEventListener('change', handleFileSelect);
+            window.addEventListener('dragover', (e) => e.preventDefault());
+            window.addEventListener('drop', handleDrop);
+
+            document.getElementById('btn-reset-view').addEventListener('click', fitModelToView);
+            document.getElementById('btn-toggle-wireframe').addEventListener('click', toggleWireframe);
+
+            animate();
+            initOCCT();
+        }
+
+        async function initOCCT() {
+            try {
+                occt = await window.occtimportjs({
+                    locateFile: (name) => `https://cdn.jsdelivr.net/npm/occt-import-js@0.0.12/dist/${name}`
+                });
+            } catch (err) {
+                console.error("Failed to load OCCT library:", err);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            if (e.dataTransfer.files.length > 0) {
+                const file = e.dataTransfer.files[0];
+                if (file.name.toLowerCase().endsWith('.step') || file.name.toLowerCase().endsWith('.stp')) {
+                    processFile(file);
+                } else {
+                    alert('Please upload a valid .STEP or .STP file.');
+                }
+            }
+        }
+
+        function handleFileSelect(e) {
+            if (e.target.files.length > 0) {
+                processFile(e.target.files[0]);
+            }
+        }
+
+        async function processFile(file) {
+            showLoading(true, "Loading WASM & Reading File...");
+
+            if (!occt) {
+                await initOCCT();
+            }
+
+            const reader = new FileReader();
+            reader.onload = async function (e) {
+                try {
+                    showLoading(true, "Tessellating STEP Data...");
+                    const fileBuffer = new Uint8Array(e.target.result);
+                    const result = occt.ReadStepFile(fileBuffer);
+
+                    if (!result || !result.success) {
+                        throw new Error("Failed to parse STEP file.");
+                    }
+
+                    renderCADResult(result, file.name);
+                } catch (error) {
+                    alert("Error loading STEP file: " + error.message);
+                    console.error(error);
+                } finally {
+                    showLoading(false);
+                }
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+        function renderCADResult(result, fileName) {
+            if (currentModel) {
+                scene.remove(currentModel);
+            }
+            clearSelection();
+            originalMaterialsMap.clear();
+
+            currentModel = new THREE.Group();
+            let meshCount = 0;
+            treeView.innerHTML = '';
+
+            const rootItem = createTreeNode(fileName, 'root', true);
+            const rootChildrenContainer = rootItem.querySelector('.tree-children');
+            treeView.appendChild(rootItem);
+
+            result.meshes.forEach((meshData, meshIndex) => {
+                const bodyName = meshData.name || `Body ${meshIndex + 1}`;
+                const faceColors = meshData.attributes?.color?.array;
+                const hasFaceColors = faceColors && faceColors.length > 0;
+
+                let meshColor = null;
+                if (meshData.color) {
+                    meshColor = new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2]);
+                } else if (meshData.brep_color) {
+                    meshColor = new THREE.Color(meshData.brep_color[0], meshData.brep_color[1], meshData.brep_color[2]);
+                } else {
+                    meshColor = new THREE.Color(0x94a3b8);
+                }
+
+                const hasGroups = meshData.brep_faces && meshData.brep_faces.length > 0;
+                let mesh;
+
+                if (hasGroups) {
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+                    if (meshData.attributes.normal) {
+                        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                    } else {
+                        geometry.computeVertexNormals();
+                    }
+                    if (meshData.index) {
+                        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                    }
+
+                    const materials = [];
+                    meshData.brep_faces.forEach((face, index) => {
+                        geometry.addGroup(face.first, face.count, index);
+                        let surfaceColor = meshColor;
+                        if (face.color) {
+                            surfaceColor = new THREE.Color(face.color[0], face.color[1], face.color[2]);
+                        }
+                        materials.push(new THREE.MeshStandardMaterial({
+                            color: surfaceColor,
+                            roughness: 0.4,
+                            metalness: 0.3,
+                            side: THREE.DoubleSide,
+                            wireframe: wireframeEnabled
+                        }));
+                    });
+
+                    mesh = new THREE.Mesh(geometry, materials);
+
+                } else if (hasFaceColors) {
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(faceColors, 3));
+                    if (meshData.attributes.normal) {
+                        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                    } else {
+                        geometry.computeVertexNormals();
+                    }
+                    if (meshData.index) {
+                        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                    }
+
+                    const material = new THREE.MeshStandardMaterial({
+                        vertexColors: true,
+                        roughness: 0.4,
+                        metalness: 0.3,
+                        side: THREE.DoubleSide,
+                        wireframe: wireframeEnabled
+                    });
+
+                    mesh = new THREE.Mesh(geometry, material);
+                } else {
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+                    if (meshData.attributes.normal) {
+                        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                    } else {
+                        geometry.computeVertexNormals();
+                    }
+                    if (meshData.index) {
+                        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                    }
+
+                    const material = new THREE.MeshStandardMaterial({
+                        color: meshColor,
+                        roughness: 0.4,
+                        metalness: 0.3,
+                        side: THREE.DoubleSide,
+                        wireframe: wireframeEnabled
+                    });
+
+                    mesh = new THREE.Mesh(geometry, material);
+                }
+
+                mesh.name = bodyName;
+                currentModel.add(mesh);
+
+                storeOriginalMaterials(mesh);
+
+                const hexColor = '#' + meshColor.getHexString();
+                const bodyItem = createTreeNode(bodyName, 'body', true, hexColor, mesh);
+                const bodyChildrenContainer = bodyItem.querySelector('.tree-children');
+
+                if (meshData.brep_faces && meshData.brep_faces.length > 0) {
+                    meshData.brep_faces.forEach((face, fIdx) => {
+                        let fColorHex = hexColor;
+                        if (face.color) {
+                            fColorHex = '#' + new THREE.Color(face.color[0], face.color[1], face.color[2]).getHexString();
+                        }
+                        const surfaceName = `Surface Face ${fIdx + 1}`;
+                        const faceItem = createTreeNode(surfaceName, 'surface', false, fColorHex, mesh);
+                        bodyChildrenContainer.appendChild(faceItem);
+                    });
+                }
+
+                rootChildrenContainer.appendChild(bodyItem);
+                meshCount++;
+            });
+
+            scene.add(currentModel);
+
+            infoName.textContent = fileName;
+            infoMeshes.textContent = meshCount;
+            treeCount.textContent = `${meshCount} Bodies`;
+            fileInfo.classList.remove('hidden');
+            controlsPanel.classList.remove('hidden');
+            controlsPanel.classList.add('flex');
+
+            fitModelToView();
+        }
+
+        function storeOriginalMaterials(mesh) {
+            if (Array.isArray(mesh.material)) {
+                originalMaterialsMap.set(mesh, mesh.material.map(m => ({
+                    emissive: m.emissive ? m.emissive.clone() : new THREE.Color(0x000000),
+                    emissiveIntensity: m.emissiveIntensity || 0
+                })));
+            } else {
+                originalMaterialsMap.set(mesh, [{
+                    emissive: mesh.material.emissive ? mesh.material.emissive.clone() : new THREE.Color(0x000000),
+                    emissiveIntensity: mesh.material.emissiveIntensity || 0
+                }]);
+            }
+        }
+
+        // Highlight selected body in 3D viewport
+        function highlightMesh(mesh) {
+            // 1. Reset any previously selected mesh and UI state back to default
+            clearSelection();
+
+            if (!mesh) return;
+            selectedMesh = mesh;
+
+            // 2. Apply sky-blue emissive highlight across all surface materials
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            materials.forEach(mat => {
+                if (mat) {
+                    mat.emissive.setHex(0x38bdf8);
+                    mat.emissiveIntensity = 0.6;
+                    mat.needsUpdate = true;
+                }
+            });
+        }
+
+        // Clear 3D highlight and UI selection
+        function clearSelection() {
+            if (selectedMesh) {
+                const originalState = originalMaterialsMap.get(selectedMesh);
+
+                if (originalState) {
+                    const materials = Array.isArray(selectedMesh.material)
+                        ? selectedMesh.material
+                        : [selectedMesh.material];
+
+                    materials.forEach((mat, idx) => {
+                        if (mat && originalState[idx]) {
+                            mat.emissive.copy(originalState[idx].emissive);
+                            mat.emissiveIntensity = originalState[idx].emissiveIntensity;
+                            mat.needsUpdate = true;
+                        }
+                    });
+                }
+                selectedMesh = null;
+            }
+
+            if (selectedHeaderElem) {
+                selectedHeaderElem.classList.remove('selected');
+                selectedHeaderElem = null;
+            }
+        }
+
+        function createTreeNode(label, type, hasChildren = false, colorHex = null, threeObject = null) {
+            const container = document.createElement('div');
+            container.className = 'tree-node select-none';
+
+            const header = document.createElement('div');
+            header.className = 'tree-header flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-slate-800/80 cursor-pointer text-slate-300 transition-colors group';
+
+            const toggle = document.createElement('span');
+            toggle.className = 'w-3 h-3 flex items-center justify-center text-[9px] text-slate-500 group-hover:text-slate-300';
+            if (hasChildren) {
+                toggle.textContent = '▼';
+            }
+            header.appendChild(toggle);
+
+            const icon = document.createElement('span');
+            icon.className = 'text-xs shrink-0';
+            if (type === 'root') {
+                icon.textContent = '📦';
+            } else if (type === 'body') {
+                icon.textContent = '🔷';
+            } else {
+                icon.textContent = '📐';
+            }
+            header.appendChild(icon);
+
+            if (colorHex) {
+                const colorDot = document.createElement('span');
+                colorDot.className = 'w-2.5 h-2.5 rounded-full border border-slate-600 shrink-0';
+                colorDot.style.backgroundColor = colorHex;
+                header.appendChild(colorDot);
+            }
+
+            const title = document.createElement('span');
+            title.className = 'truncate text-[11px] font-medium flex-1';
+            title.textContent = label;
+            header.appendChild(title);
+
+            if (threeObject) {
+                const visBtn = document.createElement('button');
+                visBtn.className = 'opacity-0 group-hover:opacity-100 text-slate-400 hover:text-sky-400 px-1 text-[10px] transition-opacity';
+                visBtn.textContent = '👁';
+                visBtn.title = 'Toggle Visibility';
+                visBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    threeObject.visible = !threeObject.visible;
+                    visBtn.style.opacity = threeObject.visible ? '1' : '0.4';
+                });
+                header.appendChild(visBtn);
+            }
+
+            container.appendChild(header);
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'tree-children pl-3 border-l border-slate-800 ml-2 space-y-0.5 mt-0.5';
+            container.appendChild(childrenContainer);
+
+            header.addEventListener('click', (e) => {
+                e.stopPropagation();
+
+                if (threeObject) {
+                    highlightMesh(threeObject);
+                    header.classList.add('selected');
+                    selectedHeaderElem = header;
+                }
+
+                if (hasChildren && e.target === toggle) {
+                    const isHidden = childrenContainer.classList.toggle('hidden');
+                    toggle.textContent = isHidden ? '▶' : '▼';
+                }
+            });
+
+            return container;
+        }
+
+        function fitModelToView() {
+            if (!currentModel) return;
+
+            const box = new THREE.Box3().setFromObject(currentModel);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+
+            currentModel.position.x = -center.x;
+            currentModel.position.y = -center.y;
+            currentModel.position.z = -center.z;
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.8;
+
+            cameraZ = Math.max(cameraZ, 10);
+
+            camera.position.set(cameraZ * 0.8, cameraZ * 0.8, cameraZ);
+            camera.lookAt(0, 0, 0);
+
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        function toggleWireframe() {
+            wireframeEnabled = !wireframeEnabled;
+            if (currentModel) {
+                currentModel.traverse((child) => {
+                    if (child.isMesh) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach((mat) => mat.wireframe = wireframeEnabled);
+                        } else {
+                            child.material.wireframe = wireframeEnabled;
+                        }
+                    }
+                });
+            }
+        }
+
+        function showLoading(show, text = "") {
+            if (show) {
+                loadingText.textContent = text;
+                loadingOverlay.classList.remove('hidden');
+            } else {
+                loadingOverlay.classList.hidden = true;
+                loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
