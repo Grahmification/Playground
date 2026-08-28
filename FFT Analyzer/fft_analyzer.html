@@ -10,13 +10,11 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <!-- DSP.js for FFT calculation -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dsp.js/1.0.0/dsp.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen p-6">
     <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-md p-8">
         <h1 class="text-2xl font-bold text-gray-800 mb-4">CSV FFT Analyzer</h1>
-        <p class="text-gray-600 mb-6">Upload a CSV file containing time-series data. The first column will be treated as values, and an FFT will be automatically calculated and plotted.</p>
+        <p class="text-gray-600 mb-6">Upload your CSV file (Time_s, Amplitude). The tool will dynamically parse the sample rate, compute the correct FFT spectrum, and plot the results.</p>
 
         <!-- File Upload -->
         <div class="mb-6">
@@ -27,7 +25,7 @@
         <!-- Charts Container -->
         <div class="space-y-8">
             <div>
-                <h3 class="text-lg font-semibold text-gray-700 mb-2">Time Domain (Raw Data)</h3>
+                <h3 class="text-lg font-semibold text-gray-700 mb-2">Time Domain (Raw Signal)</h3>
                 <div class="h-64 relative">
                     <canvas id="timeChart"></canvas>
                 </div>
@@ -46,6 +44,67 @@
         let timeChart = null;
         let fftChart = null;
 
+        // Corrected Iterative Cooley-Tukey Radix-2 FFT Implementation
+        function computeFFT(real) {
+            const n = real.length;
+            if ((n & (n - 1)) !== 0) {
+                throw new Error("FFT length must be a power of 2");
+            }
+
+            // Bit-reversal permutation
+            const imag = new Array(n).fill(0);
+            let j = 0;
+            for (let i = 0; i < n - 1; i++) {
+                if (i < j) {
+                    let tempR = real[i]; real[i] = real[j]; real[j] = tempR;
+                    let tempI = imag[i]; imag[i] = imag[j]; imag[j] = tempI;
+                }
+                let k = n >> 1;
+                while (k <= j) {
+                    j -= k;
+                    k >>= 1;
+                }
+                j += k;
+            }
+
+            // Compute FFT stages
+            for (let len = 2; len <= n; len <<= 1) {
+                let halfLen = len >> 1;
+                let angle = -2 * Math.PI / len;
+                let wStepR = Math.cos(angle);
+                let wStepI = Math.sin(angle);
+
+                for (let i = 0; i < n; i += len) {
+                    let wR = 1.0;
+                    let wI = 0.0;
+                    for (let m = 0; m < halfLen; m++) {
+                        let uIdx = i + m;
+                        let vIdx = i + m + halfLen;
+
+                        let vR = real[vIdx] * wR - imag[vIdx] * wI;
+                        let vI = real[vIdx] * wI + imag[vIdx] * wR;
+
+                        real[vIdx] = real[uIdx] - vR;
+                        imag[vIdx] = imag[uIdx] - vI;
+                        real[uIdx] += vR;
+                        imag[uIdx] += vI;
+
+                        let nextWR = wR * wStepR - wI * wStepI;
+                        let nextWI = wR * wStepI + wI * wStepR;
+                        wR = nextWR;
+                        wI = nextWI;
+                    }
+                }
+            }
+
+            // Combine into complex objects
+            const results = new Array(n);
+            for (let i = 0; i < n; i++) {
+                results[i] = { re: real[i], im: imag[i] };
+            }
+            return results;
+        }
+
         document.getElementById('csvFile').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -55,33 +114,46 @@
                 dynamicTyping: true,
                 skipEmptyLines: true,
                 complete: function(results) {
-                    // Extract the first column of numeric data
-                    const rawData = results.data
-                        .map(row => parseFloat(row[0]))
-                        .filter(val => !isNaN(val));
+                    const rows = results.data;
+                    const dataRows = rows.filter(row => typeof row[0] === 'number' && typeof row[1] === 'number');
 
-                    if (rawData.length === 0) {
-                        alert('No valid numeric data found in the first column of the CSV.');
+                    if (dataRows.length < 4) {
+                        alert('Not enough valid numeric rows found in the CSV.');
                         return;
                     }
 
-                    processAndPlot(rawData);
+                    const times = dataRows.map(row => row[0]);
+                    const amplitudes = dataRows.map(row => row[1]);
+
+                    const dt = times[1] - times[0];
+                    const sampleRate = dt > 0 ? 1.0 / dt : 100;
+
+                    processAndPlot(times, amplitudes, sampleRate);
                 }
             });
         });
 
-        function processAndPlot(data) {
-            // Ensure data length is a power of 2 for standard FFT (pad with zeros if needed)
-            const n = Math.pow(2, Math.floor(Math.log2(data.length)));
-            const truncatedData = data.slice(0, n);
+        function processAndPlot(times, amplitudes, sampleRate) {
+            const power = Math.floor(Math.log2(amplitudes.length));
+            const n = Math.pow(2, power);
+            
+            const truncatedAmps = amplitudes.slice(0, n);
+            const truncatedTimes = times.slice(0, n);
 
-            // Perform FFT using dsp.js (FFT size must be power of 2)
-            const fft = new FFT(n, 44100); // Assuming 44.1kHz sample rate as a placeholder
-            fft.forward(truncatedData);
-            const spectrum = fft.spectrum;
+            // Clone array to pass to FFT function
+            const fftResult = computeFFT([...truncatedAmps]);
 
-            // Prepare labels for frequency domain (up to Nyquist frequency)
-            const frequencies = Array.from({ length: spectrum.length }, (_, i) => (i * (44100 / 2)) / spectrum.length);
+            // Calculate magnitude spectrum for positive frequencies up to Nyquist
+            const halfN = n / 2;
+            const magnitudes = [];
+            const frequencies = [];
+
+            for (let i = 0; i < halfN; i++) {
+                // Correct scaling factor for standard magnitude spectrum
+                const mag = Math.sqrt(fftResult[i].re ** 2 + fftResult[i].im ** 2) / halfN;
+                magnitudes.push(mag);
+                frequencies.push((i * sampleRate) / n);
+            }
 
             // Plot Time Domain
             const timeCtx = document.getElementById('timeChart').getContext('2d');
@@ -89,16 +161,23 @@
             timeChart = new Chart(timeCtx, {
                 type: 'line',
                 data: {
-                    labels: truncatedData.map((_, i) => i),
+                    labels: truncatedTimes.map(t => t.toFixed(2) + 's'),
                     datasets: [{
                         label: 'Amplitude',
-                        data: truncatedData,
+                        data: truncatedAmps,
                         borderColor: 'rgb(59, 130, 246)',
                         borderWidth: 1.5,
                         pointRadius: 0
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: 'Time (s)' } },
+                        y: { title: { display: true, text: 'Amplitude' } }
+                    }
+                }
             });
 
             // Plot Frequency Domain
@@ -109,14 +188,21 @@
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [{
-                        label: 'Magnitude',
-                        data: spectrum,
+                        label: 'Magnitude Spectrum',
+                        data: magnitudes,
                         borderColor: 'rgb(239, 68, 68)',
                         borderWidth: 1.5,
-                        pointRadius: 0
+                        pointRadius: 2
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: 'Frequency (Hz)' } },
+                        y: { title: { display: true, text: 'Magnitude' } }
+                    }
+                }
             });
         }
     </script>
