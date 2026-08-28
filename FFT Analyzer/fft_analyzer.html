@@ -45,10 +45,18 @@
 
             <hr class="my-4 border-gray-200">
 
-            <!-- Peak Detection Sensitivity Control -->
-            <div class="mb-4">
+            <!-- Peak Detection Controls -->
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Peak Detection</h3>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="enablePeaks" class="sr-only peer" checked>
+                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-red-600"></div>
+                </label>
+            </div>
+
+            <div id="peakControlsContainer" class="mb-4 transition-opacity duration-200">
                 <div class="flex justify-between text-xs text-gray-600 mb-1">
-                    <span class="font-semibold uppercase tracking-wider text-[11px] text-gray-500">Peak Sensitivity:</span>
+                    <span class="text-gray-500">Sensitivity:</span>
                     <span id="sensVal" class="font-bold">5%</span>
                 </div>
                 <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-red-600">
@@ -58,22 +66,30 @@
             <hr class="my-4 border-gray-200">
 
             <!-- Frequency Gating Controls -->
-            <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-3">Frequency Gate (Bandpass)</h3>
-            
-            <div class="mb-3">
-                <div class="flex justify-between text-xs text-gray-600 mb-1">
-                    <span>Min Frequency:</span>
-                    <span id="minFreqVal" class="font-bold">0.0 Hz</span>
-                </div>
-                <input type="range" id="minFreqRange" min="0" max="50" step="0.5" value="0" class="w-full accent-blue-600">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Frequency Gate (Bandpass)</h3>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="enableGate" class="sr-only peer">
+                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
             </div>
-
-            <div class="mb-4">
-                <div class="flex justify-between text-xs text-gray-600 mb-1">
-                    <span>Max Frequency:</span>
-                    <span id="maxFreqVal" class="font-bold">50.0 Hz</span>
+            
+            <div id="gateControlsContainer" class="opacity-40 pointer-events-none transition-opacity duration-200">
+                <div class="mb-3">
+                    <div class="flex justify-between text-xs text-gray-600 mb-1">
+                        <span>Min Frequency:</span>
+                        <span id="minFreqVal" class="font-bold">0.0 Hz</span>
+                    </div>
+                    <input type="range" id="minFreqRange" min="0" max="50" step="0.5" value="0" class="w-full accent-blue-600">
                 </div>
-                <input type="range" id="maxFreqRange" min="0" max="50" step="0.5" value="50" class="w-full accent-blue-600">
+
+                <div class="mb-4">
+                    <div class="flex justify-between text-xs text-gray-600 mb-1">
+                        <span>Max Frequency:</span>
+                        <span id="maxFreqVal" class="font-bold">50.0 Hz</span>
+                    </div>
+                    <input type="range" id="maxFreqRange" min="0" max="50" step="0.5" value="50" class="w-full accent-blue-600">
+                </div>
             </div>
         </div>
 
@@ -104,7 +120,7 @@
 
             <!-- Frequency Domain Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Frequency Domain (FFT Magnitude & Peak Detection)</h3>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Frequency Domain (FFT Magnitude & Gating Bounds)</h3>
                 <div class="relative w-full h-[360px]">
                     <canvas id="fftChart"></canvas>
                 </div>
@@ -324,11 +340,36 @@
             });
         });
 
+        // UI Event Listeners
         document.getElementById('windowType').addEventListener('change', () => { if (globalData) triggerProcessing(); });
+        
+        const enablePeaksCheckbox = document.getElementById('enablePeaks');
+        const peakControlsContainer = document.getElementById('peakControlsContainer');
+        enablePeaksCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                peakControlsContainer.classList.remove('opacity-40', 'pointer-events-none');
+            } else {
+                peakControlsContainer.classList.add('opacity-40', 'pointer-events-none');
+            }
+            if (globalData) triggerProcessing();
+        });
+
         document.getElementById('sensRange').addEventListener('input', (e) => {
             document.getElementById('sensVal').textContent = e.target.value + '%';
             if (globalData) triggerProcessing();
         });
+        
+        const enableGateCheckbox = document.getElementById('enableGate');
+        const gateContainer = document.getElementById('gateControlsContainer');
+        enableGateCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                gateContainer.classList.remove('opacity-40', 'pointer-events-none');
+            } else {
+                gateContainer.classList.add('opacity-40', 'pointer-events-none');
+            }
+            if (globalData) triggerProcessing();
+        });
+
         document.getElementById('minFreqRange').addEventListener('input', (e) => {
             document.getElementById('minFreqVal').textContent = parseFloat(e.target.value).toFixed(1) + ' Hz';
             if (globalData) triggerProcessing();
@@ -342,14 +383,16 @@
             const dt = globalData.times[1] - globalData.times[0];
             const sampleRate = dt > 0 ? 1.0 / dt : 100;
             const windowSelection = document.getElementById('windowType').value;
+            const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
-            const minFreq = parseFloat(document.getElementById('minFreqRange').value);
-            const maxFreq = parseFloat(document.getElementById('maxFreqRange').value);
+            const isGated = document.getElementById('enableGate').checked;
+            const minFreq = isGated ? parseFloat(document.getElementById('minFreqRange').value) : 0;
+            const maxFreq = isGated ? parseFloat(document.getElementById('maxFreqRange').value) : (sampleRate / 2);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, sensitivity, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, isGated, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, sensitivity, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, isGated, minFreq, maxFreq) {
             const power = Math.floor(Math.log2(amplitudes.length));
             const n = Math.pow(2, power);
             
@@ -384,7 +427,7 @@
 
                 phases.push(Math.atan2(im, re));
 
-                if (freq >= minFreq && freq <= maxFreq) {
+                if (!isGated || (freq >= minFreq && freq <= maxFreq)) {
                     gatedFFT[i] = { re: re, im: im };
                     if (i > 0 && i < n - i) {
                         gatedFFT[n - i] = { re: re, im: -im };
@@ -397,14 +440,16 @@
             const peakData = new Array(magnitudes.length).fill(null);
             const detectedPeakObjects = [];
             
-            for (let i = 1; i < magnitudes.length - 1; i++) {
-                if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
-                    peakData[i] = magnitudes[i];
-                    detectedPeakObjects.push({
-                        freq: frequencies[i],
-                        mag: magnitudes[i],
-                        phase: phases[i]
-                    });
+            if (isPeaksEnabled) {
+                for (let i = 1; i < magnitudes.length - 1; i++) {
+                    if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
+                        peakData[i] = magnitudes[i];
+                        detectedPeakObjects.push({
+                            freq: frequencies[i],
+                            mag: magnitudes[i],
+                            phase: phases[i]
+                        });
+                    }
                 }
             }
 
@@ -418,6 +463,7 @@
             }
 
             const summedPeakSignal = smoothTimes.map(t => {
+                if (!isPeaksEnabled) return null;
                 let sum = 0;
                 for (let peak of detectedPeakObjects) {
                     sum += peak.mag * Math.cos(2 * Math.PI * peak.freq * t + peak.phase);
@@ -425,25 +471,35 @@
                 return sum;
             });
 
-            // Helper to update or initialize a chart while preserving dataset hidden states
+            const gatingBoundsData = frequencies.map(f => {
+                if (!isGated) return null;
+                return (f >= minFreq && f <= maxFreq) ? maxMag * 1.05 : null;
+            });
+
             function updateOrCreateChart(chartInstance, canvasId, config) {
                 if (chartInstance) {
-                    // Save visibility states of existing datasets
                     const visibilityStates = chartInstance.data.datasets.map((ds, idx) => chartInstance.isDatasetVisible(idx));
                     
                     chartInstance.data.labels = config.data.labels;
                     chartInstance.data.datasets.forEach((ds, idx) => {
-                        ds.data = config.data.datasets[idx].data;
-                        if (config.data.datasets[idx].label) {
-                            ds.label = config.data.datasets[idx].label;
+                        if (config.data.datasets[idx]) {
+                            ds.data = config.data.datasets[idx].data;
+                            if (config.data.datasets[idx].label) {
+                                ds.label = config.data.datasets[idx].label;
+                            }
                         }
                     });
                     
-                    chartInstance.update('none'); // Update smoothly without full reset animation
+                    if (chartInstance.data.datasets.length !== config.data.datasets.length) {
+                        chartInstance.destroy();
+                        const ctx = document.getElementById(canvasId).getContext('2d');
+                        return new Chart(ctx, config);
+                    }
+
+                    chartInstance.update('none');
                     
-                    // Re-apply visibility states incase datasets were hidden via legend clicks
                     visibilityStates.forEach((isVisible, idx) => {
-                        if (isVisible !== chartInstance.isDatasetVisible(idx)) {
+                        if (idx < chartInstance.data.datasets.length && isVisible !== chartInstance.isDatasetVisible(idx)) {
                             chartInstance.setDatasetVisibility(idx, isVisible);
                         }
                     });
@@ -455,40 +511,45 @@
                 }
             }
 
-            // 1. Time Chart
+            // 1. Time Chart Datasets
+            const timeDatasets = [
+                { 
+                    label: 'Original Data', 
+                    data: smoothTimes.map(t => {
+                        let idx = Math.round((t - t0) / dt);
+                        return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
+                    }), 
+                    borderColor: 'rgba(156, 163, 175, 0.4)', 
+                    borderWidth: 1.5, 
+                    borderDash: [4, 4], 
+                    pointRadius: 0,
+                    spanGaps: true
+                },
+                { 
+                    label: isGated ? `Gated Reconstitution (${minFreq}-${maxFreq} Hz)` : 'Full Reconstitution', 
+                    data: smoothGatedSignal, 
+                    borderColor: 'rgb(37, 99, 235)', 
+                    borderWidth: 2, 
+                    pointRadius: 0 
+                }
+            ];
+
+            if (isPeaksEnabled) {
+                timeDatasets.push({
+                    label: 'Summed Peak Components',
+                    data: summedPeakSignal,
+                    borderColor: 'rgb(16, 185, 129)',
+                    borderWidth: 2,
+                    borderDash: [2, 2],
+                    pointRadius: 0
+                });
+            }
+
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
                     labels: smoothTimes.map(t => t.toFixed(2)),
-                    datasets: [
-                        { 
-                            label: 'Original Data', 
-                            data: smoothTimes.map(t => {
-                                let idx = Math.round((t - t0) / dt);
-                                return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
-                            }), 
-                            borderColor: 'rgba(156, 163, 175, 0.4)', 
-                            borderWidth: 1.5, 
-                            borderDash: [4, 4], 
-                            pointRadius: 0,
-                            spanGaps: true
-                        },
-                        { 
-                            label: `Gated Reconstitution (${minFreq}-${maxFreq} Hz)`, 
-                            data: smoothGatedSignal, 
-                            borderColor: 'rgb(37, 99, 235)', 
-                            borderWidth: 2, 
-                            pointRadius: 0 
-                        },
-                        {
-                            label: 'Summed Peak Components',
-                            data: summedPeakSignal,
-                            borderColor: 'rgb(16, 185, 129)',
-                            borderWidth: 2,
-                            borderDash: [2, 2],
-                            pointRadius: 0
-                        }
-                    ]
+                    datasets: timeDatasets
                 },
                 options: { 
                     responsive: true, 
@@ -503,15 +564,34 @@
                 }
             });
 
-            // 2. FFT Magnitude Chart
+            // 2. FFT Magnitude Chart Datasets
+            const fftDatasets = [
+                { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 }
+            ];
+
+            if (isPeaksEnabled) {
+                fftDatasets.push({ label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, pointHoverRadius: 7, showLine: false, order: 1 });
+            }
+
+            if (isGated) {
+                fftDatasets.push({
+                    label: 'Active Frequency Gate',
+                    data: gatingBoundsData,
+                    borderColor: 'rgba(37, 99, 235, 0.6)',
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    borderWidth: 1,
+                    borderDash: [3, 3],
+                    fill: 'origin',
+                    pointRadius: 0,
+                    order: 3
+                });
+            }
+
             fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: [
-                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0 },
-                        { label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, pointHoverRadius: 7, showLine: false }
-                    ]
+                    datasets: fftDatasets
                 },
                 options: { 
                     responsive: true, 
@@ -524,9 +604,10 @@
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    if (context.datasetIndex === 1 && context.raw !== null) {
+                                    if (context.dataset.label === 'Detected Peaks' && context.raw !== null) {
                                         return ` Peak: ${context.raw.toFixed(2)} at ${frequencies[context.dataIndex].toFixed(1)} Hz`;
                                     }
+                                    if (context.dataset.label === 'Active Frequency Gate') return null;
                                     return ` Magnitude: ${context.raw.toFixed(2)}`;
                                 }
                             }
