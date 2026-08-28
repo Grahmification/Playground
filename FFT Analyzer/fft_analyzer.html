@@ -654,7 +654,7 @@
                         if (rawFrequencies[i] === 0) {
                             sum += rawMagnitudes[i];
                         } else {
-                            sum += rawMagnitudes[i] * Math.cos(2 * Math.PI * rawFrequencies[i] + rawUnwrappedPhases[i]);
+                            sum += rawMagnitudes[i] * Math.cos(2 * Math.PI * rawFrequencies[i] * t + rawUnwrappedPhases[i]);
                         }
                     }
                 }
