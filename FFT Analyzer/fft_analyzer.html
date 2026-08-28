@@ -105,35 +105,6 @@
                     <span id="magThreshCount" class="font-bold">0</span>
                 </div>
             </div>
-
-            <hr class="my-4 border-gray-200">
-
-            <!-- Frequency Gating Controls -->
-            <div class="flex items-center justify-between mb-3">
-                <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Frequency Gate (Bandpass)</h3>
-                <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="enableGate" class="sr-only peer">
-                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
-                </label>
-            </div>
-            
-            <div id="gateControlsContainer" class="opacity-40 pointer-events-none transition-opacity duration-200">
-                <div class="mb-3">
-                    <div class="flex justify-between text-xs text-gray-600 mb-1">
-                        <span>Min Frequency:</span>
-                        <span id="minFreqVal" class="font-bold">0.0 Hz</span>
-                    </div>
-                    <input type="range" id="minFreqRange" min="0" max="50" step="0.5" value="0" class="w-full accent-blue-600">
-                </div>
-
-                <div class="mb-4">
-                    <div class="flex justify-between text-xs text-gray-600 mb-1">
-                        <span>Max Frequency:</span>
-                        <span id="maxFreqVal" class="font-bold">50.0 Hz</span>
-                    </div>
-                    <input type="range" id="maxFreqRange" min="0" max="50" step="0.5" value="50" class="w-full accent-blue-600">
-                </div>
-            </div>
         </div>
 
         <div class="text-[10px] text-gray-400 mt-4 pt-2 border-t border-gray-100">
@@ -369,16 +340,6 @@
 
                     const dt = globalData.times[1] - globalData.times[0];
                     const sampleRate = dt > 0 ? 1.0 / dt : 100;
-                    const nyquist = sampleRate / 2;
-
-                    const minRange = document.getElementById('minFreqRange');
-                    const maxRange = document.getElementById('maxFreqRange');
-                    minRange.max = nyquist;
-                    maxRange.max = nyquist;
-                    minRange.value = 0;
-                    maxRange.value = nyquist;
-                    document.getElementById('minFreqVal').textContent = `0.0 Hz`;
-                    document.getElementById('maxFreqVal').textContent = `${nyquist.toFixed(1)} Hz`;
 
                     const tempAmps = new Array(Math.pow(2, Math.ceil(Math.log2(dataRows.length)))).fill(0);
                     for(let i=0; i<dataRows.length; i++) tempAmps[i] = dataRows[i][1];
@@ -443,26 +404,6 @@
             if (globalData) triggerProcessing();
         });
 
-        const enableGateCheckbox = document.getElementById('enableGate');
-        const gateContainer = document.getElementById('gateControlsContainer');
-        enableGateCheckbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                gateContainer.classList.remove('opacity-40', 'pointer-events-none');
-            } else {
-                gateContainer.classList.add('opacity-40', 'pointer-events-none');
-            }
-            if (globalData) triggerProcessing();
-        });
-
-        document.getElementById('minFreqRange').addEventListener('input', (e) => {
-            document.getElementById('minFreqVal').textContent = parseFloat(e.target.value).toFixed(1) + ' Hz';
-            if (globalData) triggerProcessing();
-        });
-        document.getElementById('maxFreqRange').addEventListener('input', (e) => {
-            document.getElementById('maxFreqVal').textContent = parseFloat(e.target.value).toFixed(1) + ' Hz';
-            if (globalData) triggerProcessing();
-        });
-
         function triggerProcessing() {
             const dt = globalData.times[1] - globalData.times[0];
             const sampleRate = dt > 0 ? 1.0 / dt : 100;
@@ -476,14 +417,10 @@
             const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
             const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
 
-            const isGated = document.getElementById('enableGate').checked;
-            const minFreq = isGated ? parseFloat(document.getElementById('minFreqRange').value) : 0;
-            const maxFreq = isGated ? parseFloat(document.getElementById('maxFreqRange').value) : (sampleRate / 2);
-
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
             const originalLength = amplitudes.length;
             const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             
@@ -526,14 +463,6 @@
             const rawUnwrappedPhases = [];
             const rawPhasesList = [];
 
-            let dcMagnitude = 0;
-            let bin1Magnitude = 0;
-            let bin1Frequency = 0;
-            let bin1Phase = 0;
-            let bin1Psd = 0;
-            let bin1UnwrappedPhase = 0;
-            let bin1WrappedPhase = 0;
-
             const peakIndices = new Set();
 
             for (let i = 0; i < halfN; i++) {
@@ -549,15 +478,6 @@
                 if (i > 0) mag *= 2;
                 if (gain > 0) mag /= gain;
                 rawMagnitudes.push(mag);
-
-                if (i === 0) {
-                    dcMagnitude = mag;
-                }
-                if (i === 1) {
-                    bin1Magnitude = mag;
-                    bin1Frequency = freq;
-                    bin1Phase = unwrappedPhases[1];
-                }
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
                 if (i > 0 && i < halfN - 1) psd *= 2;
@@ -722,12 +642,6 @@
                 return sum;
             });
 
-            const gatingBoundsPoints = activeIndices.map(i => {
-                const f = rawFrequencies[i];
-                if (!isGated || unitType === 'period') return null;
-                return (f >= minFreq && f <= maxFreq) ? { x: f, y: maxMag * 1.05 } : null;
-            }).filter(Boolean);
-
             // Polar Phase Data (Unit Circle r = 1)
             const unitCirclePoints = [];
             for (let a = 0; a <= Math.PI * 2; a += 0.05) {
@@ -830,8 +744,7 @@
                         ...(isMagThreshEnabled ? [
                             { label: 'Threshold Cutoff', data: threshLinePoints, borderColor: 'rgba(147, 51, 234, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
                             { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }
-                        ] : []),
-                        ...(isGated && unitType !== 'period' ? [{ label: 'Active Frequency Gate', data: gatingBoundsPoints, borderColor: 'rgba(37, 99, 235, 0.6)', backgroundColor: 'rgba(37, 99, 235, 0.1)', borderWidth: 1, borderDash: [3, 3], fill: 'origin', pointRadius: 0, order: 4 }] : [])
+                        ] : [])
                     ]
                 },
                 options: { 
