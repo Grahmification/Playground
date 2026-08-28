@@ -70,6 +70,29 @@
 
             <hr class="my-4 border-gray-200">
 
+            <!-- Magnitude Threshold Reconstruction Controls -->
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Mag Threshold Reconstruction</h3>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="enableMagThresh" class="sr-only peer">
+                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-600"></div>
+                </label>
+            </div>
+
+            <div id="magThreshContainer" class="opacity-40 pointer-events-none mb-3 transition-opacity duration-200">
+                <div class="flex justify-between text-xs text-gray-600 mb-1">
+                    <span class="text-gray-500">Threshold:</span>
+                    <span id="magThreshVal" class="font-bold">0.00</span>
+                </div>
+                <input type="range" id="magThreshRange" min="0" max="100" step="0.1" value="0" class="w-full accent-purple-600 mb-2">
+                <div class="text-xs text-purple-700 font-medium bg-purple-50 px-2.5 py-1.5 rounded border border-purple-100 flex justify-between items-center">
+                    <span>Included Components:</span>
+                    <span id="magThreshCount" class="font-bold">0</span>
+                </div>
+            </div>
+
+            <hr class="my-4 border-gray-200">
+
             <!-- Frequency Gating Controls -->
             <div class="flex items-center justify-between mb-3">
                 <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Frequency Gate (Bandpass)</h3>
@@ -123,7 +146,7 @@
         <div id="viewCharts" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Time Domain (Original & Summed Peaks)</h3>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Time Domain (Original & Reconstructions)</h3>
                 <div class="relative w-full h-[360px]">
                     <canvas id="timeChart"></canvas>
                 </div>
@@ -131,7 +154,7 @@
 
             <!-- Frequency Domain Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Frequency Domain (FFT Magnitude & Gating Bounds)</h3>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Frequency Domain (FFT Magnitude & Threshold)</h3>
                 <div class="relative w-full h-[360px]">
                     <canvas id="fftChart"></canvas>
                 </div>
@@ -332,6 +355,24 @@
                     document.getElementById('minFreqVal').textContent = `0.0 Hz`;
                     document.getElementById('maxFreqVal').textContent = `${nyquist.toFixed(1)} Hz`;
 
+                    const tempAmps = new Array(Math.pow(2, Math.ceil(Math.log2(dataRows.length)))).fill(0);
+                    for(let i=0; i<dataRows.length; i++) tempAmps[i] = dataRows[i][1];
+                    const tempWindowed = applyWindow(tempAmps, document.getElementById('windowType').value);
+                    const tempSpec = fourierTransform(tempWindowed.windowedData);
+                    let tempMaxMag = 0;
+                    for(let i=0; i<tempAmps.length/2; i++) {
+                        let m = Math.sqrt(tempSpec[i*2]**2 + tempSpec[i*2+1]**2) / tempAmps.length;
+                        if(i>0) m *= 2;
+                        if(tempWindowed.gain > 0) m /= tempWindowed.gain;
+                        if(m > tempMaxMag) tempMaxMag = m;
+                    }
+
+                    const magThreshRange = document.getElementById('magThreshRange');
+                    magThreshRange.max = tempMaxMag > 0 ? tempMaxMag : 1.0;
+                    magThreshRange.step = (tempMaxMag / 200).toFixed(4);
+                    magThreshRange.value = (tempMaxMag * 0.1).toFixed(4);
+                    document.getElementById('magThreshVal').textContent = parseFloat(magThreshRange.value).toFixed(2);
+
                     document.getElementById('statusText').textContent = `Loaded: ${file.name} (${dataRows.length} points, fs = ${sampleRate}Hz)`;
                     triggerProcessing();
                 }
@@ -359,6 +400,22 @@
 
         document.getElementById('includeDcPeaks').addEventListener('change', () => { if (globalData) triggerProcessing(); });
         
+        const enableMagThreshCheckbox = document.getElementById('enableMagThresh');
+        const magThreshContainer = document.getElementById('magThreshContainer');
+        enableMagThreshCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                magThreshContainer.classList.remove('opacity-40', 'pointer-events-none');
+            } else {
+                magThreshContainer.classList.add('opacity-40', 'pointer-events-none');
+            }
+            if (globalData) triggerProcessing();
+        });
+
+        document.getElementById('magThreshRange').addEventListener('input', (e) => {
+            document.getElementById('magThreshVal').textContent = parseFloat(e.target.value).toFixed(2);
+            if (globalData) triggerProcessing();
+        });
+
         const enableGateCheckbox = document.getElementById('enableGate');
         const gateContainer = document.getElementById('gateControlsContainer');
         enableGateCheckbox.addEventListener('change', (e) => {
@@ -386,14 +443,18 @@
             const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
             const includeDcInPeaks = document.getElementById('includeDcPeaks').checked;
+            
+            const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
+            const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
+
             const isGated = document.getElementById('enableGate').checked;
             const minFreq = isGated ? parseFloat(document.getElementById('minFreqRange').value) : 0;
             const maxFreq = isGated ? parseFloat(document.getElementById('maxFreqRange').value) : (sampleRate / 2);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, isGated, minFreq, maxFreq);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, includeDcInPeaks, isGated, minFreq, maxFreq) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, isPeaksEnabled, sensitivity, includeDcInPeaks, isMagThreshEnabled, magThreshold, isGated, minFreq, maxFreq) {
             const originalLength = amplitudes.length;
             const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             
@@ -470,7 +531,6 @@
             const detectedPeakObjects = [];
             
             if (isPeaksEnabled) {
-                // Optionally add DC component (Bin 0) as a peak/offset baseline
                 if (includeDcInPeaks) {
                     detectedPeakObjects.push({
                         freq: 0,
@@ -496,13 +556,44 @@
                 let sum = 0;
                 for (let peak of detectedPeakObjects) {
                     if (peak.freq === 0) {
-                        sum += peak.mag; // DC component contribution
+                        sum += peak.mag;
                     } else {
                         sum += peak.mag * Math.cos(2 * Math.PI * peak.freq * t + peak.phase);
                     }
                 }
                 return sum;
             });
+
+            // Magnitude Threshold Reconstruction & Counting
+            let includedCount = 0;
+            const magThreshSignal = times.map(t => {
+                if (!isMagThreshEnabled) return null;
+                let sum = 0;
+                for (let i = 0; i < magnitudes.length; i++) {
+                    if (magnitudes[i] >= magThreshold) {
+                        if (frequencies[i] === 0) {
+                            sum += magnitudes[i];
+                        } else {
+                            sum += magnitudes[i] * Math.cos(2 * Math.PI * frequencies[i] * t + phases[i]);
+                        }
+                    }
+                }
+                return sum;
+            });
+
+            if (isMagThreshEnabled) {
+                for (let i = 0; i < magnitudes.length; i++) {
+                    if (magnitudes[i] >= magThreshold) includedCount++;
+                }
+            }
+            document.getElementById('magThreshCount').textContent = isMagThreshEnabled ? includedCount : 0;
+
+            const threshLineData = frequencies.map(f => isMagThreshEnabled ? magThreshold : null);
+
+            // Highlighted point arrays across all frequency domain plots
+            const fftThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? magnitudes[i] : null);
+            const psdThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? psdValues[i] : null);
+            const phaseThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? phases[i] : null);
 
             const gatingBoundsData = frequencies.map(f => {
                 if (!isGated) return null;
@@ -568,6 +659,16 @@
                 });
             }
 
+            if (isMagThreshEnabled) {
+                timeDatasets.push({
+                    label: 'Mag Threshold Reconstruction',
+                    data: magThreshSignal,
+                    borderColor: 'rgb(147, 51, 234)',
+                    borderWidth: 2,
+                    pointRadius: 0
+                });
+            }
+
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
@@ -596,6 +697,28 @@
                 fftDatasets.push({ label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, pointHoverRadius: 7, showLine: false, order: 1 });
             }
 
+            if (isMagThreshEnabled) {
+                fftDatasets.push({
+                    label: 'Threshold Cutoff',
+                    data: threshLineData,
+                    borderColor: 'rgba(147, 51, 234, 0.8)',
+                    borderWidth: 1.5,
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    order: 3
+                });
+                fftDatasets.push({
+                    label: 'Included Components',
+                    data: fftThreshPoints,
+                    borderColor: 'transparent',
+                    backgroundColor: 'rgb(147, 51, 234)',
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    showLine: false,
+                    order: 0
+                });
+            }
+
             if (isGated) {
                 fftDatasets.push({
                     label: 'Active Frequency Gate',
@@ -606,7 +729,7 @@
                     borderDash: [3, 3],
                     fill: 'origin',
                     pointRadius: 0,
-                    order: 3
+                    order: 4
                 });
             }
 
@@ -630,7 +753,10 @@
                                     if (context.dataset.label === 'Detected Peaks' && context.raw !== null) {
                                         return ` Peak: ${context.raw.toFixed(2)} at ${frequencies[context.dataIndex].toFixed(1)} Hz`;
                                     }
-                                    if (context.dataset.label === 'Active Frequency Gate') return null;
+                                    if (context.dataset.label === 'Included Components' && context.raw !== null) {
+                                        return ` Included Mag: ${context.raw.toFixed(2)} at ${frequencies[context.dataIndex].toFixed(1)} Hz`;
+                                    }
+                                    if (context.dataset.label === 'Active Frequency Gate' || context.dataset.label === 'Threshold Cutoff') return null;
                                     return ` Magnitude: ${context.raw.toFixed(2)}`;
                                 }
                             }
@@ -639,12 +765,28 @@
                 }
             });
 
-            // 3. PSD Chart
+            // 3. PSD Chart Datasets
+            const psdDatasets = [
+                { label: 'PSD (V²/Hz)', data: psdValues, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 1 }
+            ];
+            if (isMagThreshEnabled) {
+                psdDatasets.push({
+                    label: 'Included Components',
+                    data: psdThreshPoints,
+                    borderColor: 'transparent',
+                    backgroundColor: 'rgb(147, 51, 234)',
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    showLine: false,
+                    order: 0
+                });
+            }
+
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: [{ label: 'PSD (V²/Hz)', data: psdValues, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1 }]
+                    datasets: psdDatasets
                 },
                 options: { 
                     responsive: true, 
@@ -659,12 +801,28 @@
                 }
             });
 
-            // 4. Phase Chart
+            // 4. Phase Chart Datasets
+            const phaseDatasets = [
+                { label: 'Phase (rad)', data: phases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 }
+            ];
+            if (isMagThreshEnabled) {
+                phaseDatasets.push({
+                    label: 'Included Components',
+                    data: phaseThreshPoints,
+                    borderColor: 'transparent',
+                    backgroundColor: 'rgb(79, 70, 229)',
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    showLine: false,
+                    order: 0
+                });
+            }
+
             phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: [{ label: 'Phase (rad)', data: phases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1 }]
+                    datasets: phaseDatasets
                 },
                 options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'Frequency (Hz)' } }, y: { title: { display: true, text: 'Phase (rad)', min: -Math.PI, max: Math.PI } } } }
             });
