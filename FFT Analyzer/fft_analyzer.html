@@ -112,7 +112,7 @@
 
             <!-- Power Spectral Density (PSD) Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Power Spectral Density (PSD)</h3>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Power Spectral Density (PSD - Log Scale)</h3>
                 <div class="relative w-full h-[360px]">
                     <canvas id="psdChart"></canvas>
                 </div>
@@ -380,7 +380,8 @@
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * n);
                 if (i > 0 && i < halfN - 1) psd *= 2;
-                psdValues.push(psd);
+                // Avoid zero or negative values for log scale
+                psdValues.push(psd > 0 ? psd : 1e-12);
 
                 phases.push(Math.atan2(im, re));
 
@@ -513,7 +514,7 @@
                 }
             });
 
-            // 3. PSD Chart
+            // 3. PSD Chart (Log Scale Y-Axis)
             const psdCtx = document.getElementById('psdChart').getContext('2d');
             if (psdChart) psdChart.destroy();
             psdChart = new Chart(psdCtx, {
@@ -522,7 +523,17 @@
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [{ label: 'PSD (V²/Hz)', data: psdValues, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1 }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'Frequency (Hz)' } }, y: { title: { display: true, text: 'PSD (V²/Hz)' } } } }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    scales: { 
+                        x: { title: { display: true, text: 'Frequency (Hz)' } }, 
+                        y: { 
+                            type: 'logarithmic',
+                            title: { display: true, text: 'PSD (V²/Hz) [Log]' } 
+                        } 
+                    } 
+                }
             });
 
             // 4. Phase Chart
