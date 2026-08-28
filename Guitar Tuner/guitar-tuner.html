@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Guitar Tuner</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: #1e1e1e;
+            padding: 30px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            text-align: center;
+            width: 350px;
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #ffffff;
+        }
+        button {
+            background-color: #bb86fc;
+            color: #121212;
+            border: none;
+            padding: 10px 20px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #9965f4;
+        }
+        .display-area {
+            margin-top: 25px;
+            display: none;
+        }
+        .note-name {
+            font-size: 4rem;
+            font-weight: bold;
+            color: #03dac6;
+            margin: 0;
+        }
+        .frequency {
+            font-size: 1.1rem;
+            color: #a0a0a0;
+            margin: 5px 0 20px 0;
+        }
+        /* Tuner Meter Styling */
+        .meter {
+            position: relative;
+            width: 100%;
+            height: 40px;
+            background: #2c2c2c;
+            border-radius: 20px;
+            overflow: hidden;
+            margin-top: 15px;
+        }
+        .meter-center {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background-color: #03dac6;
+            transform: translateX(-50%);
+            z-index: 2;
+        }
+        .needle {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 6px;
+            background-color: #cf6679;
+            left: 50%;
+            transform: translateX(-50%);
+            transition: left 0.05s linear;
+            z-index: 3;
+            border-radius: 3px;
+        }
+        .cents {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Guitar Tuner</h1>
+    <button id="startBtn">Start Tuner</button>
+    
+    <div class="display-area" id="displayArea">
+        <div class="note-name" id="noteName">--</div>
+        <div class="frequency" id="frequencyDisplay">0.0 Hz</div>
+        
+        <div class="meter">
+            <div class="meter-center"></div>
+            <div class="needle" id="needle"></div>
+        </div>
+        <div class="cents" id="centsDisplay">0 cents</div>
+    </div>
+</div>
+
+<script>
+    // Standard Guitar Tuning Frequencies (E2 to E4)
+    const guitarNotes = [
+        { name: "E2", freq: 82.41 },
+        { name: "A2", freq: 110.00 },
+        { name: "D3", freq: 146.83 },
+        { name: "G3", freq: 196.00 },
+        { name: "B3", freq: 246.94 },
+        { name: "E4", freq: 329.63 }
+    ];
+
+    let audioContext, analyser, microphone, javascriptNode;
+    let isRunning = false;
+
+    const startBtn = document.getElementById('startBtn');
+    const displayArea = document.getElementById('displayArea');
+    const noteNameEl = document.getElementById('noteName');
+    const frequencyDisplayEl = document.getElementById('frequencyDisplay');
+    const needleEl = document.getElementById('needle');
+    const centsDisplayEl = document.getElementById('centsDisplay');
+
+    startBtn.addEventListener('click', toggleTuner);
+
+    async function toggleTuner() {
+        if (!isRunning) {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                // Use ScriptProcessor for real-time analysis loop
+                javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+                javascriptNode.onaudioprocess = processAudio;
+                
+                analyser.connect(javascriptNode);
+                javascriptNode.connect(audioContext.destination);
+
+                isRunning = true;
+                startBtn.textContent = "Stop Tuner";
+                displayArea.style.display = "block";
+            } catch (err) {
+                alert("Microphone access error: " + err.message);
+            }
+        } else {
+            if (audioContext) audioContext.close();
+            isRunning = false;
+            startBtn.textContent = "Start Tuner";
+            displayArea.style.display = "none";
+        }
+    }
+
+    function processAudio() {
+        const buffer = new Float32Array(analyser.fftSize);
+        analyser.getFloatTimeDomainData(buffer);
+        
+        const ac = autoCorrelate(buffer, audioContext.sampleRate);
+        
+        if (ac !== -1) {
+            updateUI(ac);
+        }
+    }
+
+    // Auto-correlation algorithm for pitch detection
+    function autoCorrelate(buffer, sampleRate) {
+        let SIZE = buffer.length;
+        let sumOfSquares = 0;
+        for (let i = 0; i < SIZE; i++) {
+            sumOfSquares += buffer[i] * buffer[i];
+        }
+        let rootMeanSquare = Math.sqrt(sumOfSquares / SIZE);
+        if (rootMeanSquare < 0.01) return -1; // Amplitude too low (silence)
+
+        let r1 = 0, r2 = SIZE - 1, threshold = 0.2;
+        for (let i = 0; i < SIZE / 2; i++) {
+            if (Math.abs(buffer[i]) < threshold) { r1 = i; break; }
+        }
+        for (let i = 1; i < SIZE / 2; i++) {
+            if (Math.abs(buffer[SIZE - i]) < threshold) { r2 = SIZE - i; break; }
+        }
+
+        buffer = buffer.slice(r1, r2);
+        SIZE = buffer.length;
+
+        let c = new Array(SIZE).fill(0);
+        for (let i = 0; i < SIZE; i++) {
+            for (let j = 0; j < SIZE - i; j++) {
+                c[i] = c[i] + buffer[j] * buffer[j + i];
+            }
+        }
+
+        let d = 0;
+        while (c[d] > c[d + 1]) d++;
+        let maxval = -1, maxpos = -1;
+        for (let i = d; i < SIZE; i++) {
+            if (c[i] > maxval) {
+                maxval = c[i];
+                maxpos = i;
+            }
+        }
+        let T0 = maxpos;
+        return sampleRate / T0;
+    }
+
+    function updateUI(freq) {
+        frequencyDisplayEl.textContent = `${freq.toFixed(1)} Hz`;
+
+        // Find the closest guitar note
+        let closest = guitarNotes[0];
+        let minDiff = Math.abs(freq - closest.freq);
+
+        for (let i = 1; i < guitarNotes.length; i++) {
+            let diff = Math.abs(freq - guitarNotes[i].freq);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closest = guitarNotes[i];
+            }
+        }
+
+        noteNameEl.textContent = closest.name;
+
+        // Calculate error in cents ($1200 \times \log_2(f / f_{ref})$)
+        const cents = 1200 * Math.log2(freq / closest.freq);
+        
+        // Clamp cents between -50 and 50 for the visual needle representation
+        const clampedCents = Math.max(-50, Math.min(50, cents));
+        
+        // Map cents to percentage across the meter bar (0% to 100%)
+        const needlePercent = 50 + (clampedCents);
+        needleEl.style.left = `${needlePercent}%`;
+
+        // Color shift based on tuning accuracy (Green if within ±3 cents)
+        if (Math.abs(cents) < 3) {
+            needleEl.style.backgroundColor = "#03dac6";
+            noteNameEl.style.color = "#03dac6";
+        } else {
+            needleEl.style.backgroundColor = "#cf6679";
+            noteNameEl.style.color = "#ffffff";
+        }
+
+        centsDisplayEl.textContent = `${cents > 0 ? '+' : ''}${cents.toFixed(0)} cents`;
+        centsDisplayEl.style.color = Math.abs(cents) < 3 ? "#03dac6" : "#a0a0a0";
+    }
+</script>
+
+</body>
+</html>
