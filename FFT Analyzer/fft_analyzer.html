@@ -181,6 +181,14 @@
                     <canvas id="phaseChart"></canvas>
                 </div>
             </div>
+
+            <!-- Polar Phase Plot Card -->
+            <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col col-span-full">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Polar Phase Spectrum (Unit Circle, r = 1)</h3>
+                <div class="relative w-full h-[400px]">
+                    <canvas id="polarPhaseChart"></canvas>
+                </div>
+            </div>
         </div>
 
         <!-- Tab 2: Spectral Data Table View -->
@@ -216,6 +224,7 @@
         let fftChart = null;
         let psdChart = null;
         let phaseChart = null;
+        let polarPhaseChart = null;
         let globalData = null;
 
         function switchTab(tabName) {
@@ -587,7 +596,7 @@
                 }
 
                 for (let i = 1; i < magnitudes.length - 1; i++) {
-                    if (i === 1 && includeBin1InPeaks) continue; // Already added if checked
+                    if (i === 1 && includeBin1InPeaks) continue;
                     if (magnitudes[i] > magnitudes[i - 1] && magnitudes[i] > magnitudes[i + 1] && magnitudes[i] >= peakThreshold) {
                         peakData[i] = magnitudes[i];
                         detectedPeakObjects.push({
@@ -612,7 +621,6 @@
                 return sum;
             });
 
-            // Magnitude Threshold Reconstruction & Counting
             let includedCount = 0;
             const magThreshSignal = times.map(t => {
                 if (!isMagThreshEnabled) return null;
@@ -638,7 +646,6 @@
 
             const threshLineData = frequencies.map(f => isMagThreshEnabled ? magThreshold : null);
 
-            // Highlighted point arrays across all frequency domain plots
             const fftThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? magnitudes[i] : null);
             const psdThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? psdValues[i] : null);
             const phaseThreshPoints = frequencies.map((f, i) => (isMagThreshEnabled && magnitudes[i] >= magThreshold) ? unwrappedPhases[i] : null);
@@ -647,6 +654,37 @@
                 if (!isGated) return null;
                 return (f >= minFreq && f <= maxFreq) ? maxMag * 1.05 : null;
             });
+
+            // Polar Phase Data (Unit Circle r = 1)
+            const unitCirclePoints = [];
+            for (let a = 0; a <= Math.PI * 2; a += 0.05) {
+                unitCirclePoints.push({ x: Math.cos(a), y: Math.sin(a) });
+            }
+
+            const polarPhasePoints = frequencies.map((f, i) => {
+                const phi = rawPhases[i];
+                return {
+                    x: Math.cos(phi),
+                    y: Math.sin(phi),
+                    freq: f,
+                    mag: magnitudes[i],
+                    phase: phi
+                };
+            });
+
+            const polarThreshPoints = frequencies.map((f, i) => {
+                if (isMagThreshEnabled && magnitudes[i] >= magThreshold) {
+                    const phi = rawPhases[i];
+                    return {
+                        x: Math.cos(phi),
+                        y: Math.sin(phi),
+                        freq: f,
+                        mag: magnitudes[i],
+                        phase: phi
+                    };
+                }
+                return null;
+            }).filter(Boolean); // Filter out null elements for Chart.js scatter compatibility
 
             function updateOrCreateChart(chartInstance, canvasId, config) {
                 if (chartInstance) {
@@ -683,109 +721,41 @@
                 }
             }
 
-            // 1. Time Chart Datasets
-            const timeDatasets = [
-                { 
-                    label: 'Original Data', 
-                    data: amplitudes, 
-                    borderColor: 'rgba(156, 163, 175, 0.4)', 
-                    borderWidth: 1.5, 
-                    borderDash: [4, 4], 
-                    pointRadius: 0,
-                    spanGaps: true
-                }
-            ];
-
-            if (isPeaksEnabled) {
-                timeDatasets.push({
-                    label: 'Summed Peak Components',
-                    data: summedPeakSignal,
-                    borderColor: 'rgb(16, 185, 129)',
-                    borderWidth: 2,
-                    borderDash: [2, 2],
-                    pointRadius: 0
-                });
-            }
-
-            if (isMagThreshEnabled) {
-                timeDatasets.push({
-                    label: 'Mag Threshold Reconstruction',
-                    data: magThreshSignal,
-                    borderColor: 'rgb(147, 51, 234)',
-                    borderWidth: 2,
-                    pointRadius: 0
-                });
-            }
-
+            // 1. Time Chart
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
                     labels: times.map(t => t.toFixed(2)),
-                    datasets: timeDatasets
+                    datasets: [
+                        { label: 'Original Data', data: amplitudes, borderColor: 'rgba(156, 163, 175, 0.4)', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, spanGaps: true },
+                        ...(isPeaksEnabled ? [{ label: 'Summed Peak Components', data: summedPeakSignal, borderColor: 'rgb(16, 185, 129)', borderWidth: 2, borderDash: [2, 2], pointRadius: 0 }] : []),
+                        ...(isMagThreshEnabled ? [{ label: 'Mag Threshold Reconstruction', data: magThreshSignal, borderColor: 'rgb(147, 51, 234)', borderWidth: 2, pointRadius: 0 }] : [])
+                    ]
                 },
                 options: { 
                     responsive: true, 
                     maintainAspectRatio: false, 
                     scales: { 
-                        x: { 
-                            title: { display: true, text: 'Time (s)' },
-                            ticks: { callback: function(val, index) { return index % Math.max(1, Math.floor(times.length / 10)) === 0 ? this.getLabelForValue(val) + 's' : ''; } }
-                        }, 
+                        x: { title: { display: true, text: 'Time (s)' } }, 
                         y: { title: { display: true, text: 'Amplitude' } } 
                     } 
                 }
             });
 
-            // 2. FFT Magnitude Chart Datasets
-            const fftDatasets = [
-                { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 }
-            ];
-
-            if (isPeaksEnabled) {
-                fftDatasets.push({ label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, pointHoverRadius: 7, showLine: false, order: 1 });
-            }
-
-            if (isMagThreshEnabled) {
-                fftDatasets.push({
-                    label: 'Threshold Cutoff',
-                    data: threshLineData,
-                    borderColor: 'rgba(147, 51, 234, 0.8)',
-                    borderWidth: 1.5,
-                    borderDash: [5, 5],
-                    pointRadius: 0,
-                    order: 3
-                });
-                fftDatasets.push({
-                    label: 'Included Components',
-                    data: fftThreshPoints,
-                    borderColor: 'transparent',
-                    backgroundColor: 'rgb(147, 51, 234)',
-                    pointRadius: 4,
-                    pointHoverRadius: 6,
-                    showLine: false,
-                    order: 0
-                });
-            }
-
-            if (isGated) {
-                fftDatasets.push({
-                    label: 'Active Frequency Gate',
-                    data: gatingBoundsData,
-                    borderColor: 'rgba(37, 99, 235, 0.6)',
-                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                    borderWidth: 1,
-                    borderDash: [3, 3],
-                    fill: 'origin',
-                    pointRadius: 0,
-                    order: 4
-                });
-            }
-
+            // 2. FFT Magnitude Chart
             fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: fftDatasets
+                    datasets: [
+                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudes, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: peakData, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
+                        ...(isMagThreshEnabled ? [
+                            { label: 'Threshold Cutoff', data: threshLineData, borderColor: 'rgba(147, 51, 234, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
+                            { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }
+                        ] : []),
+                        ...(isGated ? [{ label: 'Active Frequency Gate', data: gatingBoundsData, borderColor: 'rgba(37, 99, 235, 0.6)', backgroundColor: 'rgba(37, 99, 235, 0.1)', borderWidth: 1, borderDash: [3, 3], fill: 'origin', pointRadius: 0, order: 4 }] : [])
+                    ]
                 },
                 options: { 
                     responsive: true, 
@@ -793,84 +763,39 @@
                     scales: { 
                         x: { title: { display: true, text: 'Frequency (Hz)' } }, 
                         y: { title: { display: true, text: 'Magnitude' } } 
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    if (context.dataset.label === 'Detected Peaks' && context.raw !== null) {
-                                        return ` Peak: ${context.raw.toFixed(2)} at ${frequencies[context.dataIndex].toFixed(1)} Hz`;
-                                    }
-                                    if (context.dataset.label === 'Included Components' && context.raw !== null) {
-                                        return ` Included Mag: ${context.raw.toFixed(2)} at ${frequencies[context.dataIndex].toFixed(1)} Hz`;
-                                    }
-                                    if (context.dataset.label === 'Active Frequency Gate' || context.dataset.label === 'Threshold Cutoff') return null;
-                                    return ` Magnitude: ${context.raw.toFixed(2)}`;
-                                }
-                            }
-                        }
-                    }
+                    } 
                 }
             });
 
-            // 3. PSD Chart Datasets
-            const psdDatasets = [
-                { label: 'PSD (V²/Hz)', data: psdValues, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 1 }
-            ];
-            if (isMagThreshEnabled) {
-                psdDatasets.push({
-                    label: 'Included Components',
-                    data: psdThreshPoints,
-                    borderColor: 'transparent',
-                    backgroundColor: 'rgb(147, 51, 234)',
-                    pointRadius: 4,
-                    pointHoverRadius: 6,
-                    showLine: false,
-                    order: 0
-                });
-            }
-
+            // 3. PSD Chart
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: psdDatasets
+                    datasets: [
+                        { label: 'PSD (V²/Hz)', data: psdValues, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 1 },
+                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: psdThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }] : [])
+                    ]
                 },
                 options: { 
                     responsive: true, 
                     maintainAspectRatio: false, 
                     scales: { 
                         x: { title: { display: true, text: 'Frequency (Hz)' } }, 
-                        y: { 
-                            type: 'logarithmic',
-                            title: { display: true, text: 'PSD (V²/Hz) [Log]' } 
-                        } 
+                        y: { type: 'logarithmic', title: { display: true, text: 'PSD (V²/Hz) [Log]' } } 
                     } 
                 }
             });
 
-            // 4. Phase Chart Datasets (Unwrapped Phase)
-            const phaseDatasets = [
-                { label: 'Unwrapped Phase (rad)', data: unwrappedPhases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 }
-            ];
-            if (isMagThreshEnabled) {
-                phaseDatasets.push({
-                    label: 'Included Components',
-                    data: phaseThreshPoints,
-                    borderColor: 'transparent',
-                    backgroundColor: 'rgb(79, 70, 229)',
-                    pointRadius: 4,
-                    pointHoverRadius: 6,
-                    showLine: false,
-                    order: 0
-                });
-            }
-
+            // 4. Phase Chart (Unwrapped)
             phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
-                    datasets: phaseDatasets
+                    datasets: [
+                        { label: 'Unwrapped Phase (rad)', data: unwrappedPhases, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 },
+                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: phaseThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(79, 70, 229)', pointRadius: 4, showLine: false, order: 0 }] : [])
+                    ]
                 },
                 options: { 
                     responsive: true, 
@@ -879,6 +804,82 @@
                         x: { title: { display: true, text: 'Frequency (Hz)' } }, 
                         y: { title: { display: true, text: 'Unwrapped Phase (rad)' } } 
                     } 
+                }
+            });
+
+            // 5. Polar Phase Plot (Unit Circle r = 1)
+            polarPhaseChart = updateOrCreateChart(polarPhaseChart, 'polarPhaseChart', {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Unit Circle (r = 1)',
+                            data: unitCirclePoints,
+                            borderColor: 'rgba(209, 213, 219, 0.8)',
+                            borderWidth: 1.5,
+                            borderDash: [4, 4],
+                            showLine: true,
+                            pointRadius: 0,
+                            order: 3
+                        },
+                        {
+                            label: 'Phase Components',
+                            data: polarPhasePoints,
+                            borderColor: 'transparent',
+                            backgroundColor: 'rgb(37, 99, 235)',
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            order: 2
+                        },
+                        ...(isMagThreshEnabled ? [{
+                            label: 'Included Components',
+                            data: polarThreshPoints,
+                            borderColor: 'transparent',
+                            backgroundColor: 'rgb(147, 51, 234)',
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            order: 1
+                        }] : [])
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            position: 'center',
+                            min: -1.2,
+                            max: 1.2,
+                            title: { display: true, text: 'Real (cos φ)' },
+                            grid: { color: context => context.tick.value === 0 ? 'rgba(156, 163, 175, 0.6)' : 'rgba(229, 231, 235, 0.5)' }
+                        },
+                        y: {
+                            type: 'linear',
+                            position: 'center',
+                            min: -1.2,
+                            max: 1.2,
+                            title: { display: true, text: 'Imaginary (sin φ)' },
+                            grid: { color: context => context.tick.value === 0 ? 'rgba(156, 163, 175, 0.6)' : 'rgba(229, 231, 235, 0.5)' }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.datasetIndex === 0) return null;
+                                    const pt = context.raw;
+                                    if (!pt) return null;
+                                    const labelPrefix = context.dataset.label === 'Included Components' ? ' [Threshold Match]' : '';
+                                    return [
+                                        ` Freq: ${pt.freq.toFixed(2)} Hz${labelPrefix}`,
+                                        ` Magnitude: ${pt.mag.toFixed(4)}`,
+                                        ` Phase: ${pt.phase.toFixed(3)} rad`
+                                    ];
+                                }
+                            }
+                        }
+                    }
                 }
             });
         }
