@@ -24,7 +24,7 @@
             </div>
 
             <p class="text-xs text-gray-600 mb-4">
-                Upload time-series data to view standardized spectral charts and data tables.
+                Upload time-series data to view standardized spectral charts and data tables.[cite: 1]
             </p>
 
             <!-- File Upload Control -->
@@ -92,8 +92,14 @@
                     <label for="includeBin1Peaks" class="text-xs text-gray-700 cursor-pointer">Include Lowest Non-Zero Frequency (Bin 1)</label>
                 </div>
 
+                <!-- Peak Included Components Counter Label -->
+                <div class="text-xs text-yellow-800 font-medium bg-yellow-50 px-2.5 py-1.5 rounded border border-yellow-100 flex justify-between items-center my-3">
+                    <span>Included Components:</span>
+                    <span id="peakCount" class="font-bold">0</span>
+                </div>
+
                 <!-- Export Peaks Button -->
-                <button id="exportPeaksBtn" onclick="exportSubsetCsv('peaks')" class="w-full mt-3 px-3 py-1.5 text-xs font-semibold rounded-md bg-yellow-600 text-white hover:bg-yellow-700 shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+                <button id="exportPeaksBtn" onclick="exportSubsetCsv('peaks')" class="w-full px-3 py-1.5 text-xs font-semibold rounded-md bg-yellow-600 text-white hover:bg-yellow-700 shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                     </svg>
@@ -134,7 +140,7 @@
         </div>
 
         <div class="text-[10px] text-gray-400 mt-4 pt-2 border-t border-gray-100">
-            Powered by Chart.js, PapaParse & Native FFT
+            Powered by Chart.js, PapaParse & Native FFT[cite: 1]
         </div>
     </aside>
 
@@ -524,7 +530,6 @@
             sortedRows.forEach(row => {
                 if (unitType === 'period' && row.freq === 0) return;
                 
-                // Determine inclusions for dot indicators
                 const isPeak = isPeaksEnabled && currentPeakIndices.has(row.bin);
                 const isThresh = isMagThreshEnabled && row.mag >= magThreshold;
 
@@ -829,6 +834,9 @@
                     }
                 }
             }
+
+            // Update Peak Detection Counter Label
+            document.getElementById('peakCount').textContent = isPeaksEnabled ? currentPeakIndices.size : 0;
 
             const activeIndices = [];
             for (let i = 0; i < finalHalfN; i++) {
