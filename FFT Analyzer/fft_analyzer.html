@@ -33,6 +33,15 @@
                 <input class="block w-full text-xs text-gray-900 border border-gray-300 rounded cursor-pointer bg-gray-50 p-1.5 focus:outline-none" id="csvFile" type="file" accept=".csv">
             </div>
 
+            <!-- Non-Power-of-2 Handling Strategy -->
+            <div class="mb-4">
+                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="padStrategy">Non-Power-of-2 Handling</label>
+                <select id="padStrategy" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
+                    <option value="pad" selected>Pad with Zeros (Next Pow 2)</option>
+                    <option value="truncate">Drop / Truncate (Prev Pow 2)</option>
+                </select>
+            </div>
+
             <!-- Global Frequency Domain Unit Selector -->
             <div class="mb-4">
                 <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="freqDomainUnit">Frequency X-Axis Unit</label>
@@ -345,13 +354,18 @@
                     const dt = globalData.times[1] - globalData.times[0];
                     const sampleRate = dt > 0 ? 1.0 / dt : 100;
 
-                    const tempAmps = new Array(Math.pow(2, Math.ceil(Math.log2(dataRows.length)))).fill(0);
-                    for(let i=0; i<dataRows.length; i++) tempAmps[i] = dataRows[i][1];
+                    // Initial threshold range estimation setup
+                    const padStrategy = document.getElementById('padStrategy').value;
+                    const origLen = dataRows.length;
+                    const targetLen = padStrategy === 'truncate' ? Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen)))) : Math.pow(2, Math.ceil(Math.log2(origLen)));
+                    
+                    const tempAmps = new Array(targetLen).fill(0);
+                    for(let i=0; i<Math.min(origLen, targetLen); i++) tempAmps[i] = dataRows[i][1];
                     const tempWindowed = applyWindow(tempAmps, document.getElementById('windowType').value);
                     const tempSpec = fourierTransform(tempWindowed.windowedData);
                     let tempMaxMag = 0;
-                    for(let i=0; i<tempAmps.length/2; i++) {
-                        let m = Math.sqrt(tempSpec[i*2]**2 + tempSpec[i*2+1]**2) / tempAmps.length;
+                    for(let i=0; i<targetLen/2; i++) {
+                        let m = Math.sqrt(tempSpec[i*2]**2 + tempSpec[i*2+1]**2) / targetLen;
                         if(i>0) m *= 2;
                         if(tempWindowed.gain > 0) m /= tempWindowed.gain;
                         if(m > tempMaxMag) tempMaxMag = m;
@@ -363,16 +377,13 @@
                     magThreshRange.value = (tempMaxMag * 0.1).toFixed(4);
                     document.getElementById('magThreshVal').textContent = parseFloat(magThreshRange.value).toFixed(2);
 
-                    document.getElementById('statusText').textContent = `Loaded: ${file.name} (${dataRows.length} points, fs = ${sampleRate}Hz)`;
+                    document.getElementById('statusText').textContent = `Loaded: ${file.name} (${origLen} points, fs = ${sampleRate}Hz)`;
                     triggerProcessing();
                 }
             });
         });
 
-        // UI Event Listeners
-        document.getElementById('windowType').addEventListener('change', () => { if (globalData) triggerProcessing(); });
-        document.getElementById('freqDomainUnit').addEventListener('change', () => { if (globalData) triggerProcessing(); });
-        
+        // UI Event Listeners for Automatic Triggering
         const enablePeaksCheckbox = document.getElementById('enablePeaks');
         const peakControlsContainer = document.getElementById('peakControlsContainer');
         enablePeaksCheckbox.addEventListener('change', (e) => {
@@ -381,16 +392,22 @@
             } else {
                 peakControlsContainer.classList.add('opacity-40', 'pointer-events-none');
             }
-            if (globalData) triggerProcessing();
+            triggerProcessing();
         });
 
         document.getElementById('sensRange').addEventListener('input', (e) => {
             document.getElementById('sensVal').textContent = e.target.value + '%';
-            if (globalData) triggerProcessing();
+            triggerProcessing();
         });
 
-        document.getElementById('includeDcPeaks').addEventListener('change', () => { if (globalData) triggerProcessing(); });
-        document.getElementById('includeBin1Peaks').addEventListener('change', () => { if (globalData) triggerProcessing(); });
+        document.getElementById('includeDcPeaks').addEventListener('change', triggerProcessing);
+        document.getElementById('includeBin1Peaks').addEventListener('change', triggerProcessing);
+        document.getElementById('padStrategy').addEventListener('change', triggerProcessing);
+        document.getElementById('freqDomainUnit').addEventListener('change', () => {
+            renderTable();
+            triggerProcessing();
+        });
+        document.getElementById('windowType').addEventListener('change', triggerProcessing);
         
         const enableMagThreshCheckbox = document.getElementById('enableMagThresh');
         const magThreshContainer = document.getElementById('magThreshContainer');
@@ -400,19 +417,21 @@
             } else {
                 magThreshContainer.classList.add('opacity-40', 'pointer-events-none');
             }
-            if (globalData) triggerProcessing();
+            triggerProcessing();
         });
 
         document.getElementById('magThreshRange').addEventListener('input', (e) => {
             document.getElementById('magThreshVal').textContent = parseFloat(e.target.value).toFixed(2);
-            if (globalData) triggerProcessing();
+            triggerProcessing();
         });
 
         function triggerProcessing() {
+            if (!globalData) return;
             const dt = globalData.times[1] - globalData.times[0];
             const sampleRate = dt > 0 ? 1.0 / dt : 100;
             const windowSelection = document.getElementById('windowType').value;
             const unitSelection = document.getElementById('freqDomainUnit').value;
+            const padStrategy = document.getElementById('padStrategy').value;
             const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
             const includeDcInPeaks = document.getElementById('includeDcPeaks').checked;
@@ -421,7 +440,7 @@
             const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
             const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, padStrategy, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold);
         }
 
         function sortTable(columnKey) {
@@ -482,19 +501,31 @@
             document.getElementById('tableMetaCount').textContent = `${visibleCount} components listed`;
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, padStrategy, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
             const originalLength = amplitudes.length;
-            const nextPower = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             
-            const paddedAmps = new Array(nextPower).fill(0);
-            for (let i = 0; i < originalLength; i++) {
-                paddedAmps[i] = amplitudes[i];
+            // Determine target length based on strategy
+            let targetLength;
+            if (padStrategy === 'truncate') {
+                targetLength = Math.pow(2, Math.floor(Math.log2(originalLength)));
+                if (targetLength < 2) targetLength = 2;
+            } else {
+                targetLength = Math.pow(2, Math.ceil(Math.log2(originalLength)));
             }
 
-            const { windowedData, gain, powerGain } = applyWindow(paddedAmps, windowType);
+            const processedAmps = new Array(targetLength).fill(0);
+            const processedTimes = new Array(targetLength);
+            
+            const dt = times.length > 1 ? times[1] - times[0] : 1.0;
+            for (let i = 0; i < targetLength; i++) {
+                processedAmps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
+                processedTimes[i] = times[i] !== undefined ? times[i] : (times[0] + i * dt);
+            }
+
+            const { windowedData, gain, powerGain } = applyWindow(processedAmps, windowType);
             const spectrum = fourierTransform(windowedData);
 
-            const halfN = nextPower / 2;
+            const halfN = targetLength / 2;
             const rawPhases = [];
             for (let i = 0; i < halfN; i++) {
                 const re = spectrum[i * 2];
@@ -529,7 +560,7 @@
             let totalMagnitudeSum = 0;
 
             for (let i = 0; i < halfN; i++) {
-                const freq = (i * sampleRate) / nextPower;
+                const freq = (i * sampleRate) / targetLength;
                 const period = freq > 0 ? (1.0 / freq) : Infinity;
                 rawFrequencies.push(freq);
                 rawPeriods.push(period);
@@ -537,13 +568,13 @@
                 const re = spectrum[i * 2];
                 const im = spectrum[i * 2 + 1];
                 
-                let mag = Math.sqrt(re ** 2 + im ** 2) / nextPower;
+                let mag = Math.sqrt(re ** 2 + im ** 2) / targetLength;
                 if (i > 0) mag *= 2;
                 if (gain > 0) mag /= gain;
                 rawMagnitudes.push(mag);
                 totalMagnitudeSum += mag;
 
-                let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * nextPower);
+                let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * targetLength);
                 if (i > 0 && i < halfN - 1) psd *= 2;
                 rawPsdValues.push(psd > 0 ? psd : 1e-12);
                 rawUnwrappedPhases.push(unwrappedPhases[i]);
@@ -567,14 +598,12 @@
                 }
             }
 
-            // Filter out DC if unitType === 'period'
             const activeIndices = [];
             for (let i = 0; i < halfN; i++) {
                 if (unitType === 'period' && rawFrequencies[i] === 0) continue;
                 activeIndices.push(i);
             }
 
-            // Populate spectral rows dataset for sorting
             currentSpectralRows = [];
             for (let i = 0; i < halfN; i++) {
                 const pctContribution = totalMagnitudeSum > 0 ? (rawMagnitudes[i] / totalMagnitudeSum) * 100 : 0;
@@ -599,7 +628,6 @@
                 });
             });
 
-            // Build coordinate data points ({x, y})
             const magnitudePoints = activeIndices.map(i => ({
                 x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
                 y: rawMagnitudes[i]
@@ -615,7 +643,6 @@
                 y: rawUnwrappedPhases[i]
             }));
 
-            // Peak coordinate series for each frequency domain chart
             const fftPeakPoints = [];
             const psdPeakPoints = [];
             const phasePeakPoints = [];
@@ -646,7 +673,7 @@
             }
 
             let includedCount = 0;
-            const magThreshSignal = times.map(t => {
+            const magThreshSignal = processedTimes.map(t => {
                 if (!isMagThreshEnabled) return null;
                 let sum = 0;
                 for (let i = 0; i < halfN; i++) {
@@ -686,7 +713,7 @@
                 }
             });
 
-            const summedPeakSignal = times.map(t => {
+            const summedPeakSignal = processedTimes.map(t => {
                 if (!isPeaksEnabled) return null;
                 let sum = 0;
                 for (let peak of detectedPeakObjects) {
@@ -699,7 +726,6 @@
                 return sum;
             });
 
-            // Polar Phase Data (Unit Circle r = 1)
             const unitCirclePoints = [];
             for (let a = 0; a <= Math.PI * 2; a += 0.05) {
                 unitCirclePoints.push({ x: Math.cos(a), y: Math.sin(a) });
@@ -774,9 +800,9 @@
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
-                    labels: times.map(t => t.toFixed(2)),
+                    labels: processedTimes.map(t => t.toFixed(2)),
                     datasets: [
-                        { label: 'Original Data', data: amplitudes, borderColor: 'rgba(156, 163, 175, 0.4)', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, spanGaps: true },
+                        { label: 'Original Data (Processed)', data: processedAmps, borderColor: 'rgba(156, 163, 175, 0.4)', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, spanGaps: true },
                         ...(isPeaksEnabled ? [{ label: 'Summed Peak Components', data: summedPeakSignal, borderColor: 'rgb(16, 185, 129)', borderWidth: 2, borderDash: [2, 2], pointRadius: 0 }] : []),
                         ...(isMagThreshEnabled ? [{ label: 'Mag Threshold Reconstruction', data: magThreshSignal, borderColor: 'rgb(147, 51, 234)', borderWidth: 2, pointRadius: 0 }] : [])
                     ]
