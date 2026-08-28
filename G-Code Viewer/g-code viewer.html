@@ -50,7 +50,7 @@
             color: #aaaaaa;
         }
 
-        select, input[type="range"] {
+        select, input[type="range"], input[type="number"] {
             width: 100%;
             padding: 6px;
             background-color: #1e1e1e;
@@ -61,7 +61,7 @@
             outline: none;
         }
 
-        select:focus {
+        select:focus, input[type="number"]:focus {
             border-color: #0e639c;
         }
 
@@ -222,6 +222,10 @@
                 <button id="btn-reset" class="btn btn-secondary">Reset</button>
             </div>
             <div class="control-group">
+                <label for="tool-diameter">Tool Diameter (mm) [Optional]</label>
+                <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1">
+            </div>
+            <div class="control-group">
                 <label for="sim-speed">Simulation Speed</label>
                 <select id="sim-speed">
                     <option value="0.5">0.5x Speed</option>
@@ -286,11 +290,20 @@
         scene.add(toolpathGroup);
 
         // --- Tool Mesh setup ---
-        const toolGeometry = new THREE.SphereGeometry(1.5, 16, 16);
-        const toolMaterial = new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: false });
-        const toolMesh = new THREE.Mesh(toolGeometry, toolMaterial);
+        const toolMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xffa500, 
+            roughness: 0.3,
+            metalness: 0.8
+        });
+        
+        let toolMesh = new THREE.Mesh(new THREE.BufferGeometry(), toolMaterial);
         toolMesh.visible = false;
         scene.add(toolMesh);
+
+        // Add a dedicated directional light so the 3D tool cylinder highlights nicely
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(1, 1, 2);
+        scene.add(dirLight);
 
         // --- Data & Simulation State ---
         let parsedSegments = [];
@@ -302,7 +315,8 @@
         let isSimulating = false;
         let currentDistance = 0;
         let lastTimestamp = null;
-        const DEFAULT_RAPID_FEED = 5000; // mm/min default for G0 moves if undefined
+        let currentToolDiameter = null;
+        const DEFAULT_RAPID_FEED = 5000;
 
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
@@ -331,6 +345,15 @@
         document.getElementById('color-mode').addEventListener('change', () => {
             renderToolpath();
             updateLegend();
+        });
+
+        document.getElementById('tool-diameter').addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            currentToolDiameter = (!isNaN(val) && val > 0) ? val : null;
+            updateToolGeometry();
+            if (parsedSegments.length > 0) {
+                updateToolPositionByDistance(currentDistance);
+            }
         });
 
         document.getElementById('gcode-file').addEventListener('change', function(e) {
@@ -372,6 +395,34 @@
             currentDistance = targetPct * totalPathLength;
             updateToolPositionByDistance(currentDistance);
         });
+
+        // --- Tool Mesh Builder ---
+        function updateToolGeometry() {
+            toolMesh.geometry.dispose();
+
+            if (currentToolDiameter) {
+                // Square End Mill: Cylinder with diameter and height = 3 * diameter
+                const radius = currentToolDiameter / 2;
+                const height = currentToolDiameter * 3;
+                
+                const geom = new THREE.CylinderGeometry(radius, radius, height, 32);
+                
+                // Align cylinder so its cutting tip sits exactly at (0,0,0) and extends upward (+Z)
+                geom.rotateX(Math.PI / 2);
+                geom.translate(0, 0, height / 2);
+                
+                toolMesh.geometry = geom;
+            } else {
+                // Default fallback: Sphere scaled to part size
+                const maxDim = Math.max(
+                    bounds.maxX - bounds.minX,
+                    bounds.maxY - bounds.minY,
+                    bounds.maxZ - bounds.minZ
+                );
+                const radius = Math.max(maxDim * 0.012, 0.5);
+                toolMesh.geometry = new THREE.SphereGeometry(radius, 16, 16);
+            }
+        }
 
         // --- G-Code Parser ---
         function parseGCode(text) {
@@ -520,15 +571,7 @@
                 }
             });
 
-            // Dynamic sphere tool size based on part size
-            const maxDim = Math.max(
-                bounds.maxX - bounds.minX,
-                bounds.maxY - bounds.minY,
-                bounds.maxZ - bounds.minZ
-            );
-            const radius = Math.max(maxDim * 0.012, 0.5);
-            toolMesh.geometry.dispose();
-            toolMesh.geometry = new THREE.SphereGeometry(radius, 16, 16);
+            updateToolGeometry();
 
             document.getElementById('feed-min').innerText = minFeed === Infinity ? '0 mm/min' : `${minFeed} mm/min`;
             document.getElementById('feed-max').innerText = maxFeed === -Infinity ? '0 mm/min' : `${maxFeed} mm/min`;
@@ -549,7 +592,6 @@
             }
 
             const speedMultiplier = parseFloat(document.getElementById('sim-speed').value);
-            // Feed rate is given in mm/min -> divide by 60 for mm/sec
             const mmPerSec = (effectiveFeed / 60) * speedMultiplier;
             currentDistance += mmPerSec * deltaSeconds;
 
