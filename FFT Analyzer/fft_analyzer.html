@@ -24,7 +24,7 @@
             </div>
 
             <p class="text-xs text-gray-600 mb-4">
-                Upload time-series data to view standardized spectral charts and data tables.[cite: 1]
+                Upload time-series data to view standardized spectral charts and data tables[cite: 1].
             </p>
 
             <!-- File Upload Control -->
@@ -248,6 +248,34 @@
         </div>
     </main>
 
+    <!-- Column & Row Selection Modal / Popup -->
+    <div id="columnModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6 flex flex-col gap-4">
+            <h3 class="text-sm font-bold text-gray-800">Configure Dataset Columns & Start Row</h3>
+            <p class="text-xs text-gray-600">Your file contains multiple columns or requires header configurations. Please select the correct X (time) and Y (amplitude) data columns along with the starting row index.</p>
+            
+            <div class="flex flex-col gap-3">
+                <div>
+                    <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="modalXCol">X-Axis Column (Time)</label>
+                    <select id="modalXCol" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none"></select>
+                </div>
+                <div>
+                    <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="modalYCol">Y-Axis Column (Amplitude)</label>
+                    <select id="modalYCol" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none"></select>
+                </div>
+                <div>
+                    <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="modalStartRow">Data Start Row Index (0-based)</label>
+                    <input type="number" id="modalStartRow" min="0" value="0" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 mt-2">
+                <button onclick="closeColumnModal()" class="px-4 py-2 text-xs font-semibold rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 cursor-pointer">Cancel</button>
+                <button onclick="confirmColumnSelection()" class="px-4 py-2 text-xs font-semibold rounded-md bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">Load Dataset</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let timeChart = null;
         let fftChart = null;
@@ -259,6 +287,8 @@
         let currentPeakIndices = new Set();
         let currentSortColumn = 'bin';
         let currentSortAscending = true;
+        let rawParsedRows = null;
+        let currentFileName = "";
 
         function toggleExportDropdown() {
             const menu = document.getElementById('exportDropdownMenu');
@@ -289,13 +319,11 @@
                 return;
             }
 
-            // The main export button is always enabled if data is loaded
             exportBtn.removeAttribute('disabled');
 
             const isPeaksEnabled = document.getElementById('enablePeaks').checked;
             const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
 
-            // Manage Peak export option state
             if (!isPeaksEnabled) {
                 exportPeaksOption.classList.add('opacity-40', 'pointer-events-none');
                 exportPeaksOption.setAttribute('title', 'Peak detection is currently disabled');
@@ -304,7 +332,6 @@
                 exportPeaksOption.removeAttribute('title');
             }
 
-            // Manage Magnitude Threshold export option state
             if (!isMagThreshEnabled) {
                 exportThreshOption.classList.add('opacity-40', 'pointer-events-none');
                 exportThreshOption.setAttribute('title', 'Magnitude threshold reconstruction is currently disabled');
@@ -425,65 +452,146 @@
         document.getElementById('csvFile').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
+            currentFileName = file.name;
 
             Papa.parse(file, {
                 header: false,
                 dynamicTyping: true,
                 skipEmptyLines: true,
                 complete: function(results) {
-                    const rows = results.data;
-                    const dataRows = rows.filter(row => typeof row[0] === 'number' && typeof row[1] === 'number');
-
-                    if (dataRows.length < 4) {
-                        alert('Not enough valid numeric rows found in the CSV.');
+                    rawParsedRows = results.data.filter(row => Array.isArray(row) && row.length > 0);
+                    if (rawParsedRows.length === 0) {
+                        alert('The uploaded file contains no valid rows.');
                         return;
                     }
 
-                    globalData = {
-                        fileName: file.name,
-                        times: dataRows.map(row => row[0]),
-                        amplitudes: dataRows.map(row => row[1])
-                    };
+                    // Automatic Data Validation & Column Detection
+                    let startRowIdx = 0;
+                    for (let i = 0; i < rawParsedRows.length; i++) {
+                        if (typeof rawParsedRows[i][0] === 'number' && typeof rawParsedRows[i][1] === 'number') {
+                            startRowIdx = i;
+                            break;
+                        }
+                    }
 
-                    const dt = globalData.times[1] - globalData.times[0];
-                    const sampleRate = dt > 0 ? 1.0 / dt : 100;
+                    const firstRow = rawParsedRows[startRowIdx];
+                    const numCols = firstRow.length;
 
-                    const padStrategy = document.getElementById('padStrategy').value;
-                    const origLen = dataRows.length;
-
-                    let targetLen;
-                    if (padStrategy === 'truncate') {
-                        targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
-                    } else if (padStrategy === 'framing') {
-                        targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
+                    if (numCols > 2) {
+                        // Open Column Selection Popup if columns exceed 2
+                        openColumnModal(numCols, startRowIdx);
+                    } else if (numCols === 2) {
+                        processParsedDataset(0, 1, startRowIdx);
                     } else {
-                        targetLen = Math.pow(2, Math.ceil(Math.log2(origLen)));
+                        alert('Error: Dataset must contain at least 2 columns.');
                     }
-
-                    const tempAmps = new Array(targetLen).fill(0);
-                    for(let i=0; i<Math.min(origLen, targetLen); i++) tempAmps[i] = dataRows[i][1];
-                    const tempWindowed = applyWindow(tempAmps, document.getElementById('windowType').value);
-                    const tempSpec = fourierTransform(tempWindowed.windowedData);
-                    let tempMaxMag = 0;
-                    for(let i=0; i<targetLen/2; i++) {
-                        let m = Math.sqrt(tempSpec[i*2]**2 + tempSpec[i*2+1]**2) / targetLen;
-                        if(i>0) m *= 2;
-                        if(tempWindowed.gain > 0) m /= tempWindowed.gain;
-                        if(m > tempMaxMag) tempMaxMag = m;
-                    }
-
-                    const magThreshRange = document.getElementById('magThreshRange');
-                    magThreshRange.max = tempMaxMag > 0 ? tempMaxMag : 1.0;
-                    magThreshRange.step = (tempMaxMag / 200).toFixed(4);
-                    magThreshRange.value = (tempMaxMag * 0.1).toFixed(4);
-                    document.getElementById('magThreshVal').textContent = parseFloat(magThreshRange.value).toFixed(2);
-
-                    document.getElementById('statusText').textContent = `Loaded: ${file.name} (${origLen} points, fs = ${sampleRate}Hz)`;
-                    updateExportButtonState();
-                    triggerProcessing();
                 }
             });
         });
+
+        function openColumnModal(numCols, defaultStartRow) {
+            const xSelect = document.getElementById('modalXCol');
+            const ySelect = document.getElementById('modalYCol');
+            xSelect.innerHTML = '';
+            ySelect.innerHTML = '';
+
+            for (let c = 0; c < numCols; c++) {
+                const optX = document.createElement('option');
+                optX.value = c;
+                optX.textContent = `Column ${c + 1}`;
+                if (c === 0) optX.selected = true;
+                xSelect.appendChild(optX);
+
+                const optY = document.createElement('option');
+                optY.value = c;
+                optY.textContent = `Column ${c + 1}`;
+                if (c === 1) optY.selected = true;
+                ySelect.appendChild(optY);
+            }
+
+            document.getElementById('modalStartRow').value = defaultStartRow;
+            document.getElementById('columnModal').classList.remove('hidden');
+        }
+
+        function closeColumnModal() {
+            document.getElementById('columnModal').classList.add('hidden');
+        }
+
+        function confirmColumnSelection() {
+            const xCol = parseInt(document.getElementById('modalXCol').value);
+            const yCol = parseInt(document.getElementById('modalYCol').value);
+            const startRow = parseInt(document.getElementById('modalStartRow').value) || 0;
+
+            if (xCol === yCol) {
+                alert('X-axis and Y-axis columns must be different.');
+                return;
+            }
+
+            closeColumnModal();
+            processParsedDataset(xCol, yCol, startRow);
+        }
+
+        function processParsedDataset(xCol, yCol, startRow) {
+            const validRows = [];
+            for (let i = startRow; i < rawParsedRows.length; i++) {
+                const row = rawParsedRows[i];
+                if (row[xCol] !== undefined && row[yCol] !== undefined) {
+                    const xVal = Number(row[xCol]);
+                    const yVal = Number(row[yCol]);
+                    if (!isNaN(xVal) && !isNaN(yVal)) {
+                        validRows.push([xVal, yVal]);
+                    }
+                }
+            }
+
+            if (validRows.length < 4) {
+                alert('Not enough valid numeric data points found starting from the selected row.');
+                return;
+            }
+
+            globalData = {
+                fileName: currentFileName,
+                times: validRows.map(row => row[0]),
+                amplitudes: validRows.map(row => row[1])
+            };
+
+            const dt = globalData.times[1] - globalData.times[0];
+            const sampleRate = dt > 0 ? 1.0 / dt : 100;
+
+            const padStrategy = document.getElementById('padStrategy').value;
+            const origLen = validRows.length;
+
+            let targetLen;
+            if (padStrategy === 'truncate') {
+                targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
+            } else if (padStrategy === 'framing') {
+                targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
+            } else {
+                targetLen = Math.pow(2, Math.ceil(Math.log2(origLen)));
+            }
+
+            const tempAmps = new Array(targetLen).fill(0);
+            for(let i=0; i<Math.min(origLen, targetLen); i++) tempAmps[i] = validRows[i][1];
+            const tempWindowed = applyWindow(tempAmps, document.getElementById('windowType').value);
+            const tempSpec = fourierTransform(tempWindowed.windowedData);
+            let tempMaxMag = 0;
+            for(let i=0; i<targetLen/2; i++) {
+                let m = Math.sqrt(tempSpec[i*2]**2 + tempSpec[i*2+1]**2) / targetLen;
+                if(i>0) m *= 2;
+                if(tempWindowed.gain > 0) m /= tempWindowed.gain;
+                if(m > tempMaxMag) tempMaxMag = m;
+            }
+
+            const magThreshRange = document.getElementById('magThreshRange');
+            magThreshRange.max = tempMaxMag > 0 ? tempMaxMag : 1.0;
+            magThreshRange.step = (tempMaxMag / 200).toFixed(4);
+            magThreshRange.value = (tempMaxMag * 0.1).toFixed(4);
+            document.getElementById('magThreshVal').textContent = parseFloat(magThreshRange.value).toFixed(2);
+
+            document.getElementById('statusText').textContent = `Loaded: ${currentFileName} (${origLen} points, fs = ${sampleRate.toFixed(2)}Hz)`;
+            updateExportButtonState();
+            triggerProcessing();
+        }
 
         const enablePeaksCheckbox = document.getElementById('enablePeaks');
         const peakControlsContainer = document.getElementById('peakControlsContainer');
@@ -631,12 +739,12 @@
             currentSpectralRows.forEach(row => {
                 csvRows.push([
                     row.bin,
-                    row.freq,
-                    row.period === Infinity ? 'Infinity' : row.period,
-                    row.mag,
-                    row.contrib,
-                    row.phase,
-                    row.unwrappedPhase
+                    Number(row.freq.toFixed(4)),
+                    row.period === Infinity ? 'Infinity' : Number(row.period.toFixed(4)),
+                    Number(row.mag.toFixed(4)),
+                    Number(row.contrib.toFixed(2)),
+                    Number(row.phase.toFixed(4)),
+                    Number(row.unwrappedPhase.toFixed(4))
                 ]);
             });
 
@@ -682,12 +790,12 @@
             subsetRows.forEach(row => {
                 csvRows.push([
                     row.bin,
-                    row.freq,
-                    row.period === Infinity ? 'Infinity' : row.period,
-                    row.mag,
-                    row.contrib,
-                    row.phase,
-                    row.unwrappedPhase
+                    Number(row.freq.toFixed(4)),
+                    row.period === Infinity ? 'Infinity' : Number(row.period.toFixed(4)),
+                    Number(row.mag.toFixed(4)),
+                    Number(row.contrib.toFixed(2)),
+                    Number(row.phase.toFixed(4)),
+                    Number(row.unwrappedPhase.toFixed(4))
                 ]);
             });
 
@@ -898,7 +1006,6 @@
                 }
             }
 
-            // Update Peak Detection Counter Label
             document.getElementById('peakCount').textContent = isPeaksEnabled ? currentPeakIndices.size : 0;
 
             const activeIndices = [];
@@ -1263,7 +1370,7 @@
                                     return [
                                         ` Freq: ${pt.freq.toFixed(2)} Hz (Period: ${pStr})${labelPrefix}`,
                                         ` Magnitude: ${pt.mag.toFixed(4)}`,
-                                        ` Phase: ${pt.phase.theta ? pt.phase.theta.toFixed(3) : pt.phase.toFixed(3)} rad`
+                                        ` Phase: ${(pt.phase.theta !== undefined ? pt.phase.theta : pt.phase).toFixed(3)} rad`
                                     ];
                                 }
                             }
