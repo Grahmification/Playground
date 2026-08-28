@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D STEP CAD Viewer</title>
+    <title>3D STEP CAD Viewer with Model Tree</title>
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     
@@ -24,9 +24,23 @@
         body { margin: 0; overflow: hidden; background-color: #0f172a; color: #f8fafc; font-family: sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; position: relative; }
         .glass-panel {
-            background: rgba(30, 41, 59, 0.7);
+            background: rgba(30, 41, 59, 0.85);
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        /* Custom scrollbar for TreeView */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.5);
+            border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(148, 163, 184, 0.8);
         }
         /* Loading Spinner */
         .spinner {
@@ -43,30 +57,45 @@
 <body>
 
     <div id="canvas-container">
-        <!-- Floating Header Controls -->
-        <div class="absolute top-4 left-4 z-10 glass-panel p-4 rounded-xl shadow-2xl max-w-sm w-full">
-            <h1 class="text-xl font-bold text-sky-400 mb-1 flex items-center gap-2">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
-                STEP CAD Viewer
-            </h1>
-            <p class="text-xs text-slate-400 mb-4">Upload a <code>.stp</code> or <code>.step</code> file to view and inspect the 3D model.</p>
-            
-            <label class="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 hover:border-sky-400 transition-all">
-                <div class="flex flex-col items-center justify-center pt-2 pb-3">
-                    <svg class="w-8 h-8 mb-2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 0115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
-                    <p class="text-xs text-slate-300 font-medium"><span class="font-semibold text-sky-400">Click to upload</span> or drag STEP file</p>
+        <!-- Sidebar Panel on the Left -->
+        <div class="absolute top-4 left-4 bottom-4 z-10 glass-panel p-4 rounded-xl shadow-2xl w-80 flex flex-col gap-3 pointer-events-auto">
+            <!-- Header -->
+            <div>
+                <h1 class="text-xl font-bold text-sky-400 mb-1 flex items-center gap-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                    STEP CAD Viewer
+                </h1>
+                <p class="text-xs text-slate-400">Upload a <code>.stp</code> or <code>.step</code> file to inspect structure.</p>
+            </div>
+
+            <!-- Upload Button Area -->
+            <label class="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-600 rounded-lg cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 hover:border-sky-400 transition-all shrink-0">
+                <div class="flex flex-col items-center justify-center pt-1 pb-1">
+                    <svg class="w-6 h-6 mb-1 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 0115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    <p class="text-xs text-slate-300 font-medium"><span class="font-semibold text-sky-400">Click to upload</span> or drag STEP</p>
                 </div>
                 <input id="file-input" type="file" accept=".step, .stp" class="hidden" />
             </label>
 
-            <!-- Display Info -->
-            <div id="file-info" class="hidden mt-3 pt-3 border-t border-slate-700/50 text-xs text-slate-300">
-                <div class="flex justify-between py-0.5"><span class="text-slate-400">File Name:</span><span id="info-name" class="font-medium truncate max-w-[150px]"></span></div>
-                <div class="flex justify-between py-0.5"><span class="text-slate-400">Meshes:</span><span id="info-meshes" class="font-medium"></span></div>
+            <!-- File Details Stats -->
+            <div id="file-info" class="hidden text-xs text-slate-300 bg-slate-900/50 p-2 rounded border border-slate-700/50 shrink-0">
+                <div class="flex justify-between py-0.5"><span class="text-slate-400">File Name:</span><span id="info-name" class="font-medium truncate max-w-[140px]"></span></div>
+                <div class="flex justify-between py-0.5"><span class="text-slate-400">Bodies/Meshes:</span><span id="info-meshes" class="font-medium"></span></div>
+            </div>
+
+            <!-- Assembly & Feature Tree View Container -->
+            <div class="flex-1 flex flex-col min-h-0 bg-slate-900/60 rounded-lg border border-slate-700/60 p-2">
+                <div class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 border-b border-slate-800 pb-1 flex items-center justify-between">
+                    <span>Model Hierarchy</span>
+                    <span id="tree-count" class="text-[10px] text-slate-500 font-mono"></span>
+                </div>
+                <div id="tree-view" class="flex-1 overflow-y-auto custom-scrollbar text-xs space-y-1 pr-1">
+                    <div class="text-slate-500 italic text-center py-4 text-xs">No STEP file loaded</div>
+                </div>
             </div>
         </div>
 
-        <!-- Render Controls Overlay -->
+        <!-- Render Controls Overlay (Top Right) -->
         <div id="controls-panel" class="hidden absolute top-4 right-4 z-10 glass-panel p-3 rounded-xl shadow-2xl flex-col gap-2 text-xs">
             <button id="btn-reset-view" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 transition">Reset View</button>
             <button id="btn-toggle-wireframe" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 transition">Toggle Wireframe</button>
@@ -98,6 +127,8 @@
         const infoName = document.getElementById('info-name');
         const infoMeshes = document.getElementById('info-meshes');
         const controlsPanel = document.getElementById('controls-panel');
+        const treeView = document.getElementById('tree-view');
+        const treeCount = document.getElementById('tree-count');
 
         // Initialize Scene
         function init() {
@@ -132,7 +163,7 @@
             dirLight2.position.set(-100, -100, -100);
             scene.add(dirLight2);
 
-            // Grid & Axes Helper
+            // Grid Helper
             const gridHelper = new THREE.GridHelper(500, 50, 0x334155, 0x1e293b);
             gridHelper.position.y = -0.01;
             scene.add(gridHelper);
@@ -207,7 +238,6 @@
                 try {
                     showLoading(true, "Tessellating STEP Data...");
                     
-                    // Convert file content to Uint8Array for OCCT
                     const fileBuffer = new Uint8Array(e.target.result);
                     const result = occt.ReadStepFile(fileBuffer);
 
@@ -228,34 +258,40 @@
         }
 
         function renderCADResult(result, fileName) {
-            // Remove previous model if exists
             if (currentModel) {
                 scene.remove(currentModel);
             }
 
             currentModel = new THREE.Group();
             let meshCount = 0;
+            treeView.innerHTML = ''; // Clear hierarchy UI
 
-            result.meshes.forEach((meshData) => {
-                // Check for per-face (per-surface) color attributes from OCCT
+            // Root Node for Assembly Tree
+            const rootItem = createTreeNode(fileName, 'root', true);
+            const rootChildrenContainer = rootItem.querySelector('.tree-children');
+            treeView.appendChild(rootItem);
+
+            result.meshes.forEach((meshData, meshIndex) => {
+                const bodyName = meshData.name || `Body ${meshIndex + 1}`;
+                
+                // Determine mesh/body colors
                 const faceColors = meshData.attributes?.color?.array;
                 const hasFaceColors = faceColors && faceColors.length > 0;
 
-                // Check for mesh-level/body-level color fallback
                 let meshColor = null;
                 if (meshData.color) {
                     meshColor = new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2]);
                 } else if (meshData.brep_color) {
                     meshColor = new THREE.Color(meshData.brep_color[0], meshData.brep_color[1], meshData.brep_color[2]);
                 } else {
-                    meshColor = new THREE.Color(0x94a3b8); // Default fallback color (Slate Light)
+                    meshColor = new THREE.Color(0x94a3b8);
                 }
 
-                // Check for per-face/surface geometry groups
+                // Check BREP faces/surfaces
                 const hasGroups = meshData.brep_faces && meshData.brep_faces.length > 0;
+                let mesh;
 
                 if (hasGroups) {
-                    // Method A: Construct multi-material geometry based on STEP BREP surface groups
                     const geometry = new THREE.BufferGeometry();
                     geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
 
@@ -287,11 +323,9 @@
                         }));
                     });
 
-                    const mesh = new THREE.Mesh(geometry, materials);
-                    currentModel.add(mesh);
+                    mesh = new THREE.Mesh(geometry, materials);
 
                 } else if (hasFaceColors) {
-                    // Method B: Construct geometry with per-vertex color attribute array
                     const geometry = new THREE.BufferGeometry();
                     geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
                     geometry.setAttribute('color', new THREE.Float32BufferAttribute(faceColors, 3));
@@ -314,11 +348,8 @@
                         wireframe: wireframeEnabled
                     });
 
-                    const mesh = new THREE.Mesh(geometry, material);
-                    currentModel.add(mesh);
-
+                    mesh = new THREE.Mesh(geometry, material);
                 } else {
-                    // Method C: Body/Solid fallback color mapping
                     const geometry = new THREE.BufferGeometry();
                     geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
 
@@ -340,10 +371,31 @@
                         wireframe: wireframeEnabled
                     });
 
-                    const mesh = new THREE.Mesh(geometry, material);
-                    currentModel.add(mesh);
+                    mesh = new THREE.Mesh(geometry, material);
                 }
 
+                mesh.name = bodyName;
+                currentModel.add(mesh);
+
+                // Build Tree Node for Body
+                const hexColor = '#' + meshColor.getHexString();
+                const bodyItem = createTreeNode(bodyName, 'body', true, hexColor, mesh);
+                const bodyChildrenContainer = bodyItem.querySelector('.tree-children');
+
+                // Build Child Nodes for Individual Surfaces/Faces
+                if (meshData.brep_faces && meshData.brep_faces.length > 0) {
+                    meshData.brep_faces.forEach((face, fIdx) => {
+                        let fColorHex = hexColor;
+                        if (face.color) {
+                            fColorHex = '#' + new THREE.Color(face.color[0], face.color[1], face.color[2]).getHexString();
+                        }
+                        const surfaceName = `Surface Face ${fIdx + 1}`;
+                        const faceItem = createTreeNode(surfaceName, 'surface', false, fColorHex);
+                        bodyChildrenContainer.appendChild(faceItem);
+                    });
+                }
+
+                rootChildrenContainer.appendChild(bodyItem);
                 meshCount++;
             });
 
@@ -352,12 +404,86 @@
             // Update UI Stats
             infoName.textContent = fileName;
             infoMeshes.textContent = meshCount;
+            treeCount.textContent = `${meshCount} Bodies`;
             fileInfo.classList.remove('hidden');
             controlsPanel.classList.remove('hidden');
             controlsPanel.classList.add('flex');
 
-            // Adjust Camera View
             fitModelToView();
+        }
+
+        // Helper to construct Tree UI Nodes
+        function createTreeNode(label, type, hasChildren = false, colorHex = null, threeObject = null) {
+            const container = document.createElement('div');
+            container.className = 'tree-node select-none';
+
+            const header = document.createElement('div');
+            header.className = 'flex items-center gap-1.5 px-1.5 py-1 rounded hover:bg-slate-800/80 cursor-pointer text-slate-300 transition-colors group';
+
+            // Toggle arrow for nodes with children
+            const toggle = document.createElement('span');
+            toggle.className = 'w-3 h-3 flex items-center justify-center text-[9px] text-slate-500 group-hover:text-slate-300';
+            if (hasChildren) {
+                toggle.textContent = '▼';
+            }
+            header.appendChild(toggle);
+
+            // Icon by Node Type
+            const icon = document.createElement('span');
+            icon.className = 'text-xs shrink-0';
+            if (type === 'root') {
+                icon.textContent = '📦';
+            } else if (type === 'body') {
+                icon.textContent = '🔷';
+            } else {
+                icon.textContent = '📐';
+            }
+            header.appendChild(icon);
+
+            // Color Swatch indicator if color exists
+            if (colorHex) {
+                const colorDot = document.createElement('span');
+                colorDot.className = 'w-2.5 h-2.5 rounded-full border border-slate-600 shrink-0';
+                colorDot.style.backgroundColor = colorHex;
+                header.appendChild(colorDot);
+            }
+
+            // Node Label
+            const title = document.createElement('span');
+            title.className = 'truncate text-[11px] font-medium flex-1';
+            title.textContent = label;
+            header.appendChild(title);
+
+            // Visibility Eye Toggle Button for Meshes/Bodies
+            if (threeObject) {
+                const visBtn = document.createElement('button');
+                visBtn.className = 'opacity-0 group-hover:opacity-100 text-slate-400 hover:text-sky-400 px-1 text-[10px] transition-opacity';
+                visBtn.textContent = '👁';
+                visBtn.title = 'Toggle Visibility';
+                visBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    threeObject.visible = !threeObject.visible;
+                    visBtn.style.opacity = threeObject.visible ? '1' : '0.4';
+                });
+                header.appendChild(visBtn);
+            }
+
+            container.appendChild(header);
+
+            // Container for Child Items
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'tree-children pl-3 border-l border-slate-800 ml-2 space-y-0.5 mt-0.5';
+            container.appendChild(childrenContainer);
+
+            // Toggle Collapsible behavior
+            if (hasChildren) {
+                header.addEventListener('click', () => {
+                    const isHidden = childrenContainer.classList.toggle('hidden');
+                    toggle.textContent = isHidden ? '▶' : '▼';
+                });
+            }
+
+            return container;
         }
 
         function fitModelToView() {
@@ -367,17 +493,15 @@
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
 
-            // Center Model
             currentModel.position.x = -center.x;
             currentModel.position.y = -center.y;
             currentModel.position.z = -center.z;
 
-            // Adjust Camera Position
             const maxDim = Math.max(size.x, size.y, size.z);
             const fov = camera.fov * (Math.PI / 180);
             let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.8;
 
-            cameraZ = Math.max(cameraZ, 10); // Minimum distance fallback
+            cameraZ = Math.max(cameraZ, 10);
 
             camera.position.set(cameraZ * 0.8, cameraZ * 0.8, cameraZ);
             camera.lookAt(0, 0, 0);
@@ -406,6 +530,7 @@
                 loadingText.textContent = text;
                 loadingOverlay.classList.remove('hidden');
             } else {
+                loadingOverlay.classList.hidden = true;
                 loadingOverlay.classList.add('hidden');
             }
         }
