@@ -530,6 +530,11 @@
             let bin1Magnitude = 0;
             let bin1Frequency = 0;
             let bin1Phase = 0;
+            let bin1Psd = 0;
+            let bin1UnwrappedPhase = 0;
+            let bin1WrappedPhase = 0;
+
+            const peakIndices = new Set();
 
             for (let i = 0; i < halfN; i++) {
                 const freq = (i * sampleRate) / nextPower;
@@ -545,7 +550,9 @@
                 if (gain > 0) mag /= gain;
                 rawMagnitudes.push(mag);
 
-                if (i === 0) dcMagnitude = mag;
+                if (i === 0) {
+                    dcMagnitude = mag;
+                }
                 if (i === 1) {
                     bin1Magnitude = mag;
                     bin1Frequency = freq;
@@ -559,6 +566,23 @@
                 rawPhasesList.push(rawPhases[i]);
             }
 
+            const maxMag = Math.max(...rawMagnitudes);
+            const peakThreshold = maxMag * sensitivity;
+
+            if (isPeaksEnabled) {
+                if (includeDcInPeaks && unitType !== 'period') {
+                    peakIndices.add(0);
+                }
+                if (includeBin1InPeaks && halfN > 1) {
+                    peakIndices.add(1);
+                }
+                for (let i = 1; i < halfN - 1; i++) {
+                    if (rawMagnitudes[i] > rawMagnitudes[i - 1] && rawMagnitudes[i] > rawMagnitudes[i + 1] && rawMagnitudes[i] >= peakThreshold) {
+                        peakIndices.add(i);
+                    }
+                }
+            }
+
             // Filter out DC if unitType === 'period'
             const activeIndices = [];
             for (let i = 0; i < halfN; i++) {
@@ -566,12 +590,11 @@
                 activeIndices.push(i);
             }
 
-            // If period mode, reverse arrays so shortest period is left and max period is right
             if (unitType === 'period') {
                 activeIndices.reverse();
             }
 
-            // Build Table HTML (includes DC if present in raw data)
+            // Build Table HTML
             const tableBody = document.getElementById('spectralTableBody');
             tableBody.innerHTML = '';
             for (let i = 0; i < halfN; i++) {
@@ -590,25 +613,16 @@
             }
             document.getElementById('tableMetaCount').textContent = `${activeIndices.length} components listed`;
 
-            const maxMag = Math.max(...rawMagnitudes);
-            const peakThreshold = maxMag * sensitivity;
-            
             const detectedPeakObjects = [];
-            if (isPeaksEnabled) {
-                if (includeDcInPeaks && unitType !== 'period') {
-                    detectedPeakObjects.push({ freq: 0, mag: dcMagnitude, phase: rawUnwrappedPhases[0] });
-                }
-                if (includeBin1InPeaks && halfN > 1) {
-                    detectedPeakObjects.push({ freq: bin1Frequency, mag: bin1Magnitude, phase: bin1Phase });
-                }
-                for (let i = 1; i < halfN - 1; i++) {
-                    if (rawMagnitudes[i] > rawMagnitudes[i - 1] && rawMagnitudes[i] > rawMagnitudes[i + 1] && rawMagnitudes[i] >= peakThreshold) {
-                        detectedPeakObjects.push({ freq: rawFrequencies[i], mag: rawMagnitudes[i], phase: rawUnwrappedPhases[i] });
-                    }
-                }
-            }
+            peakIndices.forEach(i => {
+                detectedPeakObjects.push({
+                    freq: rawFrequencies[i],
+                    mag: rawMagnitudes[i],
+                    phase: rawUnwrappedPhases[i]
+                });
+            });
 
-            // Build numeric coordinate data points ({x, y}) for continuous linear scale mapping
+            // Build coordinate data points ({x, y})
             const magnitudePoints = activeIndices.map(i => ({
                 x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
                 y: rawMagnitudes[i]
@@ -624,12 +638,32 @@
                 y: rawUnwrappedPhases[i]
             }));
 
-            const peakPoints = [];
+            // Peak coordinate series for each frequency domain chart
+            const fftPeakPoints = [];
+            const psdPeakPoints = [];
+            const phasePeakPoints = [];
+            const polarPeakPoints = [];
+
             if (isPeaksEnabled) {
-                detectedPeakObjects.forEach(peak => {
-                    const xVal = unitType === 'period' ? (peak.freq > 0 ? 1.0 / peak.freq : null) : peak.freq;
-                    if (xVal !== null && (unitType !== 'period' || xVal !== Infinity)) {
-                        peakPoints.push({ x: xVal, y: peak.mag });
+                peakIndices.forEach(i => {
+                    const f = rawFrequencies[i];
+                    const p = rawPeriods[i];
+                    const xVal = unitType === 'period' ? p : f;
+                    
+                    if (unitType !== 'period' || f > 0) {
+                        fftPeakPoints.push({ x: xVal, y: rawMagnitudes[i] });
+                        psdPeakPoints.push({ x: xVal, y: rawPsdValues[i] });
+                        phasePeakPoints.push({ x: xVal, y: rawUnwrappedPhases[i] });
+
+                        const phi = rawPhasesList[i];
+                        polarPeakPoints.push({
+                            x: Math.cos(phi),
+                            y: Math.sin(phi),
+                            freq: f,
+                            period: p,
+                            mag: rawMagnitudes[i],
+                            phase: phi
+                        });
                     }
                 });
             }
@@ -643,7 +677,7 @@
                         if (rawFrequencies[i] === 0) {
                             sum += rawMagnitudes[i];
                         } else {
-                            sum += rawMagnitudes[i] * Math.cos(2 * Math.PI * rawFrequencies[i] + rawUnwrappedPhases[i]); // Note: standard evaluation
+                            sum += rawMagnitudes[i] * Math.cos(2 * Math.PI * rawFrequencies[i] + rawUnwrappedPhases[i]);
                         }
                     }
                 }
@@ -786,13 +820,13 @@
                 }
             });
 
-            // 2. FFT Magnitude Chart (Linear Numeric X-Axis)
+            // 2. FFT Magnitude Chart
             fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
                     datasets: [
                         { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudePoints, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: peakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: fftPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
                         ...(isMagThreshEnabled ? [
                             { label: 'Threshold Cutoff', data: threshLinePoints, borderColor: 'rgba(147, 51, 234, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
                             { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }
@@ -810,12 +844,13 @@
                 }
             });
 
-            // 3. PSD Chart (Linear Numeric X-Axis)
+            // 3. PSD Chart
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
                     datasets: [
-                        { label: 'PSD (V²/Hz)', data: psdPoints, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 1 },
+                        { label: 'PSD (V²/Hz)', data: psdPoints, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: psdPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
                         ...(isMagThreshEnabled ? [{ label: 'Included Components', data: psdThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }] : [])
                     ]
                 },
@@ -829,12 +864,13 @@
                 }
             });
 
-            // 4. Phase Chart (Unwrapped) (Linear Numeric X-Axis)
+            // 4. Phase Chart (Unwrapped)
             phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
                     datasets: [
-                        { label: 'Unwrapped Phase (rad)', data: phasePoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 1 },
+                        { label: 'Unwrapped Phase (rad)', data: phasePoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: phasePeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
                         ...(isMagThreshEnabled ? [{ label: 'Included Components', data: phaseThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(79, 70, 229)', pointRadius: 4, showLine: false, order: 0 }] : [])
                     ]
                 },
@@ -861,7 +897,7 @@
                             borderDash: [4, 4],
                             showLine: true,
                             pointRadius: 0,
-                            order: 3
+                            order: 4
                         },
                         {
                             label: 'Phase Components',
@@ -870,8 +906,17 @@
                             backgroundColor: 'rgb(37, 99, 235)',
                             pointRadius: 4,
                             pointHoverRadius: 6,
-                            order: 2
+                            order: 3
                         },
+                        ...(isPeaksEnabled ? [{
+                            label: 'Detected Peaks',
+                            data: polarPeakPoints,
+                            borderColor: 'transparent',
+                            backgroundColor: 'rgb(255, 193, 7)',
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            order: 2
+                        }] : []),
                         ...(isMagThreshEnabled ? [{
                             label: 'Included Components',
                             data: polarThreshPoints,
@@ -911,7 +956,9 @@
                                     if (context.datasetIndex === 0) return null;
                                     const pt = context.raw;
                                     if (!pt) return null;
-                                    const labelPrefix = context.dataset.label === 'Included Components' ? ' [Threshold Match]' : '';
+                                    let labelPrefix = '';
+                                    if (context.dataset.label === 'Detected Peaks') labelPrefix = ' [Peak Match]';
+                                    if (context.dataset.label === 'Included Components') labelPrefix = ' [Threshold Match]';
                                     const pStr = pt.period === Infinity ? 'Infinite' : pt.period.toFixed(3) + ' s';
                                     return [
                                         ` Freq: ${pt.freq.toFixed(2)} Hz (Period: ${pStr})${labelPrefix}`,
