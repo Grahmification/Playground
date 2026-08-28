@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D G-Code Toolpath Viewer</title>
+    <title>3D G-Code Toolpath Viewer with Feedrate Heatmap</title>
     <style>
         * {
             box-sizing: border-box;
@@ -36,6 +36,33 @@
             color: #ffffff;
             border-bottom: 1px solid #3c3c3c;
             padding-bottom: 8px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .control-group label {
+            font-size: 0.85rem;
+            color: #aaaaaa;
+        }
+
+        select {
+            width: 100%;
+            padding: 8px;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            outline: none;
+            cursor: pointer;
+        }
+
+        select:focus {
+            border-color: #0e639c;
         }
 
         .file-input-wrapper {
@@ -92,6 +119,10 @@
             flex-direction: column;
             gap: 6px;
             font-size: 0.85rem;
+            background-color: #1e1e1e;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #3c3c3c;
         }
 
         .legend-item {
@@ -104,6 +135,13 @@
             width: 12px;
             height: 12px;
             border-radius: 2px;
+        }
+
+        .heatmap-bar {
+            height: 12px;
+            border-radius: 2px;
+            background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
+            width: 100%;
         }
 
         #viewport {
@@ -143,24 +181,23 @@
             <input type="file" id="gcode-file" accept=".gcode,.nc,.cnc,.tap,.txt">
         </div>
 
-        <div class="legend">
-            <div class="legend-item">
-                <div class="color-box" style="background-color: #ff2a2a;"></div>
-                <span>Rapid Move (G0)</span>
-            </div>
-            <div class="legend-item">
-                <div class="color-box" style="background-color: #0088ff;"></div>
-                <span>Linear Cutting (G1)</span>
-            </div>
-            <div class="legend-item">
-                <div class="color-box" style="background-color: #00ff88;"></div>
-                <span>Arc Cutting (G2 / G3)</span>
-            </div>
+        <div class="control-group">
+            <label for="color-mode">Color Mode</label>
+            <select id="color-mode">
+                <option value="type">Motion Type (G0/G1/G2/G3)</option>
+                <option value="feedrate">Feed Rate Heatmap</option>
+            </select>
+        </div>
+
+        <div id="legend-container">
+            <!-- Dynamic legend injected here -->
         </div>
 
         <div class="stats-panel">
             <div class="stats-row"><span>Status:</span> <span id="status" class="stats-value">Idle</span></div>
             <div class="stats-row"><span>Commands:</span> <span id="line-count" class="stats-value">0</span></div>
+            <div class="stats-row"><span>Min Feed:</span> <span id="feed-min" class="stats-value">0 mm/min</span></div>
+            <div class="stats-row"><span>Max Feed:</span> <span id="feed-max" class="stats-value">0 mm/min</span></div>
             <div class="stats-row"><span>X Size:</span> <span id="dim-x" class="stats-value">0.00 mm</span></div>
             <div class="stats-row"><span>Y Size:</span> <span id="dim-y" class="stats-value">0.00 mm</span></div>
             <div class="stats-row"><span>Z Size:</span> <span id="dim-z" class="stats-value">0.00 mm</span></div>
@@ -195,11 +232,17 @@
         scene.add(ambientLight);
 
         const gridHelper = new THREE.GridHelper(200, 50, 0x444444, 0x222222);
-        gridHelper.rotation.x = Math.PI / 2; // Orient grid along X/Y plane for standard CNC setup
+        gridHelper.rotation.x = Math.PI / 2; // Orient grid along X/Y plane for CNC
         scene.add(gridHelper);
 
         let toolpathGroup = new THREE.Group();
         scene.add(toolpathGroup);
+
+        // --- Data State ---
+        let parsedSegments = [];
+        let minFeed = Infinity;
+        let maxFeed = -Infinity;
+        let bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
 
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
@@ -214,7 +257,12 @@
         }
         animate();
 
-        // --- G-Code Parser ---
+        // --- UI Listeners ---
+        document.getElementById('color-mode').addEventListener('change', () => {
+            renderToolpath();
+            updateLegend();
+        });
+
         document.getElementById('gcode-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -224,34 +272,31 @@
 
             const reader = new FileReader();
             reader.onload = function(evt) {
-                parseAndRenderGCode(evt.target.result);
+                parseGCode(evt.target.result);
+                renderToolpath();
+                updateLegend();
+                fitCameraToBounds();
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('status').innerText = 'Loaded';
             };
             reader.readAsText(file);
         });
 
-        function parseAndRenderGCode(text) {
-            // Clear prior mesh data
-            while (toolpathGroup.children.length > 0) {
-                const child = toolpathGroup.children[0];
-                child.geometry.dispose();
-                child.material.dispose();
-                toolpathGroup.remove(child);
-            }
+        // --- G-Code Parser ---
+        function parseGCode(text) {
+            parsedSegments = [];
+            minFeed = Infinity;
+            maxFeed = -Infinity;
 
             const lines = text.split('\n');
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
 
             let currentPos = { x: 0, y: 0, z: 0 };
             let relativeMode = false;
-            let currentMotion = null; // G0, G1, G2, G3
+            let currentMotion = 'G0';
+            let currentFeed = 0;
 
-            const rapidPositions = [];
-            const linearPositions = [];
-            const arcPositions = [];
-
-            let bounds = {
+            bounds = {
                 minX: Infinity, maxX: -Infinity,
                 minY: Infinity, maxY: -Infinity,
                 minZ: Infinity, maxZ: -Infinity
@@ -267,14 +312,12 @@
             }
 
             lines.forEach(line => {
-                // Strip comments
                 line = line.replace(/\(.*?\)/g, '').replace(/;.*/, '').trim().toUpperCase();
                 if (!line) return;
 
                 const tokens = line.split(/\s+/);
-
                 let target = { ...currentPos };
-                let arcIJ = { i: 0, j: 0, r: 0 };
+                let arcIJ = { i: 0, j: 0 };
                 let hasMove = false;
 
                 tokens.forEach(token => {
@@ -288,6 +331,8 @@
                         else if (val === 3) currentMotion = 'G3';
                         else if (val === 90) relativeMode = false;
                         else if (val === 91) relativeMode = true;
+                    } else if (cmd === 'F') {
+                        currentFeed = val;
                     } else if (cmd === 'X') {
                         target.x = relativeMode ? currentPos.x + val : val;
                         hasMove = true;
@@ -299,22 +344,29 @@
                         hasMove = true;
                     } else if (cmd === 'I') arcIJ.i = val;
                     else if (cmd === 'J') arcIJ.j = val;
-                    else if (cmd === 'R') arcIJ.r = val;
                 });
 
                 if (hasMove || currentMotion === 'G2' || currentMotion === 'G3') {
                     const start = [currentPos.x, currentPos.y, currentPos.z];
 
+                    if (currentMotion !== 'G0' && currentFeed > 0) {
+                        minFeed = Math.min(minFeed, currentFeed);
+                        maxFeed = Math.max(maxFeed, currentFeed);
+                    }
+
                     if (currentMotion === 'G0' || currentMotion === 'G1') {
                         const targetPos = [target.x, target.y, target.z];
-                        const buffer = currentMotion === 'G0' ? rapidPositions : linearPositions;
-                        buffer.push(...start, ...targetPos);
+                        parsedSegments.push({
+                            start,
+                            end: targetPos,
+                            motion: currentMotion,
+                            feedrate: currentFeed
+                        });
 
                         updateBounds(start[0], start[1], start[2]);
                         updateBounds(targetPos[0], targetPos[1], targetPos[2]);
                     } 
                     else if (currentMotion === 'G2' || currentMotion === 'G3') {
-                        // Generate Arc Segments
                         const isCW = currentMotion === 'G2';
                         let centerX = currentPos.x + arcIJ.i;
                         let centerY = currentPos.y + arcIJ.j;
@@ -338,7 +390,13 @@
                                 interpolatedZ
                             ];
 
-                            arcPositions.push(...prevPt, ...nextPt);
+                            parsedSegments.push({
+                                start: prevPt,
+                                end: nextPt,
+                                motion: currentMotion,
+                                feedrate: currentFeed
+                            });
+
                             updateBounds(nextPt[0], nextPt[1], nextPt[2]);
                             prevPt = nextPt;
                         }
@@ -348,21 +406,130 @@
                 }
             });
 
-            // --- Build Geometries ---
-            function createLineMesh(positions, color) {
-                if (positions.length === 0) return;
+            // Update stats panel
+            document.getElementById('feed-min').innerText = minFeed === Infinity ? '0 mm/min' : `${minFeed} mm/min`;
+            document.getElementById('feed-max').innerText = maxFeed === -Infinity ? '0 mm/min' : `${maxFeed} mm/min`;
+        }
+
+        // --- Render Toolpath ---
+        function renderToolpath() {
+            // Clear prior meshes
+            while (toolpathGroup.children.length > 0) {
+                const child = toolpathGroup.children[0];
+                child.geometry.dispose();
+                child.material.dispose();
+                toolpathGroup.remove(child);
+            }
+
+            if (parsedSegments.length === 0) return;
+
+            const colorMode = document.getElementById('color-mode').value;
+
+            if (colorMode === 'type') {
+                const rapidPositions = [];
+                const linearPositions = [];
+                const arcPositions = [];
+
+                parsedSegments.forEach(seg => {
+                    const pts = [...seg.start, ...seg.end];
+                    if (seg.motion === 'G0') rapidPositions.push(...pts);
+                    else if (seg.motion === 'G1') linearPositions.push(...pts);
+                    else if (seg.motion === 'G2' || seg.motion === 'G3') arcPositions.push(...pts);
+                });
+
+                createLineMesh(rapidPositions, 0xff2a2a);   // Red
+                createLineMesh(linearPositions, 0x0088ff);  // Blue
+                createLineMesh(arcPositions, 0x00ff88);     // Green
+            } 
+            else if (colorMode === 'feedrate') {
+                const positions = [];
+                const colors = [];
+                const c = new THREE.Color();
+
+                const validMinFeed = minFeed === Infinity ? 0 : minFeed;
+                const validMaxFeed = maxFeed === -Infinity ? 1 : maxFeed;
+                const feedRange = Math.max(validMaxFeed - validMinFeed, 1);
+
+                parsedSegments.forEach(seg => {
+                    positions.push(...seg.start, ...seg.end);
+
+                    if (seg.motion === 'G0') {
+                        // Rapid moves get a distinct neutral gray color
+                        c.setHex(0x555555);
+                    } else {
+                        // Map feedrate onto spectral rainbow: Blue (Slow) -> Red (Fast)
+                        const t = Math.min(Math.max((seg.feedrate - validMinFeed) / feedRange, 0), 1);
+                        const hue = (1 - t) * 0.666; // 0.666 is Blue, 0.0 is Red in HSL
+                        c.setHSL(hue, 1.0, 0.5);
+                    }
+
+                    colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+                });
+
                 const geometry = new THREE.BufferGeometry();
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-                const material = new THREE.LineBasicMaterial({ color: color, linewidth: 1 });
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+                const material = new THREE.LineBasicMaterial({
+                    vertexColors: true,
+                    linewidth: 1
+                });
+
                 const lineSegments = new THREE.LineSegments(geometry, material);
                 toolpathGroup.add(lineSegments);
             }
+        }
 
-            createLineMesh(rapidPositions, 0xff2a2a);   // Red
-            createLineMesh(linearPositions, 0x0088ff);  // Blue
-            createLineMesh(arcPositions, 0x00ff88);     // Green
+        function createLineMesh(positions, color) {
+            if (positions.length === 0) return;
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            const material = new THREE.LineBasicMaterial({ color: color, linewidth: 1 });
+            const lineSegments = new THREE.LineSegments(geometry, material);
+            toolpathGroup.add(lineSegments);
+        }
 
-            // --- Camera Fit & Dashboard Metrics Update ---
+        function updateLegend() {
+            const container = document.getElementById('legend-container');
+            const colorMode = document.getElementById('color-mode').value;
+
+            if (colorMode === 'type') {
+                container.innerHTML = `
+                    <div class="legend">
+                        <div class="legend-item">
+                            <div class="color-box" style="background-color: #ff2a2a;"></div>
+                            <span>Rapid Move (G0)</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="color-box" style="background-color: #0088ff;"></div>
+                            <span>Linear Cutting (G1)</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="color-box" style="background-color: #00ff88;"></div>
+                            <span>Arc Cutting (G2 / G3)</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                const displayMin = minFeed === Infinity ? 0 : minFeed;
+                const displayMax = maxFeed === -Infinity ? 0 : maxFeed;
+                container.innerHTML = `
+                    <div class="legend">
+                        <div class="legend-item" style="justify-content: space-between; font-weight: 500;">
+                            <span>Slow (${displayMin})</span>
+                            <span>Fast (${displayMax})</span>
+                        </div>
+                        <div class="heatmap-bar"></div>
+                        <div class="legend-item" style="margin-top: 4px;">
+                            <div class="color-box" style="background-color: #555555;"></div>
+                            <span>Rapid (G0)</span>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function fitCameraToBounds() {
             if (bounds.minX !== Infinity) {
                 const sizeX = bounds.maxX - bounds.minX;
                 const sizeY = bounds.maxY - bounds.minY;
@@ -378,12 +545,14 @@
 
                 const maxDim = Math.max(sizeX, sizeY, sizeZ);
                 
-                // Recenter scene orbit controls target to path center
                 controls.target.set(centerX, centerY, centerZ);
                 camera.position.set(centerX + maxDim, centerY - maxDim, centerZ + maxDim);
                 controls.update();
             }
         }
+
+        // Initialize empty legend
+        updateLegend();
     </script>
 </body>
 </html>
