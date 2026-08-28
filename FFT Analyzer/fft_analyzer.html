@@ -1307,7 +1307,7 @@
                 }
             });
 
-            // 3. PSD Chart
+            // 3. PSD Chart with Scientific Notation Y-Axis
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
@@ -1322,7 +1322,22 @@
                     maintainAspectRatio: false, 
                     scales: { 
                         x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
-                        y: { type: 'logarithmic', title: { display: true, text: 'PSD (V²/Hz) [Log]' } } 
+                        y: { 
+                            type: 'logarithmic', 
+                            title: { display: true, text: 'PSD (V²/Hz) [Log]' },
+                            ticks: {
+                                callback: function(value) {
+                                    // Format tick values into standard scientific notation (e.g. 1e-3 -> 1e-3 or similar)
+                                    if (value === 0) return '0';
+                                    const exp = Math.floor(Math.log10(value));
+                                    const mantissa = value / Math.pow(10, exp);
+                                    if (mantissa === 1) {
+                                        return `1e${exp}`;
+                                    }
+                                    return `${mantissa.toFixed(1)}e${exp}`;
+                                }
+                            }
+                        } 
                     } 
                 }
             });
