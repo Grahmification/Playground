@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D G-Code Toolpath Viewer with Feedrate Heatmap</title>
+    <title>3D G-Code Toolpath Viewer & Simulator</title>
     <style>
         * {
             box-sizing: border-box;
@@ -27,8 +27,9 @@
             display: flex;
             flex-direction: column;
             padding: 16px;
-            gap: 16px;
+            gap: 14px;
             z-index: 10;
+            overflow-y: auto;
         }
 
         h1 {
@@ -49,16 +50,15 @@
             color: #aaaaaa;
         }
 
-        select {
+        select, input[type="range"] {
             width: 100%;
-            padding: 8px;
+            padding: 6px;
             background-color: #1e1e1e;
             color: #e0e0e0;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
             font-size: 0.9rem;
             outline: none;
-            cursor: pointer;
         }
 
         select:focus {
@@ -93,7 +93,22 @@
             background-color: #1177bb;
         }
 
-        .stats-panel {
+        .btn-secondary {
+            background-color: #3c3c3c;
+            padding: 8px;
+            font-size: 0.85rem;
+        }
+
+        .btn-secondary:hover {
+            background-color: #505050;
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .panel {
             background-color: #1e1e1e;
             border-radius: 4px;
             padding: 12px;
@@ -102,6 +117,14 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+        }
+
+        .panel-title {
+            font-weight: 600;
+            color: #ffffff;
+            border-bottom: 1px solid #2a2a2a;
+            padding-bottom: 4px;
+            margin-bottom: 2px;
         }
 
         .stats-row {
@@ -189,11 +212,35 @@
             </select>
         </div>
 
-        <div id="legend-container">
-            <!-- Dynamic legend injected here -->
+        <div id="legend-container"></div>
+
+        <!-- Simulation Controls -->
+        <div class="panel">
+            <div class="panel-title">Simulation Controls</div>
+            <div class="btn-row">
+                <button id="btn-play" class="btn btn-secondary">Play</button>
+                <button id="btn-reset" class="btn btn-secondary">Reset</button>
+            </div>
+            <div class="control-group">
+                <label for="sim-speed">Simulation Speed</label>
+                <select id="sim-speed">
+                    <option value="0.5">0.5x Speed</option>
+                    <option value="1" selected>1x Real-time</option>
+                    <option value="5">5x Speed</option>
+                    <option value="10">10x Speed</option>
+                    <option value="50">50x Speed</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="sim-progress">Progress</label>
+                <input type="range" id="sim-progress" min="0" max="100" value="0" step="0.1">
+            </div>
+            <div class="stats-row"><span>Current Feed:</span> <span id="sim-feed" class="stats-value">0 mm/min</span></div>
+            <div class="stats-row"><span>Tool Pos:</span> <span id="sim-pos" class="stats-value">X0 Y0 Z0</span></div>
         </div>
 
-        <div class="stats-panel">
+        <div class="panel">
+            <div class="panel-title">File Information</div>
             <div class="stats-row"><span>Status:</span> <span id="status" class="stats-value">Idle</span></div>
             <div class="stats-row"><span>Commands:</span> <span id="line-count" class="stats-value">0</span></div>
             <div class="stats-row"><span>Min Feed:</span> <span id="feed-min" class="stats-value">0 mm/min</span></div>
@@ -238,11 +285,24 @@
         let toolpathGroup = new THREE.Group();
         scene.add(toolpathGroup);
 
-        // --- Data State ---
+        // --- Tool Mesh setup ---
+        const toolGeometry = new THREE.SphereGeometry(1.5, 16, 16);
+        const toolMaterial = new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: false });
+        const toolMesh = new THREE.Mesh(toolGeometry, toolMaterial);
+        toolMesh.visible = false;
+        scene.add(toolMesh);
+
+        // --- Data & Simulation State ---
         let parsedSegments = [];
         let minFeed = Infinity;
         let maxFeed = -Infinity;
         let bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+
+        let totalPathLength = 0;
+        let isSimulating = false;
+        let currentDistance = 0;
+        let lastTimestamp = null;
+        const DEFAULT_RAPID_FEED = 5000; // mm/min default for G0 moves if undefined
 
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
@@ -250,8 +310,18 @@
             renderer.setSize(container.clientWidth, container.clientHeight);
         });
 
-        function animate() {
+        // Main Animation Loop
+        function animate(timestamp) {
             requestAnimationFrame(animate);
+
+            if (isSimulating && parsedSegments.length > 0) {
+                if (!lastTimestamp) lastTimestamp = timestamp;
+                const deltaSeconds = (timestamp - lastTimestamp) / 1000;
+                lastTimestamp = timestamp;
+
+                updateSimulationStep(deltaSeconds);
+            }
+
             controls.update();
             renderer.render(scene, camera);
         }
@@ -276,10 +346,31 @@
                 renderToolpath();
                 updateLegend();
                 fitCameraToBounds();
+                resetSimulation();
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('status').innerText = 'Loaded';
             };
             reader.readAsText(file);
+        });
+
+        const btnPlay = document.getElementById('btn-play');
+        const btnReset = document.getElementById('btn-reset');
+        const progressSlider = document.getElementById('sim-progress');
+
+        btnPlay.addEventListener('click', () => {
+            if (parsedSegments.length === 0) return;
+            isSimulating = !isSimulating;
+            btnPlay.innerText = isSimulating ? 'Pause' : 'Play';
+            lastTimestamp = null;
+        });
+
+        btnReset.addEventListener('click', resetSimulation);
+
+        progressSlider.addEventListener('input', (e) => {
+            if (parsedSegments.length === 0) return;
+            const targetPct = parseFloat(e.target.value) / 100;
+            currentDistance = targetPct * totalPathLength;
+            updateToolPositionByDistance(currentDistance);
         });
 
         // --- G-Code Parser ---
@@ -287,6 +378,7 @@
             parsedSegments = [];
             minFeed = Infinity;
             maxFeed = -Infinity;
+            totalPathLength = 0;
 
             const lines = text.split('\n');
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
@@ -356,12 +448,23 @@
 
                     if (currentMotion === 'G0' || currentMotion === 'G1') {
                         const targetPos = [target.x, target.y, target.z];
-                        parsedSegments.push({
-                            start,
-                            end: targetPos,
-                            motion: currentMotion,
-                            feedrate: currentFeed
-                        });
+                        const segDist = Math.hypot(
+                            targetPos[0] - start[0],
+                            targetPos[1] - start[1],
+                            targetPos[2] - start[2]
+                        );
+
+                        if (segDist > 0) {
+                            parsedSegments.push({
+                                start,
+                                end: targetPos,
+                                motion: currentMotion,
+                                feedrate: currentFeed,
+                                length: segDist,
+                                startDist: totalPathLength
+                            });
+                            totalPathLength += segDist;
+                        }
 
                         updateBounds(start[0], start[1], start[2]);
                         updateBounds(targetPos[0], targetPos[1], targetPos[2]);
@@ -390,12 +493,23 @@
                                 interpolatedZ
                             ];
 
-                            parsedSegments.push({
-                                start: prevPt,
-                                end: nextPt,
-                                motion: currentMotion,
-                                feedrate: currentFeed
-                            });
+                            const segDist = Math.hypot(
+                                nextPt[0] - prevPt[0],
+                                nextPt[1] - prevPt[1],
+                                nextPt[2] - prevPt[2]
+                            );
+
+                            if (segDist > 0) {
+                                parsedSegments.push({
+                                    start: prevPt,
+                                    end: nextPt,
+                                    motion: currentMotion,
+                                    feedrate: currentFeed,
+                                    length: segDist,
+                                    startDist: totalPathLength
+                                });
+                                totalPathLength += segDist;
+                            }
 
                             updateBounds(nextPt[0], nextPt[1], nextPt[2]);
                             prevPt = nextPt;
@@ -406,14 +520,95 @@
                 }
             });
 
-            // Update stats panel
+            // Dynamic sphere tool size based on part size
+            const maxDim = Math.max(
+                bounds.maxX - bounds.minX,
+                bounds.maxY - bounds.minY,
+                bounds.maxZ - bounds.minZ
+            );
+            const radius = Math.max(maxDim * 0.012, 0.5);
+            toolMesh.geometry.dispose();
+            toolMesh.geometry = new THREE.SphereGeometry(radius, 16, 16);
+
             document.getElementById('feed-min').innerText = minFeed === Infinity ? '0 mm/min' : `${minFeed} mm/min`;
             document.getElementById('feed-max').innerText = maxFeed === -Infinity ? '0 mm/min' : `${maxFeed} mm/min`;
         }
 
-        // --- Render Toolpath ---
+        // --- Simulation Execution ---
+        function updateSimulationStep(deltaSeconds) {
+            const currentSeg = getCurrentSegment(currentDistance);
+            if (!currentSeg) {
+                isSimulating = false;
+                btnPlay.innerText = 'Play';
+                return;
+            }
+
+            let effectiveFeed = currentSeg.feedrate;
+            if (currentSeg.motion === 'G0' || effectiveFeed <= 0) {
+                effectiveFeed = maxFeed > 0 ? maxFeed * 1.5 : DEFAULT_RAPID_FEED;
+            }
+
+            const speedMultiplier = parseFloat(document.getElementById('sim-speed').value);
+            // Feed rate is given in mm/min -> divide by 60 for mm/sec
+            const mmPerSec = (effectiveFeed / 60) * speedMultiplier;
+            currentDistance += mmPerSec * deltaSeconds;
+
+            if (currentDistance >= totalPathLength) {
+                currentDistance = totalPathLength;
+                isSimulating = false;
+                btnPlay.innerText = 'Play';
+            }
+
+            updateToolPositionByDistance(currentDistance);
+        }
+
+        function getCurrentSegment(dist) {
+            if (parsedSegments.length === 0) return null;
+            for (let i = 0; i < parsedSegments.length; i++) {
+                const seg = parsedSegments[i];
+                if (dist >= seg.startDist && dist <= seg.startDist + seg.length) {
+                    return seg;
+                }
+            }
+            return parsedSegments[parsedSegments.length - 1];
+        }
+
+        function updateToolPositionByDistance(dist) {
+            if (parsedSegments.length === 0) return;
+
+            const seg = getCurrentSegment(dist);
+            const segProgress = (dist - seg.startDist) / seg.length;
+            const t = Math.min(Math.max(segProgress, 0), 1);
+
+            const posX = seg.start[0] + t * (seg.end[0] - seg.start[0]);
+            const posY = seg.start[1] + t * (seg.end[1] - seg.start[1]);
+            const posZ = seg.start[2] + t * (seg.end[2] - seg.start[2]);
+
+            toolMesh.position.set(posX, posY, posZ);
+            toolMesh.visible = true;
+
+            // Update UI Metrics
+            const pct = (dist / totalPathLength) * 100;
+            progressSlider.value = pct.toFixed(1);
+
+            const activeFeed = seg.motion === 'G0' ? 'RAPID' : `${seg.feedrate} mm/min`;
+            document.getElementById('sim-feed').innerText = activeFeed;
+            document.getElementById('sim-pos').innerText = `X${posX.toFixed(1)} Y${posY.toFixed(1)} Z${posZ.toFixed(1)}`;
+        }
+
+        function resetSimulation() {
+            isSimulating = false;
+            btnPlay.innerText = 'Play';
+            currentDistance = 0;
+            if (parsedSegments.length > 0) {
+                updateToolPositionByDistance(0);
+            } else {
+                toolMesh.visible = false;
+            }
+        }
+
+        // --- Render Toolpath Mesh ---
         function renderToolpath() {
-            // Clear prior meshes
             while (toolpathGroup.children.length > 0) {
                 const child = toolpathGroup.children[0];
                 child.geometry.dispose();
@@ -454,12 +649,10 @@
                     positions.push(...seg.start, ...seg.end);
 
                     if (seg.motion === 'G0') {
-                        // Rapid moves get a distinct neutral gray color
                         c.setHex(0x555555);
                     } else {
-                        // Map feedrate onto spectral rainbow: Blue (Slow) -> Red (Fast)
                         const t = Math.min(Math.max((seg.feedrate - validMinFeed) / feedRange, 0), 1);
-                        const hue = (1 - t) * 0.666; // 0.666 is Blue, 0.0 is Red in HSL
+                        const hue = (1 - t) * 0.666;
                         c.setHSL(hue, 1.0, 0.5);
                     }
 
@@ -470,11 +663,7 @@
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
                 geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
-                const material = new THREE.LineBasicMaterial({
-                    vertexColors: true,
-                    linewidth: 1
-                });
-
+                const material = new THREE.LineBasicMaterial({ vertexColors: true, linewidth: 1 });
                 const lineSegments = new THREE.LineSegments(geometry, material);
                 toolpathGroup.add(lineSegments);
             }
@@ -551,7 +740,7 @@
             }
         }
 
-        // Initialize empty legend
+        // Initialize Legend
         updateLegend();
     </script>
 </body>
