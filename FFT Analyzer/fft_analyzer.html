@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FFT Analysis Tool</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Chart.js for plotting -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- DSP.js for FFT calculation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dsp.js/1.0.0/dsp.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-md p-8">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">CSV FFT Analyzer</h1>
+        <p class="text-gray-600 mb-6">Upload a CSV file containing time-series data. The first column will be treated as values, and an FFT will be automatically calculated and plotted.</p>
+
+        <!-- File Upload -->
+        <div class="mb-6">
+            <label class="block mb-2 text-sm font-medium text-gray-700" for="csvFile">Select CSV File</label>
+            <input class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2 focus:outline-none" id="csvFile" type="file" accept=".csv">
+        </div>
+
+        <!-- Charts Container -->
+        <div class="space-y-8">
+            <div>
+                <h3 class="text-lg font-semibold text-gray-700 mb-2">Time Domain (Raw Data)</h3>
+                <div class="h-64 relative">
+                    <canvas id="timeChart"></canvas>
+                </div>
+            </div>
+
+            <div>
+                <h3 class="text-lg font-semibold text-gray-700 mb-2">Frequency Domain (FFT Magnitude)</h3>
+                <div class="h-64 relative">
+                    <canvas id="fftChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let timeChart = null;
+        let fftChart = null;
+
+        document.getElementById('csvFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            Papa.parse(file, {
+                header: false,
+                dynamicTyping: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                    // Extract the first column of numeric data
+                    const rawData = results.data
+                        .map(row => parseFloat(row[0]))
+                        .filter(val => !isNaN(val));
+
+                    if (rawData.length === 0) {
+                        alert('No valid numeric data found in the first column of the CSV.');
+                        return;
+                    }
+
+                    processAndPlot(rawData);
+                }
+            });
+        });
+
+        function processAndPlot(data) {
+            // Ensure data length is a power of 2 for standard FFT (pad with zeros if needed)
+            const n = Math.pow(2, Math.floor(Math.log2(data.length)));
+            const truncatedData = data.slice(0, n);
+
+            // Perform FFT using dsp.js (FFT size must be power of 2)
+            const fft = new FFT(n, 44100); // Assuming 44.1kHz sample rate as a placeholder
+            fft.forward(truncatedData);
+            const spectrum = fft.spectrum;
+
+            // Prepare labels for frequency domain (up to Nyquist frequency)
+            const frequencies = Array.from({ length: spectrum.length }, (_, i) => (i * (44100 / 2)) / spectrum.length);
+
+            // Plot Time Domain
+            const timeCtx = document.getElementById('timeChart').getContext('2d');
+            if (timeChart) timeChart.destroy();
+            timeChart = new Chart(timeCtx, {
+                type: 'line',
+                data: {
+                    labels: truncatedData.map((_, i) => i),
+                    datasets: [{
+                        label: 'Amplitude',
+                        data: truncatedData,
+                        borderColor: 'rgb(59, 130, 246)',
+                        borderWidth: 1.5,
+                        pointRadius: 0
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+
+            // Plot Frequency Domain
+            const fftCtx = document.getElementById('fftChart').getContext('2d');
+            if (fftChart) fftChart.destroy();
+            fftChart = new Chart(fftCtx, {
+                type: 'line',
+                data: {
+                    labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
+                    datasets: [{
+                        label: 'Magnitude',
+                        data: spectrum,
+                        borderColor: 'rgb(239, 68, 68)',
+                        borderWidth: 1.5,
+                        pointRadius: 0
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
+    </script>
+</body>
+</html>
