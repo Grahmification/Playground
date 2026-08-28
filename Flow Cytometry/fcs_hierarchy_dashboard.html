@@ -1,0 +1,1805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FlowJo v10 Web Workspace & Gating Hierarchy</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- FontAwesome for FlowJo-like icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* FlowJo Classic Gray Palette with modern touches */
+        :root {
+            --fj-bg: #f3f4f6;
+            --fj-panel-border: #d1d5db;
+            --fj-header-bg: #e5e7eb;
+            --fj-accent: #2563eb;
+            --fj-text-primary: #1f2937;
+            --fj-text-secondary: #4b5563;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--fj-bg);
+            color: var(--fj-text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* Styling the scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* FlowJo gating tree line connections */
+        .tree-node-wrapper::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: -12px;
+            width: 1px;
+            background-color: #cbd5e1;
+        }
+        .tree-node-wrapper:last-child::before {
+            height: 12px;
+        }
+        .tree-node-wrapper::after {
+            content: '';
+            position: absolute;
+            top: 12px;
+            left: -12px;
+            width: 10px;
+            height: 1px;
+            background-color: #cbd5e1;
+        }
+
+        /* Brush custom outline styling */
+        .brush .selection {
+            fill: #3b82f6;
+            fill-opacity: 0.15;
+            stroke: #2563eb;
+            stroke-width: 1.5px;
+            stroke-dasharray: 3 3;
+        }
+
+        /* Tree selected node highlight */
+        .tree-node-selected {
+            background-color: #dbeafe !important;
+            border-color: #93c5fd !important;
+        }
+
+        /* Ribbons & tabs */
+        .fj-tab-active {
+            background-color: white;
+            border-bottom: 2px solid var(--fj-accent);
+            color: var(--fj-accent);
+            font-weight: 600;
+        }
+
+        /* Fallback hidden utility */
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body class="flex flex-col">
+
+    <!-- Top Ribbon / Toolbar (FlowJo Style) -->
+    <header class="bg-gray-200 border-b border-gray-300 flex flex-col shrink-0">
+        <!-- Application Title Bar -->
+        <div class="px-4 py-1.5 flex justify-between items-center bg-slate-800 text-white text-xs">
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-circle-nodes text-blue-400 text-sm"></i>
+                <span class="font-bold tracking-wide">FlowJo™ v10 Web Workspace Viewer</span>
+                <span class="text-slate-400">|</span>
+                <span class="text-slate-300 font-mono text-[10px]" id="loaded-file-name">No file loaded</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <span id="event-counter" class="text-blue-300 font-semibold bg-slate-700 px-2 py-0.5 rounded text-[10px]">0 / 0 Events</span>
+                <span class="text-slate-400">Version 10.8.1 (Web Edition)</span>
+            </div>
+        </div>
+
+        <!-- Ribbon Menu Tabs -->
+        <div class="flex items-center justify-between px-2 bg-gray-100 border-b border-gray-300 text-xs select-none">
+            <div class="flex">
+                <button class="px-4 py-2 border-r border-gray-200 hover:bg-gray-200 transition-colors fj-tab-active">Workspace</button>
+                <button class="px-4 py-2 border-r border-gray-200 text-gray-500 hover:bg-gray-200 transition-colors">Gating</button>
+                <button class="px-4 py-2 border-r border-gray-200 text-gray-500 hover:bg-gray-200 transition-colors">Tools</button>
+                <button class="px-4 py-2 text-gray-500 hover:bg-gray-200 transition-colors">Help</button>
+            </div>
+        </div>
+
+        <!-- Toolbar Buttons Band -->
+        <div class="p-2 flex gap-2 items-center bg-gray-50 text-xs border-b border-gray-300 shadow-sm overflow-x-auto select-none">
+            <!-- File actions -->
+            <div class="flex flex-col items-center px-2 border-r border-gray-300">
+                <div class="flex gap-1.5 mb-1">
+                    <label class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1 rounded font-medium shadow-sm flex items-center gap-1.5">
+                        <i class="fa-solid fa-folder-open"></i>
+                        <span>Load Local FCS</span>
+                        <input type="file" id="fcs-file-input" class="hidden" accept=".fcs">
+                    </label>
+                    <button onclick="tryFetchWorkspaceFile()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-2.5 py-1 rounded border border-gray-300 font-medium flex items-center gap-1.5">
+                        <i class="fa-solid fa-cloud-arrow-down"></i>
+                        <span>Auto-Load JB_12102018</span>
+                    </button>
+                </div>
+                <span class="text-[9px] text-gray-400 font-semibold tracking-wider uppercase">FCS Import</span>
+            </div>
+
+            <!-- Gate actions -->
+            <div class="flex flex-col items-center px-2 border-r border-gray-300" id="gate-toolbar-group">
+                <div class="flex gap-1 mb-1">
+                    <button onclick="createNewGatePrompt()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded font-medium shadow-sm flex items-center gap-1">
+                        <i class="fa-solid fa-plus-circle"></i>
+                        <span>Add Gate</span>
+                    </button>
+                    <button onclick="deleteSelectedGate()" class="bg-rose-600 hover:bg-rose-700 text-white px-2 py-1 rounded font-medium shadow-sm flex items-center gap-1">
+                        <i class="fa-solid fa-trash-can"></i>
+                        <span>Delete Gate</span>
+                    </button>
+                    <button onclick="resetDefaultGates()" class="bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 rounded font-medium shadow-sm flex items-center gap-1">
+                        <i class="fa-solid fa-rotate-left"></i>
+                        <span>Reset Gates</span>
+                    </button>
+                </div>
+                <span class="text-[9px] text-gray-400 font-semibold tracking-wider uppercase">Gating Actions</span>
+            </div>
+
+            <!-- Export and reports -->
+            <div class="flex flex-col items-center px-2 border-r border-gray-300">
+                <div class="flex gap-1 mb-1">
+                    <button onclick="exportWorkspaceJSON()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded border border-gray-300 font-medium flex items-center gap-1">
+                        <i class="fa-solid fa-file-export"></i>
+                        <span>Export XML/JSON</span>
+                    </button>
+                </div>
+                <span class="text-[9px] text-gray-400 font-semibold tracking-wider uppercase">Save Analysis</span>
+            </div>
+
+            <!-- Legend/Instructions -->
+            <div class="ml-auto text-right text-gray-400 text-[11px] max-w-xs pr-2 hidden md:block leading-tight">
+                <span>Drag the brush inside the plot to adjust gates. The statistics and counts update dynamically!</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace Area -->
+    <main class="flex flex-1 overflow-hidden">
+        
+        <!-- Left Sidebar: FlowJo Workspace Panel -->
+        <section class="w-96 border-r border-gray-300 flex flex-col bg-white shrink-0">
+            <!-- Groups List Panel -->
+            <div class="h-32 border-b border-gray-300 flex flex-col shrink-0 bg-gray-50">
+                <div class="bg-gray-200 px-3 py-1 text-xs font-semibold text-gray-600 border-b border-gray-300 flex justify-between items-center">
+                    <span class="flex items-center gap-1.5">
+                        <i class="fa-solid fa-users text-blue-500"></i> Groups
+                    </span>
+                    <span class="text-[10px] text-gray-400 bg-white px-1.5 py-0.5 rounded border border-gray-200">2 Groups</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-1.5 text-xs">
+                    <table class="w-full text-left">
+                        <thead>
+                            <tr class="text-gray-400 text-[10px] uppercase font-semibold border-b border-gray-200">
+                                <th class="pb-1">Group Name</th>
+                                <th class="pb-1 text-center">Samples</th>
+                                <th class="pb-1 text-right">Color</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="hover:bg-blue-50 cursor-pointer bg-blue-50/50">
+                                <td class="py-1 font-medium text-blue-800 flex items-center gap-1">
+                                    <i class="fa-solid fa-folder text-yellow-500"></i>
+                                    <span>All Samples</span>
+                                </td>
+                                <td class="py-1 text-center font-mono">1</td>
+                                <td class="py-1 text-right"><span class="inline-block w-3 h-3 bg-red-500 rounded-sm"></span></td>
+                            </tr>
+                            <tr class="hover:bg-blue-50 cursor-pointer">
+                                <td class="py-1 flex items-center gap-1 text-gray-600">
+                                    <i class="fa-solid fa-folder text-yellow-500"></i>
+                                    <span>Males (Gated)</span>
+                                </td>
+                                <td class="py-1 text-center font-mono">1</td>
+                                <td class="py-1 text-right"><span class="inline-block w-3 h-3 bg-blue-500 rounded-sm"></span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Samples / Hierarchy Tree Panel -->
+            <div class="flex-1 flex flex-col overflow-hidden">
+                <div class="bg-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 border-b border-gray-300 flex justify-between items-center">
+                    <span class="flex items-center gap-1.5">
+                        <i class="fa-solid fa-vial text-emerald-600"></i> Samples / Gating Hierarchy
+                    </span>
+                    <i class="fa-solid fa-sitemap text-gray-400"></i>
+                </div>
+                
+                <!-- Headers for Gating Tree Columns -->
+                <div class="bg-gray-100 border-b border-gray-200 py-1 px-3 grid grid-cols-12 gap-1 text-[10px] text-gray-400 uppercase font-bold tracking-wider select-none shrink-0">
+                    <span class="col-span-6">Population / Gate</span>
+                    <span class="col-span-2 text-right">Count</span>
+                    <span class="col-span-2 text-right">% Parent</span>
+                    <span class="col-span-2 text-right">% Total</span>
+                </div>
+
+                <!-- Gating Hierarchy Tree Container -->
+                <div class="flex-1 overflow-y-auto p-3" id="hierarchy-tree-container">
+                    <!-- Placeholder when no file is loaded -->
+                    <div id="tree-placeholder" class="text-center py-10 text-gray-400 text-xs flex flex-col items-center gap-2">
+                        <i class="fa-solid fa-file-import text-3xl text-gray-300"></i>
+                        <span>No FCS data loaded.</span>
+                        <span class="text-[10px] px-4">Load the local workspace FCS file or drag-and-drop to display the analysis hierarchy.</span>
+                    </div>
+
+                    <!-- Gating Tree content injected here -->
+                    <div id="gating-tree" class="hidden text-xs">
+                        <!-- Sample Node -->
+                        <div class="flex flex-col gap-0.5">
+                            <!-- Sample root row -->
+                            <div class="flex items-center justify-between py-1.5 px-2 bg-gray-50 border border-gray-200 hover:bg-gray-100 cursor-pointer rounded select-none shadow-sm" id="sample-root-node" onclick="selectTreeNode('root')">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <i class="fa-solid fa-database text-emerald-600 text-sm"></i>
+                                    <span class="font-bold text-gray-700 truncate" id="sample-name-label">sample.fcs</span>
+                                </div>
+                                <div class="flex font-mono text-[10px] text-gray-500 font-semibold gap-3 text-right">
+                                    <span id="sample-count-label">0</span>
+                                    <span class="w-10">100%</span>
+                                    <span class="w-10">100%</span>
+                                </div>
+                            </div>
+
+                            <!-- Gates container nested -->
+                            <div class="pl-6 pt-1 flex flex-col gap-0.5" id="gating-tree-gates">
+                                <!-- Nested gates generated here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Content: Plot Viewer and Parameter Selector -->
+        <section class="flex-1 flex flex-col bg-gray-100 overflow-hidden">
+            
+            <!-- Alert / Warning Banner for CORS/Loading instructions -->
+            <div id="cors-warning-banner" class="bg-amber-50 border-b border-amber-200 p-2.5 px-4 text-xs text-amber-800 flex justify-between items-start select-none shrink-0">
+                <div class="flex gap-2">
+                    <i class="fa-solid fa-triangle-exclamation text-amber-600 mt-0.5 text-sm"></i>
+                    <div>
+                        <span class="font-semibold">Local File Setup:</span> To see the actual data, click <strong class="bg-amber-100 px-1 py-0.5 rounded">Auto-Load JB_12102018</strong> or use <strong class="bg-amber-100 px-1 py-0.5 rounded">Load Local FCS</strong> to open the FCS file located in this directory. If loading directly fails, it may be due to browser CORS policies for local files.
+                    </div>
+                </div>
+                <button class="text-amber-500 hover:text-amber-800 ml-4 font-bold" onclick="document.getElementById('cors-warning-banner').remove()">×</button>
+            </div>
+
+            <!-- Plot Control Toolbar -->
+            <div class="bg-white p-3 border-b border-gray-300 flex flex-wrap gap-4 items-center justify-between text-xs shrink-0 select-none shadow-sm">
+                <div class="flex items-center gap-3">
+                    <span class="font-bold text-gray-700">Display Gate:</span>
+                    <span id="active-gate-badge" class="bg-blue-100 text-blue-800 border border-blue-200 font-bold px-2 py-0.5 rounded flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-notch text-blue-500"></i>
+                        <span>All Events</span>
+                    </span>
+                    <span class="text-gray-400">|</span>
+                    
+                    <!-- Axis controls -->
+                    <div class="flex items-center gap-1.5">
+                        <label for="x-axis-select" class="font-bold text-gray-500">X-Axis:</label>
+                        <select id="x-axis-select" class="bg-gray-50 border border-gray-300 p-1 rounded font-semibold text-gray-700 hover:bg-gray-100 transition-colors" onchange="changeAxes()">
+                            <!-- Parameter options populated in JS -->
+                        </select>
+                    </div>
+                    
+                    <div class="flex items-center gap-1.5">
+                        <label for="y-axis-select" class="font-bold text-gray-500">Y-Axis:</label>
+                        <select id="y-axis-select" class="bg-gray-50 border border-gray-300 p-1 rounded font-semibold text-gray-700 hover:bg-gray-100 transition-colors" onchange="changeAxes()">
+                            <!-- Parameter options populated in JS -->
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4">
+                    <!-- Scaling Mode -->
+                    <div class="flex items-center gap-1.5">
+                        <label for="scale-select" class="font-bold text-gray-500">Scale Mode:</label>
+                        <select id="scale-select" class="bg-gray-50 border border-gray-300 p-1 rounded font-semibold text-gray-700" onchange="changeScale()">
+                            <option value="asinh" selected>Bi-exponential (Asinh)</option>
+                            <option value="linear">Linear</option>
+                            <option value="log">Logarithmic</option>
+                        </select>
+                    </div>
+
+                    <!-- Rendering styles -->
+                    <div class="flex items-center gap-3 border-l border-gray-300 pl-3">
+                        <label class="flex items-center gap-1 font-semibold text-gray-600 cursor-pointer">
+                            <input type="checkbox" id="heatmap-toggle" checked onchange="updatePlotRendering()">
+                            <span>Heatmap</span>
+                        </label>
+                        <label class="flex items-center gap-1 font-semibold text-gray-600 cursor-pointer">
+                            <input type="checkbox" id="dots-toggle" checked onchange="updatePlotRendering()">
+                            <span>Dots</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Plot Visual Area -->
+            <div class="flex-1 flex gap-4 p-4 overflow-hidden select-none">
+                <!-- Main Scatter Canvas / SVG Wrapper -->
+                <div class="bg-white border border-gray-300 rounded-lg shadow-sm flex flex-col flex-1 relative overflow-hidden items-center justify-center min-h-0 min-w-0" id="plot-container">
+                    
+                    <!-- Plot Canvas for cells (fast rendering) -->
+                    <canvas id="plot-canvas" class="absolute pointer-events-none" style="left: 60px; top: 20px;"></canvas>
+
+                    <!-- SVG Layer for Axes, Gate Brush, and Overlays -->
+                    <svg id="plot-svg" class="absolute left-0 top-0 w-full h-full">
+                        <!-- Ticks and brush will be injected dynamically -->
+                        <g id="plot-g" transform="translate(60, 20)">
+                            <!-- Axis grids -->
+                            <g id="x-axis-grid"></g>
+                            <g id="y-axis-grid"></g>
+                            
+                            <!-- Brush elements -->
+                            <g id="brush-layer"></g>
+
+                            <!-- Gates drawing -->
+                            <g id="gates-drawing-layer"></g>
+                        </g>
+                    </svg>
+
+                    <!-- Large file loading overlay -->
+                    <div id="loading-overlay" class="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center hidden z-50">
+                        <i class="fa-solid fa-spinner fa-spin text-4xl text-blue-600 mb-3"></i>
+                        <span class="font-bold text-gray-700 text-sm">Processing FCS Data Stream...</span>
+                        <span class="text-xs text-gray-400 mt-1" id="loading-progress-label">Parsing binary floating points</span>
+                    </div>
+                </div>
+
+                <!-- Inspector / Details Sidebar panel -->
+                <div class="w-80 bg-white border border-gray-300 rounded-lg shadow-sm flex flex-col shrink-0 select-none p-4 overflow-y-auto">
+                    <h3 class="font-bold text-gray-700 text-sm border-b border-gray-200 pb-2 mb-3 flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-info text-blue-500"></i> Inspector / Statistics
+                    </h3>
+                    
+                    <!-- Selected Gate Stats details -->
+                    <div class="flex flex-col gap-2.5 text-xs" id="gate-inspector-view">
+                        <div class="bg-gray-50 border border-gray-200 p-2.5 rounded-md">
+                            <span class="text-[10px] text-gray-400 uppercase font-bold">Selected Gate Node</span>
+                            <div class="font-bold text-base text-gray-800 mt-0.5" id="inspect-gate-name">All Events</div>
+                        </div>
+
+                        <!-- Progress indicators -->
+                        <div class="flex flex-col gap-1 mt-1">
+                            <div class="flex justify-between">
+                                <span class="text-gray-400 font-semibold">% of Parent:</span>
+                                <span class="font-mono font-bold text-gray-700" id="inspect-gate-pct-parent">100.00%</span>
+                            </div>
+                            <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                <div class="bg-blue-600 h-full transition-all duration-300" id="inspect-gate-bar-parent" style="width: 100%"></div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-1">
+                            <div class="flex justify-between">
+                                <span class="text-gray-400 font-semibold">% of Total:</span>
+                                <span class="font-mono font-bold text-gray-700" id="inspect-gate-pct-total">100.00%</span>
+                            </div>
+                            <div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                <div class="bg-emerald-600 h-full transition-all duration-300" id="inspect-gate-bar-total" style="width: 100%"></div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2 border-t border-gray-100 pt-3">
+                            <div class="flex flex-col">
+                                <span class="text-gray-400 font-semibold">Gated Events:</span>
+                                <span class="font-mono font-bold text-gray-800 text-sm mt-0.5" id="inspect-gate-count">0</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-gray-400 font-semibold">Parent Events:</span>
+                                <span class="font-mono font-bold text-gray-800 text-sm mt-0.5" id="inspect-gate-parent-count">0</span>
+                            </div>
+                        </div>
+
+                        <!-- Gating Coordinates details -->
+                        <div class="border-t border-gray-100 pt-3 flex flex-col gap-1.5">
+                            <span class="text-gray-400 font-semibold">Gating Parameters:</span>
+                            <div class="bg-gray-50 p-2.5 rounded border border-gray-200 font-mono text-[10px] text-gray-500 leading-normal" id="inspect-gate-coords">
+                                All events in file (Unfiltered)
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bivariate Details / Sample metadata -->
+                    <div class="mt-6 flex-1 flex flex-col min-h-[200px]">
+                        <h4 class="font-bold text-gray-600 text-xs border-b border-gray-200 pb-1.5 mb-2 uppercase tracking-wide">FCS TEXT Keywords</h4>
+                        <div class="flex-1 overflow-y-auto bg-slate-50 border border-gray-200 rounded p-2 text-[10px] font-mono text-slate-500" id="fcs-metadata-list">
+                            No active FCS metadata loaded. Select a file to view standard tags like $DATE, $CYT, etc.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- JS code logic -->
+    <script>
+        // State variables
+        let rawArrayBuffer = null;
+        let parsedFCS = null;
+        let currentSelectedNode = 'root'; // Selected node in tree
+        
+        // Gating structure
+        // A gate has: id, name, parentId, paramX, paramY, type ('rect'), coords (minX, maxX, minY, maxY)
+        let gates = {};
+        let eventFilterCache = {}; // Cache of gated event arrays for each node
+        
+        // Plot configurations
+        const padding = { top: 20, right: 20, bottom: 50, left: 60 };
+        let plotW = 400;
+        let plotH = 400;
+        
+        let activeX = 'FSC-A';
+        let activeY = 'SSC-A';
+        let scaleType = 'asinh'; // 'linear', 'log', 'asinh'
+        const asinhCofactor = 1000;
+        
+        // Scales
+        let xScale = d3.scaleLinear();
+        let yScale = d3.scaleLinear();
+        let currentBrush = null;
+
+        // Color grading for heatmap
+        // Viridis color map representation in rgb
+        const heatmapColors = [
+            [68, 1, 84],     // dark purple
+            [72, 40, 120],
+            [62, 74, 137],
+            [49, 104, 142],  // blue
+            [38, 130, 142],  // teal
+            [31, 158, 137],
+            [53, 183, 121],  // green
+            [109, 205, 89],
+            [180, 222, 44],  // light green
+            [253, 231, 37]   // yellow
+        ];
+
+        // Map density value [0, 1] to color map RGB string
+        function getDensityColor(val) {
+            const steps = heatmapColors.length - 1;
+            const index = Math.min(steps - 1, Math.floor(val * steps));
+            const subVal = (val * steps) - index;
+            
+            const c1 = heatmapColors[index];
+            const c2 = heatmapColors[index + 1];
+            
+            const r = Math.round(c1[0] + (c2[0] - c1[0]) * subVal);
+            const g = Math.round(c1[1] + (c2[1] - c1[1]) * subVal);
+            const b = Math.round(c1[2] + (c2[2] - c1[2]) * subVal);
+            
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        // Parse FCS files using Javascript
+        class FCSParser {
+            constructor(arrayBuffer) {
+                this.buffer = arrayBuffer;
+                this.view = new DataView(arrayBuffer);
+                this.header = {};
+                this.text = {};
+                this.channels = [];
+            }
+
+            parse() {
+                const dec = new TextDecoder('ascii');
+                const headerBytes = new Uint8Array(this.buffer, 0, 58);
+                const headerStr = dec.decode(headerBytes);
+                
+                const fcsVersion = headerStr.substring(0, 6).trim();
+                if (!fcsVersion.startsWith('FCS')) {
+                    throw new Error('Not a valid FCS format file. Must be FCS2.0, FCS3.0, or FCS3.1.');
+                }
+                
+                this.header.version = fcsVersion;
+                this.header.textStart = parseInt(headerStr.substring(10, 18).trim());
+                this.header.textEnd = parseInt(headerStr.substring(18, 26).trim());
+                this.header.dataStart = parseInt(headerStr.substring(26, 34).trim());
+                this.header.dataEnd = parseInt(headerStr.substring(34, 42).trim());
+                
+                // Read text metadata
+                const textBytes = new Uint8Array(this.buffer, this.header.textStart, this.header.textEnd - this.header.textStart + 1);
+                const textDec = new TextDecoder('latin1'); // Use latin1 to avoid failing on special chars
+                const textStr = textDec.decode(textBytes);
+                
+                const delim = textStr[0];
+                const parts = textStr.split(delim);
+                
+                for (let i = 1; i < parts.length - 1; i += 2) {
+                    const key = parts[i].toUpperCase();
+                    const val = parts[i+1];
+                    this.text[key] = val;
+                }
+                
+                if (this.header.dataStart === 0) {
+                    this.header.dataStart = parseInt(this.text['$BEGINDATA']);
+                }
+                if (this.header.dataEnd === 0) {
+                    this.header.dataEnd = parseInt(this.text['$ENDDATA']);
+                }
+                
+                const numPars = parseInt(this.text['$PAR']);
+                const numEvents = parseInt(this.text['$TOT']);
+                const dataType = this.text['$DATATYPE'];
+                const byteOrd = this.text['$BYTEORD'];
+                const isLittleEndian = byteOrd.trim() === '1,2,3,4';
+                
+                this.channels = [];
+                for (let i = 1; i <= numPars; i++) {
+                    const name = this.text[`$P${i}N`] || `P${i}`;
+                    const label = this.text[`$P${i}S`] || name;
+                    const bits = parseInt(this.text[`$P${i}B`]);
+                    const range = parseInt(this.text[`$P${i}R`]);
+                    const gain = this.text[`$P${i}E`];
+                    this.channels.push({ index: i - 1, name, label, bits, range, gain });
+                }
+                
+                const dataLength = this.header.dataEnd - this.header.dataStart + 1;
+                const dataOffset = this.header.dataStart;
+                
+                const events = [];
+                
+                if (dataType === 'F') { // 32-bit floats
+                    const floatView = new Float32Array(this.buffer, dataOffset, numEvents * numPars);
+                    const systemIsLittleEndian = (() => {
+                        const buffer = new ArrayBuffer(2);
+                        new DataView(buffer).setInt16(0, 256, true);
+                        return new Int16Array(buffer)[0] === 256;
+                    })();
+                    
+                    if (systemIsLittleEndian === isLittleEndian) {
+                        for (let e = 0; e < numEvents; e++) {
+                            const eventData = new Float32Array(numPars);
+                            const startIdx = e * numPars;
+                            for (let p = 0; p < numPars; p++) {
+                                eventData[p] = floatView[startIdx + p];
+                            }
+                            events.push(eventData);
+                        }
+                    } else {
+                        const view = new DataView(this.buffer, dataOffset, dataLength);
+                        for (let e = 0; e < numEvents; e++) {
+                            const eventData = new Float32Array(numPars);
+                            const base = e * numPars * 4;
+                            for (let p = 0; p < numPars; p++) {
+                                eventData[p] = view.getFloat32(base + p * 4, isLittleEndian);
+                            }
+                            events.push(eventData);
+                        }
+                    }
+                } else if (dataType === 'I') { // 16 or 32 bit unsigned integers
+                    const view = new DataView(this.buffer, dataOffset, dataLength);
+                    for (let e = 0; e < numEvents; e++) {
+                        const eventData = new Float32Array(numPars);
+                        for (let p = 0; p < numPars; p++) {
+                            const ch = this.channels[p];
+                            if (ch.bits === 16) {
+                                eventData[p] = view.getUint16(e * numPars * 2 + p * 2, isLittleEndian);
+                            } else if (ch.bits === 32) {
+                                eventData[p] = view.getUint32(e * numPars * 4 + p * 4, isLittleEndian);
+                            } else {
+                                throw new Error(`Unsupported bit depth: ${ch.bits}`);
+                            }
+                        }
+                        events.push(eventData);
+                    }
+                } else if (dataType === 'D') { // 64-bit double floats
+                    const view = new DataView(this.buffer, dataOffset, dataLength);
+                    for (let e = 0; e < numEvents; e++) {
+                        const eventData = new Float32Array(numPars);
+                        for (let p = 0; p < numPars; p++) {
+                            eventData[p] = view.getFloat64((e * numPars + p) * 8, isLittleEndian);
+                        }
+                        events.push(eventData);
+                    }
+                } else {
+                    throw new Error(`Unsupported DATATYPE: ${dataType}`);
+                }
+                
+                return {
+                    version: this.header.version,
+                    metadata: this.text,
+                    channels: this.channels,
+                    events: events
+                };
+            }
+        }
+
+        // Initialize default gates specific to JB_12102018_Filter_620_60_YL2_1k8x69n1_males.fcs data
+        function resetDefaultGates() {
+            gates = {
+                'gate-cells': {
+                    id: 'gate-cells',
+                    name: 'Cells',
+                    parentId: 'root',
+                    paramX: 'FSC-A',
+                    paramY: 'SSC-A',
+                    type: 'rect',
+                    coords: { minX: 10000, maxX: 100000, minY: 2000, maxY: 100000 }
+                },
+                'gate-singlets': {
+                    id: 'gate-singlets',
+                    name: 'Singlets',
+                    parentId: 'gate-cells',
+                    paramX: 'FSC-A',
+                    paramY: 'FSC-H',
+                    type: 'ratio', // ratio-based filter representing polygon singlet gate along diagonal
+                    coords: { ratioMin: 0.85, ratioMax: 1.15 }
+                },
+                'gate-yl2-pos': {
+                    id: 'gate-yl2-pos',
+                    name: 'YL2+ Cells',
+                    parentId: 'gate-singlets',
+                    paramX: 'YL2-A',
+                    paramY: 'BL2-A',
+                    type: 'rect',
+                    coords: { minX: 10000, maxX: 1048575, minY: -20000, maxY: 1048575 }
+                },
+                'gate-bl2-pos': {
+                    id: 'gate-bl2-pos',
+                    name: 'BL2+ Cells',
+                    parentId: 'gate-singlets',
+                    paramX: 'YL2-A',
+                    paramY: 'BL2-A',
+                    type: 'rect',
+                    coords: { minX: -20000, maxX: 1048575, minY: 10000, maxY: 1048575 }
+                },
+                'gate-double-pos': {
+                    id: 'gate-double-pos',
+                    name: 'Double Pos',
+                    parentId: 'gate-singlets',
+                    paramX: 'YL2-A',
+                    paramY: 'BL2-A',
+                    type: 'rect',
+                    coords: { minX: 10000, maxX: 1048575, minY: 10000, maxY: 1048575 }
+                }
+            };
+            
+            if (parsedFCS) {
+                recalculateAllGating();
+                renderGatingTree();
+                renderPlot();
+            }
+        }
+
+        // Initialize UI Elements
+        window.addEventListener('load', () => {
+            resetDefaultGates();
+            setupPlotResize();
+            
+            // File input handler
+            document.getElementById('fcs-file-input').addEventListener('change', handleFileSelect);
+            
+            // Drag and drop handler
+            window.addEventListener('dragover', (e) => e.preventDefault());
+            window.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files.length > 0) {
+                    const file = e.dataTransfer.files[0];
+                    if (file.name.endsWith('.fcs')) {
+                        processFCSFile(file);
+                    } else {
+                        alert('Please select a valid flow cytometry .fcs file.');
+                    }
+                }
+            });
+
+            // Automatically attempt to fetch the file on launch
+            setTimeout(tryFetchWorkspaceFile, 500);
+        });
+
+        // Setup resize observers to make the plots responsive
+        function setupPlotResize() {
+            const container = document.getElementById('plot-container');
+            const resizeObserver = new ResizeObserver(entries => {
+                for (let entry of entries) {
+                    const w = entry.contentRect.width;
+                    const h = entry.contentRect.height;
+                    
+                    plotW = Math.max(250, w - padding.left - padding.right);
+                    plotH = Math.max(250, h - padding.top - padding.bottom);
+                    
+                    // Adjust canvas size
+                    const canvas = document.getElementById('plot-canvas');
+                    canvas.width = plotW;
+                    canvas.height = plotH;
+                    
+                    // Trigger redraw
+                    if (parsedFCS) {
+                        renderPlot();
+                    }
+                }
+            });
+            resizeObserver.observe(container);
+        }
+
+        // Auto load standard file from workspace
+        function tryFetchWorkspaceFile() {
+            const url = 'JB_12102018_Filter_620_60_YL2_1k8x69n1_males.fcs';
+            document.getElementById('loading-overlay').classList.remove('hidden');
+            document.getElementById('loading-progress-label').innerText = 'Downloading local FCS file...';
+
+            fetch(url)
+                .then(res => {
+                    if (!res.ok) throw new Error('File not found in local workspace');
+                    return res.arrayBuffer();
+                })
+                .then(buf => {
+                    rawArrayBuffer = buf;
+                    document.getElementById('loaded-file-name').innerText = 'JB_12102018_Filter_620_60_YL2_1k8x69n1_males.fcs';
+                    const banner = document.getElementById('cors-warning-banner');
+                    if (banner) banner.remove();
+                    parseAndLoadData();
+                })
+                .catch(err => {
+                    console.warn(err);
+                    document.getElementById('loading-overlay').classList.add('hidden');
+                    // Retain warning banner
+                });
+        }
+
+        // Local file select handler
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                processFCSFile(file);
+            }
+        }
+
+        function processFCSFile(file) {
+            document.getElementById('loaded-file-name').innerText = file.name;
+            document.getElementById('loading-overlay').classList.remove('hidden');
+            document.getElementById('loading-progress-label').innerText = 'Reading file stream...';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                rawArrayBuffer = e.target.result;
+                parseAndLoadData();
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Parse and ingest the data buffer
+        // Parse and ingest the data buffer
+        function parseAndLoadData() {
+            try {
+                document.getElementById('loading-progress-label').innerText = 'Parsing FCS binary data segment...';
+                
+                const parser = new FCSParser(rawArrayBuffer);
+                parsedFCS = parser.parse();
+                
+                // Expose tree view container and hide loading placeholder immediately
+                document.getElementById('loading-overlay').classList.add('hidden');
+                document.getElementById('tree-placeholder').classList.add('hidden');
+                document.getElementById('gating-tree').classList.remove('hidden');
+
+                // Pop axes dropdowns
+                populateAxesDropdowns();
+                
+                // Recalc gates
+                recalculateAllGating();
+                
+                // Render view components
+                renderGatingTree();
+                selectTreeNode('root'); // Start at root
+                
+                // Populate metadata text list
+                renderMetadataList();
+                
+            } catch (err) {
+                alert('Error loading FCS: ' + err.message);
+                document.getElementById('loading-overlay').classList.add('hidden');
+            }
+        }
+
+        function populateAxesDropdowns() {
+            const selectX = document.getElementById('x-axis-select');
+            const selectY = document.getElementById('y-axis-select');
+            
+            selectX.innerHTML = '';
+            selectY.innerHTML = '';
+            
+            parsedFCS.channels.forEach(ch => {
+                const optX = document.createElement('option');
+                optX.value = ch.name;
+                optX.innerText = ch.label !== ch.name ? `${ch.name} (${ch.label})` : ch.name;
+                selectX.appendChild(optX);
+                
+                const optY = document.createElement('option');
+                optY.value = ch.name;
+                optY.innerText = ch.label !== ch.name ? `${ch.name} (${ch.label})` : ch.name;
+                selectY.appendChild(optY);
+            });
+            
+            // Set defaults to FSC-A and SSC-A
+            if (parsedFCS.channels.find(c => c.name === 'FSC-A')) {
+                selectX.value = 'FSC-A';
+                activeX = 'FSC-A';
+            }
+            if (parsedFCS.channels.find(c => c.name === 'SSC-A')) {
+                selectY.value = 'SSC-A';
+                activeY = 'SSC-A';
+            }
+        }
+
+        function renderMetadataList() {
+            const listEl = document.getElementById('fcs-metadata-list');
+            listEl.innerHTML = '';
+            
+            const entries = Object.entries(parsedFCS.metadata).sort((a, b) => a[0].localeCompare(b[0]));
+            entries.forEach(([key, val]) => {
+                const row = document.createElement('div');
+                row.className = 'py-0.5 border-b border-slate-100 flex justify-between gap-2 hover:bg-slate-100 px-1';
+                
+                const kSpan = document.createElement('span');
+                kSpan.className = 'font-bold text-slate-600 truncate';
+                kSpan.title = key;
+                kSpan.innerText = key;
+                
+                const vSpan = document.createElement('span');
+                vSpan.className = 'text-slate-500 break-all text-right max-w-[60%]';
+                vSpan.innerText = val;
+                
+                row.appendChild(kSpan);
+                row.appendChild(vSpan);
+                listEl.appendChild(row);
+            });
+        }
+
+        // Filter calculation cascading
+        function recalculateAllGating() {
+            if (!parsedFCS) return;
+            
+            const events = parsedFCS.events;
+            eventFilterCache = {};
+            
+            // Root is all events
+            eventFilterCache['root'] = events;
+            
+            // Get channels indexes
+            const channelMap = {};
+            parsedFCS.channels.forEach(ch => {
+                channelMap[ch.name] = ch.index;
+            });
+            
+            // Sort gates such that parent is evaluated before child
+            const gateList = Object.values(gates);
+            
+            // Simple topological sort / BFS ordering
+            const processed = new Set(['root']);
+            let attempts = 0;
+            
+            while (processed.size < gateList.length + 1 && attempts < 100) {
+                attempts++;
+                gateList.forEach(gate => {
+                    if (processed.has(gate.parentId) && !processed.has(gate.id)) {
+                        const parentEvents = eventFilterCache[gate.parentId];
+                        const idxX = channelMap[gate.paramX];
+                        const idxY = channelMap[gate.paramY];
+                        
+                        let filtered = [];
+                        
+                        if (gate.type === 'rect') {
+                            const c = gate.coords;
+                            filtered = parentEvents.filter(e => 
+                                e[idxX] >= c.minX && e[idxX] <= c.maxX &&
+                                e[idxY] >= c.minY && e[idxY] <= c.maxY
+                            );
+                        } else if (gate.type === 'ratio') {
+                            const c = gate.coords;
+                            filtered = parentEvents.filter(e => {
+                                const x = e[idxX];
+                                const y = e[idxY];
+                                const ratio = x > 0 ? y / x : 0;
+                                return ratio >= c.ratioMin && ratio <= c.ratioMax && x > 10000;
+                            });
+                        }
+                        
+                        eventFilterCache[gate.id] = filtered;
+                        processed.add(gate.id);
+                    }
+                });
+            }
+            
+            // Update UI statistics labels
+            document.getElementById('event-counter').innerText = `${eventFilterCache[currentSelectedNode].length.toLocaleString()} / ${events.length.toLocaleString()} Events`;
+        }
+
+        // Render FlowJo Gating Tree
+        function renderGatingTree() {
+            const container = document.getElementById('gating-tree-gates');
+            container.innerHTML = '';
+            
+            // Get root level gates
+            const rootGates = Object.values(gates).filter(g => g.parentId === 'root');
+            
+            // Render total events count
+            document.getElementById('sample-count-label').innerText = parsedFCS.events.length.toLocaleString();
+            document.getElementById('sample-name-label').innerText = document.getElementById('loaded-file-name').innerText;
+            
+            // Recursive tree building helper
+            function buildTreeNode(gate, level) {
+                const nodeEvents = eventFilterCache[gate.id] || [];
+                const parentEvents = eventFilterCache[gate.parentId] || [];
+                const rootEvents = parsedFCS.events;
+                
+                const count = nodeEvents.length;
+                const pctParent = parentEvents.length > 0 ? (count / parentEvents.length) * 100 : 0;
+                const pctTotal = rootEvents.length > 0 ? (count / rootEvents.length) * 100 : 0;
+                
+                // Wrapper relative for tree lines
+                const wrapper = document.createElement('div');
+                wrapper.className = 'tree-node-wrapper relative flex flex-col pl-4 mt-0.5';
+                
+                // The actual row item
+                const row = document.createElement('div');
+                row.className = 'flex items-center justify-between py-1 px-2 hover:bg-gray-100 cursor-pointer rounded border border-transparent select-none';
+                row.id = `tree-node-${gate.id}`;
+                row.onclick = (e) => {
+                    e.stopPropagation();
+                    selectTreeNode(gate.id);
+                };
+                
+                // Left Name part with Gate Icon
+                const leftDiv = document.createElement('div');
+                leftDiv.className = 'flex items-center gap-1.5 min-w-0';
+                
+                const icon = document.createElement('i');
+                icon.className = 'fa-solid fa-draw-polygon text-blue-500 text-[10px]';
+                leftDiv.appendChild(icon);
+                
+                const nameLabel = document.createElement('span');
+                nameLabel.className = 'font-semibold text-gray-700 truncate';
+                nameLabel.innerText = gate.name;
+                leftDiv.appendChild(nameLabel);
+                
+                row.appendChild(leftDiv);
+                
+                // Right statistics columns
+                const rightDiv = document.createElement('div');
+                rightDiv.className = 'flex font-mono text-[10px] text-gray-500 font-semibold gap-3 text-right shrink-0';
+                
+                const countSpan = document.createElement('span');
+                countSpan.innerText = count.toLocaleString();
+                rightDiv.appendChild(countSpan);
+                
+                const pctParentSpan = document.createElement('span');
+                pctParentSpan.className = 'w-10';
+                pctParentSpan.innerText = `${pctParent.toFixed(2)}%`;
+                rightDiv.appendChild(pctParentSpan);
+                
+                const pctTotalSpan = document.createElement('span');
+                pctTotalSpan.className = 'w-10';
+                pctTotalSpan.innerText = `${pctTotal.toFixed(2)}%`;
+                rightDiv.appendChild(pctTotalSpan);
+                
+                row.appendChild(rightDiv);
+                wrapper.appendChild(row);
+                
+                // Children container
+                const childrenContainer = document.createElement('div');
+                childrenContainer.className = 'flex flex-col gap-0.5';
+                
+                const childGates = Object.values(gates).filter(g => g.parentId === gate.id);
+                childGates.forEach(cg => {
+                    childrenContainer.appendChild(buildTreeNode(cg, level + 1));
+                });
+                
+                wrapper.appendChild(childrenContainer);
+                return wrapper;
+            }
+            
+            rootGates.forEach(g => {
+                container.appendChild(buildTreeNode(g, 0));
+            });
+            
+            // Highlight selected node
+            highlightActiveTreeNode();
+        }
+
+        function highlightActiveTreeNode() {
+            // Remove highlight
+            document.querySelectorAll('[id^="tree-node-"]').forEach(el => el.classList.remove('tree-node-selected'));
+            document.getElementById('sample-root-node').classList.remove('tree-node-selected');
+            
+            if (currentSelectedNode === 'root') {
+                document.getElementById('sample-root-node').classList.add('tree-node-selected');
+            } else {
+                const el = document.getElementById(`tree-node-${currentSelectedNode}`);
+                if (el) el.classList.add('tree-node-selected');
+            }
+        }
+
+        // Tree node selection
+        function selectTreeNode(nodeId) {
+            currentSelectedNode = nodeId;
+            highlightActiveTreeNode();
+            
+            // Update badge info
+            const badge = document.getElementById('active-gate-badge');
+            if (nodeId === 'root') {
+                badge.innerHTML = `<i class="fa-solid fa-circle-notch text-blue-500"></i> <span>All Events</span>`;
+                activeX = 'FSC-A';
+                activeY = 'SSC-A';
+            } else {
+                const gate = gates[nodeId];
+                badge.innerHTML = `<i class="fa-solid fa-draw-polygon text-emerald-500"></i> <span>${gate.name}</span>`;
+                activeX = gate.paramX;
+                activeY = gate.paramY;
+            }
+            
+            document.getElementById('x-axis-select').value = activeX;
+            document.getElementById('y-axis-select').value = activeY;
+            
+            // Recalculate counter
+            if (parsedFCS) {
+                const eventsCount = eventFilterCache[nodeId].length;
+                const totalEvents = parsedFCS.events.length;
+                document.getElementById('event-counter').innerText = `${eventsCount.toLocaleString()} / ${totalEvents.toLocaleString()} Events`;
+                
+                updateInspectorPanel();
+                renderPlot();
+            }
+        }
+
+        // Update Inspector stats panel
+        function updateInspectorPanel() {
+            if (!parsedFCS) return;
+            
+            const nodeEvents = eventFilterCache[currentSelectedNode] || [];
+            const rootEvents = parsedFCS.events;
+            
+            const count = nodeEvents.length;
+            let parentCount = rootEvents.length;
+            let parentName = "All Events";
+            let pctParent = 100;
+            let pctTotal = rootEvents.length > 0 ? (count / rootEvents.length) * 100 : 0;
+            
+            let coordsHtml = "All events in file (Unfiltered)";
+            
+            if (currentSelectedNode !== 'root') {
+                const gate = gates[currentSelectedNode];
+                parentName = gate.parentId === 'root' ? "All Events" : gates[gate.parentId].name;
+                const parentEvents = eventFilterCache[gate.parentId] || [];
+                parentCount = parentEvents.length;
+                pctParent = parentCount > 0 ? (count / parentCount) * 100 : 0;
+                
+                document.getElementById('inspect-gate-name').innerText = gate.name;
+                
+                if (gate.type === 'rect') {
+                    coordsHtml = `<strong>Gate Type:</strong> Rectangular<br>` +
+                                 `<strong>X:</strong> ${gate.paramX} [${gate.coords.minX.toFixed(0)}, ${gate.coords.maxX.toFixed(0)}]<br>` +
+                                 `<strong>Y:</strong> ${gate.paramY} [${gate.coords.minY.toFixed(0)}, ${gate.coords.maxY.toFixed(0)}]`;
+                } else if (gate.type === 'ratio') {
+                    coordsHtml = `<strong>Gate Type:</strong> Diagonal Wedge (Ratio)<br>` +
+                                 `<strong>X:</strong> ${gate.paramX}<br>` +
+                                 `<strong>Y:</strong> ${gate.paramY}<br>` +
+                                 `<strong>Slope Ratio:</strong> [${gate.coords.ratioMin.toFixed(2)}, ${gate.coords.ratioMax.toFixed(2)}]`;
+                }
+            } else {
+                document.getElementById('inspect-gate-name').innerText = "All Events (Root)";
+            }
+            
+            document.getElementById('inspect-gate-count').innerText = count.toLocaleString();
+            document.getElementById('inspect-gate-parent-count').innerText = parentCount.toLocaleString();
+            document.getElementById('inspect-gate-pct-parent').innerText = `${pctParent.toFixed(2)}% of ${parentName}`;
+            document.getElementById('inspect-gate-pct-total').innerText = `${pctTotal.toFixed(2)}% of total`;
+            
+            document.getElementById('inspect-gate-bar-parent').style.width = `${pctParent}%`;
+            document.getElementById('inspect-gate-bar-total').style.width = `${pctTotal}%`;
+            document.getElementById('inspect-gate-coords').innerHTML = coordsHtml;
+        }
+
+        // Channel transformations for log / asinh scaling
+        function transformValue(val, chName) {
+            if (scaleType === 'log') {
+                return val <= 0 ? 0 : Math.log10(val);
+            } else if (scaleType === 'asinh') {
+                return Math.asinh(val / asinhCofactor);
+            }
+            return val; // linear
+        }
+
+// Helper to generate readable axis tick marks for biexponential / asinh scaling
+function getAsinhTicks(minVal, maxVal, cofactor = 1000) {
+    const ticks = [];
+    
+    // Core decade steps for flow cytometry display (positive and negative)
+    const baseDecades = [0, 100, 1000, 10000, 100000, 1000000];
+    
+    // Add positive decade ticks within range
+    baseDecades.forEach(v => {
+        if (v >= minVal && v <= maxVal) {
+            ticks.push(v);
+        }
+    });
+    
+    // Add negative decade ticks if domain covers negative values
+    baseDecades.forEach(v => {
+        if (v > 0) {
+            const neg = -v;
+            if (neg >= minVal && neg <= maxVal) {
+                ticks.push(neg);
+            }
+        }
+    });
+
+    // Ensure array is sorted numerically
+    ticks.sort((a, b) => a - b);
+    
+    // Fallback if domain is too tight to catch predefined decade steps
+    if (ticks.length < 2) {
+        return [minVal, (minVal + maxVal) / 2, maxVal];
+    }
+    
+    return ticks;
+}
+
+
+        function invertTransformValue(transformedVal, chName) {
+            if (scaleType === 'log') {
+                return Math.pow(10, transformedVal);
+            } else if (scaleType === 'asinh') {
+                return Math.sinh(transformedVal) * asinhCofactor;
+            }
+            return transformedVal;
+        }
+
+        // Change display axes from dropdown
+        function changeAxes() {
+            activeX = document.getElementById('x-axis-select').value;
+            activeY = document.getElementById('y-axis-select').value;
+            renderPlot();
+        }
+
+        // Change scale mode
+        function changeScale() {
+            scaleType = document.getElementById('scale-select').value;
+            renderPlot();
+        }
+
+        // Redraw on settings toggle
+        function updatePlotRendering() {
+            renderPlot();
+        }
+
+        // Core Plot Rendering (Canvas for heatmap/dots + SVG for axes/overlays)
+        function renderPlot() {
+            if (!parsedFCS) return;
+            
+            // 1. Identify populations to display
+            // We display the events of the parent of the currently selected gate node,
+            // and outline the current gate node itself!
+            let displayEvents = [];
+            let displayParentNodeId = 'root';
+            
+            if (currentSelectedNode === 'root') {
+                displayEvents = eventFilterCache['root'];
+                displayParentNodeId = 'root';
+            } else {
+                displayParentNodeId = gates[currentSelectedNode].parentId;
+                displayEvents = eventFilterCache[displayParentNodeId];
+            }
+            
+            // Get channel indices
+            const chXObj = parsedFCS.channels.find(c => c.name === activeX);
+            const chYObj = parsedFCS.channels.find(c => c.name === activeY);
+            
+            const idxX = chXObj.index;
+            const idxY = chYObj.index;
+            
+            // Compute range domains
+            // We'll use 1st percentile to 99th percentile to automatically crop background artifacts,
+            // or use standard min/max
+            const allRawEvents = parsedFCS.events;
+            const tempX = allRawEvents.map(e => e[idxX]).sort((a,b)=>a-b);
+            const tempY = allRawEvents.map(e => e[idxY]).sort((a,b)=>a-b);
+            
+            const padLen = allRawEvents.length;
+            const minRawX = tempX[Math.floor(padLen * 0.005)];
+            const maxRawX = tempX[Math.floor(padLen * 0.995)];
+            const minRawY = tempY[Math.floor(padLen * 0.005)];
+            const maxRawY = tempY[Math.floor(padLen * 0.995)];
+            
+            // Adjust bounds to avoid 0 width domains
+            const minXBound = minRawX === maxRawX ? minRawX - 100 : minRawX;
+            const maxXBound = minRawX === maxRawX ? maxRawX + 100 : maxRawX;
+            const minYBound = minRawY === maxRawY ? minRawY - 100 : minRawY;
+            const maxYBound = minRawY === maxRawY ? maxRawY + 100 : maxRawY;
+            
+            // Transform domains
+            const domMinX = transformValue(minXBound, activeX);
+            const domMaxX = transformValue(maxXBound, activeX);
+            const domMinY = transformValue(minYBound, activeY);
+            const domMaxY = transformValue(maxYBound, activeY);
+            
+            // Set D3 Scales
+            xScale = d3.scaleLinear().domain([domMinX, domMaxX]).range([0, plotW]);
+            yScale = d3.scaleLinear().domain([domMinY, domMaxY]).range([plotH, 0]);
+            
+            // 2. Render background cell dots and density heatmap on Canvas
+            drawCanvasData(displayEvents, idxX, idxY, minXBound, maxXBound, minYBound, maxYBound);
+            
+            // 3. Render SVG Axes & Grid lines
+            renderAxesAndGrids(minXBound, maxXBound, minYBound, maxYBound);
+            
+            // 4. Render Gate Overlays
+            renderGateOverlays(idxX, idxY);
+            
+            // 5. Setup Interactive Brush for Gating
+            setupBrush(displayParentNodeId);
+        }
+
+        // Canvas Bivariate Renderer (Fast)
+        function drawCanvasData(eventsList, idxX, idxY, minRawX, maxRawX, minRawY, maxRawY) {
+            const canvas = document.getElementById('plot-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, plotW, plotH);
+            
+            const showHeatmap = document.getElementById('heatmap-toggle').checked;
+            const showDots = document.getElementById('dots-toggle').checked;
+            
+            // Subsamping for speed on extremely large files (max 15k events for display)
+            let displaySub = eventsList;
+            if (eventsList.length > 15000) {
+                // Uniformly slice a subset to represent density accurately
+                const step = Math.floor(eventsList.length / 15000);
+                displaySub = [];
+                for (let i = 0; i < eventsList.length; i += step) {
+                    displaySub.push(eventsList[i]);
+                }
+            }
+            
+            if (showHeatmap && displaySub.length > 0) {
+                // Calculate 2D density grid
+                const gridS = 64;
+                const grid = Array.from({length: gridS}, () => new Float32Array(gridS));
+                
+                displaySub.forEach(e => {
+                    const tx = transformValue(e[idxX], activeX);
+                    const ty = transformValue(e[idxY], activeY);
+                    
+                    const pctX = xScale(tx) / plotW;
+                    const pctY = yScale(ty) / plotH;
+                    
+                    if (pctX >= 0 && pctX <= 1 && pctY >= 0 && pctY <= 1) {
+                        const binX = Math.min(gridS - 1, Math.max(0, Math.floor(pctX * gridS)));
+                        const binY = Math.min(gridS - 1, Math.max(0, Math.floor(pctY * gridS)));
+                        grid[binY][binX]++;
+                    }
+                });
+                
+                // Double box blur density filter for smoothing
+                function smoothGrid(gr) {
+                    const bl = Array.from({length: gridS}, () => new Float32Array(gridS));
+                    for (let y = 0; y < gridS; y++) {
+                        for (let x = 0; x < gridS; x++) {
+                            let sum = 0, cnt = 0;
+                            for (let dy = -1; dy <= 1; dy++) {
+                                for (let dx = -1; dx <= 1; dx++) {
+                                    const ny = y + dy;
+                                    const nx = x + dx;
+                                    if (ny >= 0 && ny < gridS && nx >= 0 && nx < gridS) {
+                                        sum += gr[ny][nx];
+                                        cnt++;
+                                    }
+                                }
+                            }
+                            bl[y][x] = sum / cnt;
+                        }
+                    }
+                    return bl;
+                }
+                
+                const blurred = smoothGrid(smoothGrid(grid));
+                
+                // Find max density
+                let maxD = 0;
+                for (let y = 0; y < gridS; y++) {
+                    for (let x = 0; x < gridS; x++) {
+                        if (blurred[y][x] > maxD) maxD = blurred[y][x];
+                    }
+                }
+                if (maxD === 0) maxD = 1;
+                
+                // Draw cells bins
+                const cellW = plotW / gridS;
+                const cellH = plotH / gridS;
+                
+                for (let y = 0; y < gridS; y++) {
+                    for (let x = 0; x < gridS; x++) {
+                        const v = blurred[y][x];
+                        if (v > 0.05) { // threshold low density background noise
+                            const norm = Math.min(1.0, v / (maxD * 0.7)); // color saturation scale
+                            ctx.fillStyle = getDensityColor(norm);
+                            ctx.fillRect(x * cellW, y * cellH, Math.ceil(cellW), Math.ceil(cellH));
+                        }
+                    }
+                }
+            }
+            
+            // Draw individual dots on top
+            if (showDots || !showHeatmap) {
+                // If heatmap is active, make background dots semi-transparent white/black
+                ctx.fillStyle = showHeatmap ? 'rgba(255, 255, 255, 0.45)' : 'rgba(37, 99, 235, 0.6)';
+                
+                displaySub.forEach(e => {
+                    const tx = transformValue(e[idxX], activeX);
+                    const ty = transformValue(e[idxY], activeY);
+                    
+                    const cx = xScale(tx);
+                    const cy = yScale(ty);
+                    
+                    if (cx >= 0 && cx <= plotW && cy >= 0 && cy <= plotH) {
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 1.2, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                });
+            }
+            
+            // Highlight child gated events in a distinct red/orange color if a gate is selected
+            if (currentSelectedNode !== 'root') {
+                const childEvents = eventFilterCache[currentSelectedNode] || [];
+                let childSub = childEvents;
+                if (childEvents.length > 5000) {
+                    const step = Math.floor(childEvents.length / 5000);
+                    childSub = [];
+                    for (let i = 0; i < childEvents.length; i += step) {
+                        childSub.push(childEvents[i]);
+                    }
+                }
+                
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.75)'; // Gated cells colored red
+                childSub.forEach(e => {
+                    const tx = transformValue(e[idxX], activeX);
+                    const ty = transformValue(e[idxY], activeY);
+                    
+                    const cx = xScale(tx);
+                    const cy = yScale(ty);
+                    
+                    if (cx >= 0 && cx <= plotW && cy >= 0 && cy <= plotH) {
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 1.5, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                });
+            }
+        }
+
+        // SVG Ticks generator and Labels
+        function renderAxesAndGrids(minX, maxX, minY, maxY) {
+            const svg = d3.select('#plot-svg');
+            
+            // Remove previous axis groups
+            svg.selectAll('.axis-group').remove();
+            
+            const gPlot = svg.select('#plot-g');
+            
+            // Compute tick values based on scale type
+            let ticksX, ticksY;
+            
+            if (scaleType === 'asinh') {
+                ticksX = getAsinhTicks(minX, maxX, asinhCofactor);
+                ticksY = getAsinhTicks(minY, maxY, asinhCofactor);
+            } else if (scaleType === 'log') {
+                // Log ticks: filter values
+                const startExp = Math.ceil(Math.log10(Math.max(1, minX)));
+                const endExp = Math.floor(Math.log10(Math.max(1, maxX)));
+                ticksX = [];
+                for (let e = startExp; e <= endExp; e++) {
+                    ticksX.push(Math.pow(10, e));
+                }
+                
+                const startExpY = Math.ceil(Math.log10(Math.max(1, minY)));
+                const endExpY = Math.floor(Math.log10(Math.max(1, maxY)));
+                ticksY = [];
+                for (let e = startExpY; e <= endExpY; e++) {
+                    ticksY.push(Math.pow(10, e));
+                }
+            } else {
+                // Linear: standard ticks
+                ticksX = xScale.ticks(5).map(t => invertTransformValue(t, activeX));
+                ticksY = yScale.ticks(5).map(t => invertTransformValue(t, activeY));
+            }
+            
+            // Format tick label text
+            function formatTick(val) {
+                if (Math.abs(val) >= 1000) {
+                    const exponent = Math.log10(Math.abs(val));
+                    if (Number.isInteger(exponent)) {
+                        return `${val < 0 ? '-' : ''}10${getSuperscript(exponent)}`;
+                    }
+                    return val.toLocaleString();
+                }
+                return val.toFixed(0);
+            }
+            
+            function getSuperscript(num) {
+                const superscripts = {
+                    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', 
+                    '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
+                };
+                return String(num).split('').map(c => superscripts[c] || c).join('');
+            }
+            
+            // Create group for grids and axes
+            const axisGroup = gPlot.insert('g', ':first-child').attr('class', 'axis-group');
+            
+            // Add gridlines and ticks
+            // X-Axis
+            ticksX.forEach(tx => {
+                const transX = transformValue(tx, activeX);
+                const xPos = xScale(transX);
+                
+                if (xPos >= 0 && xPos <= plotW) {
+                    // Gridline
+                    axisGroup.append('line')
+                        .attr('x1', xPos)
+                        .attr('y1', 0)
+                        .attr('x2', xPos)
+                        .attr('y2', plotH)
+                        .attr('stroke', '#e2e8f0')
+                        .attr('stroke-width', 1);
+                        
+                    // Tick
+                    axisGroup.append('line')
+                        .attr('x1', xPos)
+                        .attr('y1', plotH)
+                        .attr('x2', xPos)
+                        .attr('y2', plotH + 5)
+                        .attr('stroke', '#475569')
+                        .attr('stroke-width', 1.5);
+                        
+                    // Label
+                    axisGroup.append('text')
+                        .attr('x', xPos)
+                        .attr('y', plotH + 18)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', '#475569')
+                        .attr('class', 'text-[10px] font-semibold font-mono')
+                        .text(formatTick(tx));
+                }
+            });
+            
+            // Y-Axis
+            ticksY.forEach(ty => {
+                const transY = transformValue(ty, activeY);
+                const yPos = yScale(transY);
+                
+                if (yPos >= 0 && yPos <= plotH) {
+                    // Gridline
+                    axisGroup.append('line')
+                        .attr('x1', 0)
+                        .attr('y1', yPos)
+                        .attr('x2', plotW)
+                        .attr('y2', yPos)
+                        .attr('stroke', '#e2e8f0')
+                        .attr('stroke-width', 1);
+                        
+                    // Tick
+                    axisGroup.append('line')
+                        .attr('x1', -5)
+                        .attr('y1', yPos)
+                        .attr('x2', 0)
+                        .attr('y2', yPos)
+                        .attr('stroke', '#475569')
+                        .attr('stroke-width', 1.5);
+                        
+                    // Label
+                    axisGroup.append('text')
+                        .attr('x', -8)
+                        .attr('y', yPos + 3)
+                        .attr('text-anchor', 'end')
+                        .attr('fill', '#475569')
+                        .attr('class', 'text-[10px] font-semibold font-mono')
+                        .text(formatTick(ty));
+                }
+            });
+            
+            // Draw axis borders
+            axisGroup.append('rect')
+                .attr('width', plotW)
+                .attr('height', plotH)
+                .attr('fill', 'none')
+                .attr('stroke', '#94a3b8')
+                .attr('stroke-width', 1.5);
+                
+            // Axis titles
+            axisGroup.append('text')
+                .attr('x', plotW / 2)
+                .attr('y', plotH + 36)
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#1f2937')
+                .attr('class', 'text-xs font-bold')
+                .text(activeX);
+                
+            axisGroup.append('text')
+                .attr('transform', 'rotate(-90)')
+                .attr('x', -plotH / 2)
+                .attr('y', -42)
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#1f2937')
+                .attr('class', 'text-xs font-bold')
+                .text(activeY);
+        }
+
+        // Overlays representation
+        function renderGateOverlays(idxX, idxY) {
+            const container = d3.select('#gates-drawing-layer');
+            container.selectAll('*').remove();
+            
+            // Find all gates applicable to the current axes in this plot view
+            Object.values(gates).forEach(gate => {
+                // A gate is drawn if:
+                // 1. Its parent is the currentSelectedNode, OR
+                // 2. It IS the currentSelectedNode
+                const isChild = gate.parentId === currentSelectedNode;
+                const isCurrent = gate.id === currentSelectedNode;
+                
+                if ((isChild || isCurrent) && gate.paramX === activeX && gate.paramY === activeY) {
+                    const strokeColor = isCurrent ? '#ef4444' : '#2563eb'; // Red if selected, blue if sibling
+                    const strokeWidth = isCurrent ? 2.5 : 1.5;
+                    const strokeDash = isCurrent ? 'none' : '4 4';
+                    
+                    if (gate.type === 'rect') {
+                        const x0 = xScale(transformValue(gate.coords.minX, activeX));
+                        const x1 = xScale(transformValue(gate.coords.maxX, activeX));
+                        const y0 = yScale(transformValue(gate.coords.maxY, activeY)); // inverted
+                        const y1 = yScale(transformValue(gate.coords.minY, activeY));
+                        
+                        const w = x1 - x0;
+                        const h = y1 - y0;
+                        
+                        container.append('rect')
+                            .attr('x', x0)
+                            .attr('y', y0)
+                            .attr('width', w)
+                            .attr('height', h)
+                            .attr('fill', 'none')
+                            .attr('stroke', strokeColor)
+                            .attr('stroke-width', strokeWidth)
+                            .attr('stroke-dasharray', strokeDash);
+                            
+                        // Text Label overlay
+                        container.append('text')
+                            .attr('x', x0 + 4)
+                            .attr('y', y0 + 14)
+                            .attr('fill', strokeColor)
+                            .attr('class', 'text-[10px] font-bold bg-white px-1')
+                            .text(`${gate.name}: ${(eventFilterCache[gate.id] ? (eventFilterCache[gate.id].length / eventFilterCache[gate.parentId].length * 100) : 0).toFixed(1)}%`);
+                    } else if (gate.type === 'ratio') {
+                        // Singlets ratio gate coordinates drawn as diagonal wedge polygon
+                        const minX = xScale.domain()[0];
+                        const maxX = xScale.domain()[1];
+                        const x0Raw = invertTransformValue(minX, activeX);
+                        const x1Raw = invertTransformValue(maxX, activeX);
+                        
+                        // Wedge points
+                        const pt1_x = Math.max(10000, x0Raw);
+                        const pt1_y1 = pt1_x * gate.coords.ratioMin;
+                        const pt1_y2 = pt1_x * gate.coords.ratioMax;
+                        
+                        const pt2_x = x1Raw;
+                        const pt2_y1 = pt2_x * gate.coords.ratioMin;
+                        const pt2_y2 = pt2_x * gate.coords.ratioMax;
+                        
+                        const x0 = xScale(transformValue(pt1_x, activeX));
+                        const y0_1 = yScale(transformValue(pt1_y1, activeY));
+                        const y0_2 = yScale(transformValue(pt1_y2, activeY));
+                        
+                        const x1 = xScale(transformValue(pt2_x, activeX));
+                        const y1_1 = yScale(transformValue(pt2_y1, activeY));
+                        const y1_2 = yScale(transformValue(pt2_y2, activeY));
+                        
+                        const polyPoints = `${x0},${y0_1} ${x1},${y1_1} ${x1},${y1_2} ${x0},${y0_2}`;
+                        
+                        container.append('polygon')
+                            .attr('points', polyPoints)
+                            .attr('fill', 'none')
+                            .attr('stroke', strokeColor)
+                            .attr('stroke-width', strokeWidth)
+                            .attr('stroke-dasharray', strokeDash);
+                            
+                        // Text Label overlay
+                        container.append('text')
+                            .attr('x', x0 + 10)
+                            .attr('y', y0_2 - 10)
+                            .attr('fill', strokeColor)
+                            .attr('class', 'text-[10px] font-bold')
+                            .text(`${gate.name}: ${(eventFilterCache[gate.id] ? (eventFilterCache[gate.id].length / eventFilterCache[gate.parentId].length * 100) : 0).toFixed(1)}%`);
+                    }
+                }
+            });
+        }
+
+        // Setup Brush for gating interactions
+        function setupBrush(displayParentNodeId) {
+            const brushLayer = d3.select('#brush-layer');
+            brushLayer.selectAll('*').remove();
+
+            // D3 Brush configuration
+            currentBrush = d3.brush()
+                .extent([[0, 0], [plotW, plotH]])
+                .on('brush end', brushed);
+
+            const gBrush = brushLayer.append('g')
+                .attr('class', 'brush')
+                .call(currentBrush);
+
+            // Ensure handles receive mouse pointer events
+            gBrush.selectAll('.overlay, .selection, .handle').style('pointer-events', 'all');
+
+            // If currentSelectedNode is a gate, pre-draw the brush box programmatically without event loops
+            if (currentSelectedNode !== 'root') {
+                const gate = gates[currentSelectedNode];
+                if (gate.type === 'rect' && gate.paramX === activeX && gate.paramY === activeY) {
+                    const x0 = xScale(transformValue(gate.coords.minX, activeX));
+                    const x1 = xScale(transformValue(gate.coords.maxX, activeX));
+                    const y0 = yScale(transformValue(gate.coords.maxY, activeY));
+                    const y1 = yScale(transformValue(gate.coords.minY, activeY));
+
+                    // Pass custom sourceEvent marker to avoid infinite event recursion
+                    gBrush.call(currentBrush.move, [[x0, y0], [x1, y1]], { programmatic: true });
+                }
+            }
+            
+            // Brush callback handler
+            function brushed(event) {
+                // Ignore programmatic moves to prevent call-stack overflows
+                if (!event.selection || (event.sourceEvent && event.sourceEvent.programmatic)) return;
+                
+                const [[x0, y0], [x1, y1]] = event.selection;
+                
+                if (currentSelectedNode !== 'root') {
+                    const gate = gates[currentSelectedNode];
+                    if (gate.type === 'rect' && gate.paramX === activeX && gate.paramY === activeY) {
+                        // Invert visual coordinates back to FCS channel domain
+                        gate.coords.minX = invertTransformValue(xScale.invert(x0), activeX);
+                        gate.coords.maxX = invertTransformValue(xScale.invert(x1), activeX);
+                        gate.coords.minY = invertTransformValue(yScale.invert(y1), activeY);
+                        gate.coords.maxY = invertTransformValue(yScale.invert(y0), activeY);
+
+                        // Perform dynamic cascade recalculations
+                        recalculateAllGating();
+                        renderGatingTree();
+                        updateInspectorPanel();
+
+                        // Real-time canvas/overlay updates
+                        const idxX = parsedFCS.channels.find(c => c.name === activeX).index;
+                        const idxY = parsedFCS.channels.find(c => c.name === activeY).index;
+                        drawCanvasData(eventFilterCache[gate.parentId], idxX, idxY);
+                        renderGateOverlays(idxX, idxY);
+                    }
+                }
+            }
+        }
+
+        // Add user-defined gate
+        function createNewGatePrompt() {
+            if (!parsedFCS) {
+                alert('Please load an FCS file first.');
+                return;
+            }
+            
+            const gateName = prompt('Enter a name for the new gate:', `Subpopulation_${Object.keys(gates).length}`);
+            if (!gateName) return;
+            
+            // Create a default gate centered in the plot
+            const midX = (xScale.domain()[0] + xScale.domain()[1]) / 2;
+            const widthX = (xScale.domain()[1] - xScale.domain()[0]) * 0.25;
+            
+            const midY = (yScale.domain()[0] + yScale.domain()[1]) / 2;
+            const heightY = (yScale.domain()[1] - yScale.domain()[0]) * 0.25;
+            
+            const newGateId = 'gate-user-' + Date.now();
+            
+            gates[newGateId] = {
+                id: newGateId,
+                name: gateName,
+                parentId: currentSelectedNode, // Add as child of currently active node
+                paramX: activeX,
+                paramY: activeY,
+                type: 'rect',
+                coords: {
+                    minX: invertTransformValue(midX - widthX, activeX),
+                    maxX: invertTransformValue(midX + widthX, activeX),
+                    minY: invertTransformValue(midY - heightY, activeY),
+                    maxY: invertTransformValue(midY + heightY, activeY)
+                }
+            };
+            
+            recalculateAllGating();
+            renderGatingTree();
+            selectTreeNode(newGateId);
+        }
+
+        // Delete currently active gate
+        function deleteSelectedGate() {
+            if (currentSelectedNode === 'root') {
+                alert('Cannot delete the root sample tube.');
+                return;
+            }
+            
+            const toDeleteId = currentSelectedNode;
+            
+            // Confirm delete
+            if (confirm(`Are you sure you want to delete the gate "${gates[toDeleteId].name}" and all its children?`)) {
+                // Find parent to navigate back to
+                const parentId = gates[toDeleteId].parentId;
+                
+                // Recursive delete children helper
+                function deleteChildren(id) {
+                    Object.values(gates).forEach(g => {
+                        if (g.parentId === id) {
+                            deleteChildren(g.id);
+                        }
+                    });
+                    delete gates[id];
+                }
+                
+                deleteChildren(toDeleteId);
+                
+                recalculateAllGating();
+                renderGatingTree();
+                selectTreeNode(parentId);
+            }
+        }
+
+        // Export workspace to file
+        function exportWorkspaceJSON() {
+            if (!parsedFCS) {
+                alert('No workspace loaded.');
+                return;
+            }
+            
+            const exportData = {
+                fileName: document.getElementById('loaded-file-name').innerText,
+                gatingTree: gates,
+                statistics: Object.keys(eventFilterCache).reduce((acc, k) => {
+                    acc[k] = {
+                        count: eventFilterCache[k].length,
+                        pctTotal: (eventFilterCache[k].length / parsedFCS.events.length * 100)
+                    };
+                    return acc;
+                }, {})
+            };
+            
+            const blob = new Blob([JSON.stringify(exportData, null, 4)], {type: 'application/json'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `flowjo_workspace_${exportData.fileName.replace('.fcs', '')}.json`;
+            a.click();
+        }
+    </script>
+</body>
+</html>

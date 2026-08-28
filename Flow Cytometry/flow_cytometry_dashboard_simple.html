@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Cytometry Gating Tool</title>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --border-color: #e2e8f0;
+            --panel-bg: #f1f5f9;
+        }
+
+        body.dark-theme {
+            --bg-color: #0b0f19;
+            --card-bg: #111827;
+            --text-primary: #f9fafb;
+            --text-secondary: #9ca3af;
+            --border-color: #374151;
+            --panel-bg: #1f2937;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 20px;
+            transition: background-color 0.3s ease, color 0.3s ease;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .dashboard {
+            max-width: 1000px;
+            width: 100%;
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .layout {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .plot-panel {
+            flex: 0 0 auto;
+        }
+
+        .plot-container {
+            position: relative;
+            width: 480px;
+            height: 480px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background-color: var(--card-bg);
+            overflow: hidden;
+        }
+
+        #plot-canvas {
+            position: absolute;
+            left: 55px;
+            top: 20px;
+            z-index: 1;
+        }
+
+        #plot-svg {
+            position: absolute;
+            left: 0;
+            top: 0;
+            z-index: 2;
+        }
+
+        /* SVG Axes Styling */
+        #plot-svg .axis-title {
+            fill: var(--text-primary);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        #plot-svg .tick text {
+            fill: var(--text-secondary);
+            font-size: 10px;
+        }
+
+        #plot-svg .domain, #plot-svg .tick line {
+            stroke: var(--border-color);
+        }
+
+        /* Brush custom outline styling */
+        .brush .selection {
+            fill: #3b82f6;
+            fill-opacity: 0.15;
+            stroke: #2563eb;
+            stroke-width: 2px;
+            stroke-dasharray: 4 4;
+        }
+
+        .controls-panel {
+            flex: 1 1 350px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .section {
+            background-color: var(--panel-bg);
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid var(--border-color);
+        }
+
+        .section h2 {
+            margin-top: 0;
+            margin-bottom: 12px;
+            font-size: 1.1rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 6px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        label {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        select, button {
+            background-color: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background-color: var(--border-color);
+        }
+
+        button.primary {
+            background-color: #2563eb;
+            color: white;
+            border-color: #2563eb;
+            font-weight: 600;
+        }
+
+        button.primary:hover {
+            background-color: #1d4ed8;
+        }
+
+        /* Stats List styling */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .stat-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #2563eb;
+        }
+
+        body.dark-theme .stat-value {
+            color: #60a5fa;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }
+
+        .progress-bar-container {
+            background-color: var(--border-color);
+            border-radius: 4px;
+            height: 10px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .progress-bar {
+            background-color: #2563eb;
+            height: 100%;
+            width: 0%;
+            transition: width 0.1s ease;
+        }
+
+        body.dark-theme .progress-bar {
+            background-color: #60a5fa;
+        }
+
+        .gate-coords {
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            background: var(--card-bg);
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .checkbox-label input {
+            cursor: pointer;
+        }
+    </style>
+    <!-- Load D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+
+<div class="dashboard">
+    <header>
+        <h1>Flow Cytometry Gating Dashboard</h1>
+        <div>
+            <label for="theme-select" style="margin-right: 8px;">Theme:</label>
+            <select id="theme-select" onchange="updateTheme()">
+                <option value="light">Light Mode</option>
+                <option value="dark" selected>Dark Mode</option>
+            </select>
+        </div>
+    </header>
+
+    <div class="layout">
+        <!-- Plot Area -->
+        <div class="plot-panel">
+            <div class="plot-container">
+                <!-- Render target for binned density heatmap/scatter -->
+                <canvas id="plot-canvas" width="400" height="400"></canvas>
+                <!-- SVG overlay for axis labels, ticks, and interactive gating brush -->
+                <svg id="plot-svg" width="480" height="480"></svg>
+            </div>
+        </div>
+
+        <!-- Controls and Stats Area -->
+        <div class="controls-panel">
+            <!-- Gating Statistics Section -->
+            <div class="section">
+                <h2>Gating Statistics</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="total-count">0</div>
+                        <div class="stat-label">Total Events</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="gated-count">0</div>
+                        <div class="stat-label">Gated Events</div>
+                    </div>
+                </div>
+                <div class="stat-card" style="width: auto;">
+                    <div class="stat-value" id="gated-percent">0.00%</div>
+                    <div class="stat-label">% of Total Cells</div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="gated-progress"></div>
+                    </div>
+                </div>
+                
+                <div class="gate-coords" id="gate-coords-display">
+                    Gate Coordinates: No active gate
+                </div>
+            </div>
+
+            <!-- Plot Display Configuration -->
+            <div class="section">
+                <h2>Display Configuration</h2>
+                <div class="control-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="show-heatmap" checked onchange="drawPlot()">
+                        Enable Density Heatmap
+                    </label>
+                </div>
+                <div class="control-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="show-dots" checked onchange="drawPlot()">
+                        Show Unselected Cell Scatter Dots
+                    </label>
+                </div>
+            </div>
+
+            <!-- Data Generator Settings -->
+            <div class="section">
+                <h2>Synthetic Cell Generator</h2>
+                <div class="control-group">
+                    <div class="control-row">
+                        <label for="cell-count-slider">Event Count:</label>
+                        <span id="cell-count-val">5,000</span>
+                    </div>
+                    <input type="range" id="cell-count-slider" min="1000" max="10000" step="500" value="5000" oninput="updateSliderLabels()">
+                </div>
+                <div class="control-group">
+                    <div class="control-row">
+                        <label for="noise-slider">Background Noise:</label>
+                        <span id="noise-val">10%</span>
+                    </div>
+                    <input type="range" id="noise-slider" min="0" max="25" step="1" value="10" oninput="updateSliderLabels()">
+                </div>
+                <button class="primary" style="width: 100%; margin-top: 10px;" onclick="regenerateData()">Regenerate Cells</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Initialize standard state variables
+    const gridSize = 80;
+    let events = [];
+    let currentGate = null;
+
+    // Set plot size layout metrics
+    const plotWidth = 400;
+    const plotHeight = 400;
+
+    // Linear scales mapping data units [0, 100] to screen pixels [0, 400]
+    const xScale = d3.scaleLinear().domain([0, 100]).range([0, plotWidth]);
+    const yScale = d3.scaleLinear().domain([0, 100]).range([plotHeight, 0]);
+
+    // Setup SVG Axes and Brush
+    const svg = d3.select("#plot-svg");
+    const gPlot = svg.append("g")
+        .attr("transform", "translate(55, 20)");
+
+    // D3 brush creation
+    const brush = d3.brush()
+        .extent([[0, 0], [plotWidth, plotHeight]])
+        .on("brush end", brushed);
+
+    // Render scales
+    const xAxis = d3.axisBottom(xScale).ticks(5);
+    const yAxis = d3.axisLeft(yScale).ticks(5);
+
+    svg.append("g")
+        .attr("class", "x-axis")
+        .attr("transform", `translate(55, 420)`)
+        .call(xAxis);
+
+    svg.append("g")
+        .attr("class", "y-axis")
+        .attr("transform", `translate(55, 20)`)
+        .call(yAxis);
+
+    // Label axes
+    svg.append("text")
+        .attr("class", "axis-title")
+        .attr("x", 55 + plotWidth / 2)
+        .attr("y", 460)
+        .attr("text-anchor", "middle")
+        .text("FSC-A (Forward Scatter - Area)");
+
+    svg.append("text")
+        .attr("class", "axis-title")
+        .attr("transform", "rotate(-90)")
+        .attr("x", -(20 + plotHeight / 2))
+        .attr("y", 18)
+        .attr("text-anchor", "middle")
+        .text("SSC-A (Side Scatter - Area)");
+
+    // Append brush group
+    const gBrush = gPlot.append("g")
+        .attr("class", "brush")
+        .call(brush);
+
+    // Trigger theme update on startup
+    document.body.classList.add('dark-theme');
+
+    // Run initial cells generation and rendering
+    regenerateData();
+
+    // Programmatically initialize standard gate
+    gBrush.call(brush.move, [[xScale(20), yScale(50)], [xScale(50), yScale(15)]]);
+
+    function updateTheme() {
+        const theme = document.getElementById('theme-select').value;
+        if (theme === 'dark') {
+            document.body.classList.add('dark-theme');
+        } else {
+            document.body.classList.remove('dark-theme');
+        }
+        drawPlot();
+    }
+
+    function updateSliderLabels() {
+        const count = document.getElementById('cell-count-slider').value;
+        const noise = document.getElementById('noise-slider').value;
+        document.getElementById('cell-count-val').innerText = Number(count).toLocaleString();
+        document.getElementById('noise-val').innerText = noise + '%';
+    }
+
+    function regenerateData() {
+        const count = parseInt(document.getElementById('cell-count-slider').value);
+        const noisePercent = parseInt(document.getElementById('noise-slider').value);
+        
+        events = generateSyntheticCells(count, noisePercent);
+        document.getElementById('total-count').innerText = count.toLocaleString();
+        
+        drawPlot();
+    }
+
+    // Generator function for standard bivariate normal populations
+    function generateSyntheticCells(count, noisePercent) {
+        const data = [];
+        const noiseCount = Math.floor(count * (noisePercent / 100));
+        
+        // Two overlapping clusters: Lymphocytes (Pop 1) and Granulocytes/Monocytes (Pop 2)
+        const popCount1 = Math.floor((count - noiseCount) * 0.60);
+        const popCount2 = count - noiseCount - popCount1;
+
+        // Pop 1: Centered at (35, 30) - Lymphocyte-like profile
+        for (let i = 0; i < popCount1; i++) {
+            data.push({
+                x: d3.randomNormal(35, 6.5)(),
+                y: d3.randomNormal(30, 7.5)()
+            });
+        }
+
+        // Pop 2: Centered at (65, 65) - Granulocyte-like profile
+        for (let i = 0; i < popCount2; i++) {
+            data.push({
+                x: d3.randomNormal(65, 11)(),
+                y: d3.randomNormal(65, 10)()
+            });
+        }
+
+        // Random background cellular debris / noise
+        for (let i = 0; i < noiseCount; i++) {
+            data.push({
+                x: Math.random() * 100,
+                y: Math.random() * 100
+            });
+        }
+
+        // Ensure everything is bound in the physical FSC/SSC region [0, 100]
+        data.forEach(d => {
+            d.x = Math.max(0, Math.min(100, d.x));
+            d.y = Math.max(0, Math.min(100, d.y));
+        });
+
+        return data;
+    }
+
+    // Simple box-blur algorithm to smooth binned data densities
+    function blurGrid(grid) {
+        const blurred = Array.from({length: gridSize}, () => new Float32Array(gridSize));
+        for (let y = 0; y < gridSize; y++) {
+            for (let x = 0; x < gridSize; x++) {
+                let sum = 0;
+                let count = 0;
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const ny = y + dy;
+                        const nx = x + dx;
+                        if (ny >= 0 && ny < gridSize && nx >= 0 && nx < gridSize) {
+                            sum += grid[ny][nx];
+                            count++;
+                        }
+                    }
+                }
+                blurred[y][x] = sum / count;
+            }
+        }
+        return blurred;
+    }
+
+    // Color gradient parser
+    function getColor(val, theme) {
+        if (theme === 'dark') {
+            // Dark mode color stops: navy -> blue -> green -> yellow -> red
+            let r, g, b;
+            if (val < 0.25) {
+                const t = val / 0.25;
+                r = 15 + (59 - 15) * t;
+                g = 23 + (130 - 23) * t;
+                b = 42 + (246 - 42) * t;
+            } else if (val < 0.5) {
+                const t = (val - 0.25) / 0.25;
+                r = 59 - (59 - 16) * t;
+                g = 130 + (185 - 130) * t;
+                b = 246 - (246 - 129) * t;
+            } else if (val < 0.75) {
+                const t = (val - 0.5) / 0.25;
+                r = 16 + (245 - 16) * t;
+                g = 185 - (185 - 158) * t;
+                b = 129 - (129 - 11) * t;
+            } else {
+                const t = (val - 0.75) / 0.25;
+                r = 245 - (245 - 244) * t;
+                g = 158 - (158 - 63) * t;
+                b = 11 + (94 - 11) * t;
+            }
+            return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+        } else {
+            // Light mode color stops: transparent-ish blue -> green -> yellow -> red
+            let r, g, b;
+            if (val < 0.1) {
+                const t = val / 0.1;
+                r = 255 - (255 - 173) * t;
+                g = 255 - (255 - 216) * t;
+                b = 255 - (255 - 230) * t;
+            } else if (val < 0.4) {
+                const t = (val - 0.1) / 0.3;
+                r = 173 - (173 - 50) * t;
+                g = 216 - (216 - 205) * t;
+                b = 230 - (230 - 50) * t;
+            } else if (val < 0.7) {
+                const t = (val - 0.4) / 0.3;
+                r = 50 + (255 - 50) * t;
+                g = 205 + (215 - 205) * t;
+                b = 50 - 50 * t;
+            } else {
+                const t = (val - 0.7) / 0.3;
+                r = 255 - (255 - 220) * t;
+                g = 215 - (215 - 20) * t;
+                b = 0 + 60 * t;
+            }
+            return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+        }
+    }
+
+    // Handles drawing the density heatmap, unselected scatter dots, and selected highlight points
+    function drawPlot() {
+        const canvas = document.getElementById('plot-canvas');
+        const theme = document.getElementById('theme-select').value;
+        const showDots = document.getElementById('show-dots').checked;
+        const showHeatmap = document.getElementById('show-heatmap').checked;
+        
+        const ctx = canvas.getContext('2d');
+        const cw = canvas.width;
+        const ch = canvas.height;
+        
+        // Clear canvas with background matching current theme
+        ctx.fillStyle = theme === 'dark' ? '#0f172a' : '#ffffff';
+        ctx.fillRect(0, 0, cw, ch);
+        
+        // 1. Calculate & Draw Density Heatmap
+        if (showHeatmap) {
+            const grid = Array.from({length: gridSize}, () => new Float32Array(gridSize));
+            events.forEach(e => {
+                const binX = Math.min(gridSize - 1, Math.max(0, Math.floor((e.x / 100) * gridSize)));
+                const binY = Math.min(gridSize - 1, Math.max(0, Math.floor(((100 - e.y) / 100) * gridSize)));
+                grid[binY][binX]++;
+            });
+            
+            const blurred = blurGrid(blurGrid(grid));
+            
+            let maxVal = 0;
+            for (let y = 0; y < gridSize; y++) {
+                for (let x = 0; x < gridSize; x++) {
+                    if (blurred[y][x] > maxVal) maxVal = blurred[y][x];
+                }
+            }
+            
+            const cellW = cw / gridSize;
+            const cellH = ch / gridSize;
+            
+            for (let y = 0; y < gridSize; y++) {
+                for (let x = 0; x < gridSize; x++) {
+                    const val = blurred[y][x];
+                    if (val > 0) {
+                        const norm = val / maxVal;
+                        ctx.fillStyle = getColor(norm, theme);
+                        ctx.fillRect(x * cellW, y * cellH, Math.ceil(cellW), Math.ceil(cellH));
+                    }
+                }
+            }
+        }
+        
+        // 2. Draw Unselected Cell Scatter Dots
+        if (showDots || !showHeatmap) {
+            ctx.fillStyle = theme === 'dark' ? 'rgba(255, 255, 255, 0.25)' : 'rgba(15, 23, 42, 0.25)';
+            events.forEach(e => {
+                const isGated = currentGate && 
+                                e.x >= currentGate.minX && e.x <= currentGate.maxX && 
+                                e.y >= currentGate.minY && e.y <= currentGate.maxY;
+                if (!isGated) {
+                    const cx = (e.x / 100) * cw;
+                    const cy = ((100 - e.y) / 100) * ch;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 1.2, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+        }
+        
+        // 3. Draw Gated / Selected Cells with high visibility highlight
+        if (currentGate) {
+            const highlightColor = theme === 'dark' ? 'rgba(34, 197, 94, 0.85)' : 'rgba(220, 38, 38, 0.85)'; // Green in dark, Red in light
+            ctx.fillStyle = highlightColor;
+            
+            let count = 0;
+            events.forEach(e => {
+                const isGated = e.x >= currentGate.minX && e.x <= currentGate.maxX && 
+                                e.y >= currentGate.minY && e.y <= currentGate.maxY;
+                if (isGated) {
+                    count++;
+                    const cx = (e.x / 100) * cw;
+                    const cy = ((100 - e.y) / 100) * ch;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 1.8, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+            
+            // Update stats panels
+            document.getElementById('gated-count').innerText = count.toLocaleString();
+            const pct = (count / events.length) * 100;
+            document.getElementById('gated-percent').innerText = pct.toFixed(2) + '%';
+            document.getElementById('gated-progress').style.width = pct + '%';
+            
+            document.getElementById('gate-coords-display').innerHTML = 
+                `Gate Coordinates:<br>` +
+                `FSC-A: [${currentGate.minX.toFixed(1)}, ${currentGate.maxX.toFixed(1)}]<br>` +
+                `SSC-A: [${currentGate.minY.toFixed(1)}, ${currentGate.maxY.toFixed(1)}]`;
+        } else {
+            document.getElementById('gated-count').innerText = '0';
+            document.getElementById('gated-percent').innerText = '0.00%';
+            document.getElementById('gated-progress').style.width = '0%';
+            document.getElementById('gate-coords-display').innerText = 'Gate Coordinates: No active gate';
+        }
+    }
+
+    // Brush callback triggered on user resize/drag
+    function brushed(event) {
+        const selection = event.selection;
+        if (selection) {
+            const [[x0, y0], [x1, y1]] = selection;
+            
+            // Calculate gate bounds, mapping pixels to data dimensions
+            currentGate = {
+                minX: xScale.invert(x0),
+                maxX: xScale.invert(x1),
+                minY: yScale.invert(y1), // larger pixel Y corresponds to smaller data Y
+                maxY: yScale.invert(y0)  // smaller pixel Y corresponds to larger data Y
+            };
+        } else {
+            currentGate = null;
+        }
+        
+        drawPlot();
+    }
+</script>
+</body>
+</html>
