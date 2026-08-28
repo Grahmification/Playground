@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FFT Analysis Tool</title>
+    <title>FFT Analysis Tool with Windowing</title>
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Chart.js for plotting -->
@@ -13,13 +13,23 @@
 </head>
 <body class="bg-gray-100 min-h-screen p-6">
     <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-md p-8">
-        <h1 class="text-2xl font-bold text-gray-800 mb-4">CSV FFT Analyzer</h1>
-        <p class="text-gray-600 mb-6">Upload your CSV file (Time_s, Amplitude). The tool will dynamically parse the sample rate, compute the correct FFT spectrum, and plot the results.</p>
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">CSV FFT Analyzer with Windowing</h1>
+        <p class="text-gray-600 mb-6">Upload your CSV file (Time_s, Amplitude), choose a window function to reduce spectral leakage, and analyze the resulting frequency spectrum.</p>
 
-        <!-- File Upload -->
-        <div class="mb-6">
-            <label class="block mb-2 text-sm font-medium text-gray-700" for="csvFile">Select CSV File</label>
-            <input class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2 focus:outline-none" id="csvFile" type="file" accept=".csv">
+        <!-- Controls: File Upload & Window Selection -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div>
+                <label class="block mb-2 text-sm font-medium text-gray-700" for="csvFile">Select CSV File</label>
+                <input class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2 focus:outline-none" id="csvFile" type="file" accept=".csv">
+            </div>
+            <div>
+                <label class="block mb-2 text-sm font-medium text-gray-700" for="windowType">Window Function</label>
+                <select id="windowType" class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-gray-50 p-2.5 focus:outline-none">
+                    <option value="none">None (Rectangular)</option>
+                    <option value="hann" selected>Hann</option>
+                    <option value="hamming">Hamming</option>
+                </select>
+            </div>
         </div>
 
         <!-- Charts Container -->
@@ -43,15 +53,15 @@
     <script>
         let timeChart = null;
         let fftChart = null;
+        let globalData = null; // Store loaded data globally to re-plot on window change
 
-        // Corrected Iterative Cooley-Tukey Radix-2 FFT Implementation
+        // Iterative Cooley-Tukey Radix-2 FFT Implementation
         function computeFFT(real) {
             const n = real.length;
             if ((n & (n - 1)) !== 0) {
                 throw new Error("FFT length must be a power of 2");
             }
 
-            // Bit-reversal permutation
             const imag = new Array(n).fill(0);
             let j = 0;
             for (let i = 0; i < n - 1; i++) {
@@ -67,7 +77,6 @@
                 j += k;
             }
 
-            // Compute FFT stages
             for (let len = 2; len <= n; len <<= 1) {
                 let halfLen = len >> 1;
                 let angle = -2 * Math.PI / len;
@@ -97,12 +106,33 @@
                 }
             }
 
-            // Combine into complex objects
             const results = new Array(n);
             for (let i = 0; i < n; i++) {
                 results[i] = { re: real[i], im: imag[i] };
             }
             return results;
+        }
+
+        // Apply Window Function and return windowed data + coherent gain compensation factor
+        function applyWindow(signal, type) {
+            const n = signal.length;
+            const windowed = new Array(n);
+            let sumWeights = 0;
+
+            for (let i = 0; i < n; i++) {
+                let w = 1.0;
+                if (type === 'hann') {
+                    w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
+                } else if (type === 'hamming') {
+                    w = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1));
+                }
+                windowed[i] = signal[i] * w;
+                sumWeights += w;
+            }
+
+            // Coherent gain normalization factor so peak amplitudes stay accurate
+            const coherentGain = sumWeights / n;
+            return { windowedData: windowed, gain: coherentGain };
         }
 
         document.getElementById('csvFile').addEventListener('change', function(e) {
@@ -122,26 +152,42 @@
                         return;
                     }
 
-                    const times = dataRows.map(row => row[0]);
-                    const amplitudes = dataRows.map(row => row[1]);
+                    globalData = {
+                        times: dataRows.map(row => row[0]),
+                        amplitudes: dataRows.map(row => row[1])
+                    };
 
-                    const dt = times[1] - times[0];
-                    const sampleRate = dt > 0 ? 1.0 / dt : 100;
-
-                    processAndPlot(times, amplitudes, sampleRate);
+                    triggerProcessing();
                 }
             });
         });
 
-        function processAndPlot(times, amplitudes, sampleRate) {
+        document.getElementById('windowType').addEventListener('change', function() {
+            if (globalData) {
+                triggerProcessing();
+            }
+        });
+
+        function triggerProcessing() {
+            const dt = globalData.times[1] - globalData.times[0];
+            const sampleRate = dt > 0 ? 1.0 / dt : 100;
+            const windowSelection = document.getElementById('windowType').value;
+
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection);
+        }
+
+        function processAndPlot(times, amplitudes, sampleRate, windowType) {
             const power = Math.floor(Math.log2(amplitudes.length));
             const n = Math.pow(2, power);
             
             const truncatedAmps = amplitudes.slice(0, n);
             const truncatedTimes = times.slice(0, n);
 
-            // Clone array to pass to FFT function
-            const fftResult = computeFFT([...truncatedAmps]);
+            // Apply selected window function
+            const { windowedData, gain } = applyWindow(truncatedAmps, windowType);
+
+            // Compute FFT on windowed signal
+            const fftResult = computeFFT([...windowedData]);
 
             // Calculate magnitude spectrum for positive frequencies up to Nyquist
             const halfN = n / 2;
@@ -149,26 +195,37 @@
             const frequencies = [];
 
             for (let i = 0; i < halfN; i++) {
-                // Correct scaling factor for standard magnitude spectrum
-                const mag = Math.sqrt(fftResult[i].re ** 2 + fftResult[i].im ** 2) / halfN;
+                // Normalize by halfN and adjust for window coherent gain
+                let mag = Math.sqrt(fftResult[i].re ** 2 + fftResult[i].im ** 2) / halfN;
+                if (gain > 0) mag /= gain;
                 magnitudes.push(mag);
                 frequencies.push((i * sampleRate) / n);
             }
 
-            // Plot Time Domain
+            // Plot Time Domain (showing windowed waveform shape)
             const timeCtx = document.getElementById('timeChart').getContext('2d');
             if (timeChart) timeChart.destroy();
             timeChart = new Chart(timeCtx, {
                 type: 'line',
                 data: {
                     labels: truncatedTimes.map(t => t.toFixed(2) + 's'),
-                    datasets: [{
-                        label: 'Amplitude',
-                        data: truncatedAmps,
-                        borderColor: 'rgb(59, 130, 246)',
-                        borderWidth: 1.5,
-                        pointRadius: 0
-                    }]
+                    datasets: [
+                        {
+                            label: 'Windowed Amplitude',
+                            data: windowedData,
+                            borderColor: 'rgb(59, 130, 246)',
+                            borderWidth: 1.5,
+                            pointRadius: 0
+                        },
+                        {
+                            label: 'Original Signal (Reference)',
+                            data: truncatedAmps,
+                            borderColor: 'rgba(156, 163, 175, 0.5)',
+                            borderWidth: 1,
+                            borderDash: [4, 4],
+                            pointRadius: 0
+                        }
+                    ]
                 },
                 options: { 
                     responsive: true, 
@@ -188,7 +245,7 @@
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
                     datasets: [{
-                        label: 'Magnitude Spectrum',
+                        label: `Magnitude Spectrum (${windowType.toUpperCase()} Window)`,
                         data: magnitudes,
                         borderColor: 'rgb(239, 68, 68)',
                         borderWidth: 1.5,
