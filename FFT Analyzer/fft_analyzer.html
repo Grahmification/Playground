@@ -380,7 +380,6 @@
 
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * n);
                 if (i > 0 && i < halfN - 1) psd *= 2;
-                // Avoid zero or negative values for log scale
                 psdValues.push(psd > 0 ? psd : 1e-12);
 
                 phases.push(Math.atan2(im, re));
@@ -393,7 +392,6 @@
                 }
             }
 
-            // Dynamic Peak Detection & Summed Sinusoidal Peak Components Generation
             const maxMag = Math.max(...magnitudes);
             const peakThreshold = maxMag * sensitivity;
             const peakData = new Array(magnitudes.length).fill(null);
@@ -419,7 +417,6 @@
                 smoothTimes[i] = t0 + i * (dt / interpFactor);
             }
 
-            // Sum all detected peak sinewave components into a single array
             const summedPeakSignal = smoothTimes.map(t => {
                 let sum = 0;
                 for (let peak of detectedPeakObjects) {
@@ -428,44 +425,70 @@
                 return sum;
             });
 
-            // 1. Time Chart datasets setup
-            const timeDatasets = [
-                { 
-                    label: 'Original Data', 
-                    data: smoothTimes.map(t => {
-                        let idx = Math.round((t - t0) / dt);
-                        return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
-                    }), 
-                    borderColor: 'rgba(156, 163, 175, 0.4)', 
-                    borderWidth: 1.5, 
-                    borderDash: [4, 4], 
-                    pointRadius: 0,
-                    spanGaps: true
-                },
-                { 
-                    label: `Gated Reconstitution (${minFreq}-${maxFreq} Hz)`, 
-                    data: smoothGatedSignal, 
-                    borderColor: 'rgb(37, 99, 235)', 
-                    borderWidth: 2, 
-                    pointRadius: 0 
-                },
-                {
-                    label: 'Summed Peak Components',
-                    data: summedPeakSignal,
-                    borderColor: 'rgb(16, 185, 129)',
-                    borderWidth: 2,
-                    borderDash: [2, 2],
-                    pointRadius: 0
+            // Helper to update or initialize a chart while preserving dataset hidden states
+            function updateOrCreateChart(chartInstance, canvasId, config) {
+                if (chartInstance) {
+                    // Save visibility states of existing datasets
+                    const visibilityStates = chartInstance.data.datasets.map((ds, idx) => chartInstance.isDatasetVisible(idx));
+                    
+                    chartInstance.data.labels = config.data.labels;
+                    chartInstance.data.datasets.forEach((ds, idx) => {
+                        ds.data = config.data.datasets[idx].data;
+                        if (config.data.datasets[idx].label) {
+                            ds.label = config.data.datasets[idx].label;
+                        }
+                    });
+                    
+                    chartInstance.update('none'); // Update smoothly without full reset animation
+                    
+                    // Re-apply visibility states incase datasets were hidden via legend clicks
+                    visibilityStates.forEach((isVisible, idx) => {
+                        if (isVisible !== chartInstance.isDatasetVisible(idx)) {
+                            chartInstance.setDatasetVisibility(idx, isVisible);
+                        }
+                    });
+                    chartInstance.update('none');
+                    return chartInstance;
+                } else {
+                    const ctx = document.getElementById(canvasId).getContext('2d');
+                    return new Chart(ctx, config);
                 }
-            ];
+            }
 
-            const timeCtx = document.getElementById('timeChart').getContext('2d');
-            if (timeChart) timeChart.destroy();
-            timeChart = new Chart(timeCtx, {
+            // 1. Time Chart
+            timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
                     labels: smoothTimes.map(t => t.toFixed(2)),
-                    datasets: timeDatasets
+                    datasets: [
+                        { 
+                            label: 'Original Data', 
+                            data: smoothTimes.map(t => {
+                                let idx = Math.round((t - t0) / dt);
+                                return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
+                            }), 
+                            borderColor: 'rgba(156, 163, 175, 0.4)', 
+                            borderWidth: 1.5, 
+                            borderDash: [4, 4], 
+                            pointRadius: 0,
+                            spanGaps: true
+                        },
+                        { 
+                            label: `Gated Reconstitution (${minFreq}-${maxFreq} Hz)`, 
+                            data: smoothGatedSignal, 
+                            borderColor: 'rgb(37, 99, 235)', 
+                            borderWidth: 2, 
+                            pointRadius: 0 
+                        },
+                        {
+                            label: 'Summed Peak Components',
+                            data: summedPeakSignal,
+                            borderColor: 'rgb(16, 185, 129)',
+                            borderWidth: 2,
+                            borderDash: [2, 2],
+                            pointRadius: 0
+                        }
+                    ]
                 },
                 options: { 
                     responsive: true, 
@@ -480,10 +503,8 @@
                 }
             });
 
-            // 2. FFT Magnitude Chart with Adjustable Peak Detection
-            const fftCtx = document.getElementById('fftChart').getContext('2d');
-            if (fftChart) fftChart.destroy();
-            fftChart = new Chart(fftCtx, {
+            // 2. FFT Magnitude Chart
+            fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
@@ -514,10 +535,8 @@
                 }
             });
 
-            // 3. PSD Chart (Log Scale Y-Axis)
-            const psdCtx = document.getElementById('psdChart').getContext('2d');
-            if (psdChart) psdChart.destroy();
-            psdChart = new Chart(psdCtx, {
+            // 3. PSD Chart
+            psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
@@ -537,9 +556,7 @@
             });
 
             // 4. Phase Chart
-            const phaseCtx = document.getElementById('phaseChart').getContext('2d');
-            if (phaseChart) phaseChart.destroy();
-            phaseChart = new Chart(phaseCtx, {
+            phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
                     labels: frequencies.map(f => f.toFixed(1) + ' Hz'),
