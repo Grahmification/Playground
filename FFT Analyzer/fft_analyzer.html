@@ -8,6 +8,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Chart.js for plotting -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js Zoom Plugin -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 </head>
@@ -179,7 +181,10 @@
         <div id="viewCharts" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Time Domain (Original & Reconstructions)</h3>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Time Domain (Original & Reconstructions)</h3>
+                    <button onclick="resetChartZoom('time')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
+                </div>
                 <div class="relative w-full h-[360px]">
                     <canvas id="timeChart"></canvas>
                 </div>
@@ -187,7 +192,10 @@
 
             <!-- Frequency Domain Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Frequency Domain (FFT Magnitude & Threshold)</h3>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Frequency Domain (FFT Magnitude & Threshold)</h3>
+                    <button onclick="resetChartZoom('fft')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
+                </div>
                 <div class="relative w-full h-[360px]">
                     <canvas id="fftChart"></canvas>
                 </div>
@@ -195,7 +203,10 @@
 
             <!-- Power Spectral Density (PSD) Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Power Spectral Density (PSD - Log Scale)</h3>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Power Spectral Density (PSD - Log Scale)</h3>
+                    <button onclick="resetChartZoom('psd')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
+                </div>
                 <div class="relative w-full h-[360px]">
                     <canvas id="psdChart"></canvas>
                 </div>
@@ -203,7 +214,10 @@
 
             <!-- Phase Information Chart Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Unwrapped Phase Spectrum (Radians)</h3>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Unwrapped Phase Spectrum (Radians)</h3>
+                    <button onclick="resetChartZoom('phase')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
+                </div>
                 <div class="relative w-full h-[360px]">
                     <canvas id="phaseChart"></canvas>
                 </div>
@@ -211,7 +225,10 @@
 
             <!-- Polar Phase Plot Card -->
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col col-span-full">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Polar Phase Spectrum (Unit Circle, r = 1)</h3>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Polar Phase Spectrum (Unit Circle, r = 1)</h3>
+                    <button onclick="resetChartZoom('polar')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
+                </div>
                 <div class="relative w-full h-[400px]">
                     <canvas id="polarPhaseChart"></canvas>
                 </div>
@@ -302,6 +319,20 @@
         let currentSortAscending = true;
         let rawParsedRows = null;
         let currentFileName = "";
+
+        // Function to reset individual chart zoom
+        function resetChartZoom(chartKey) {
+            const chartMap = {
+                'time': timeChart,
+                'fft': fftChart,
+                'psd': psdChart,
+                'phase': phaseChart,
+                'polar': polarPhaseChart
+            };
+            if (chartMap[chartKey]) {
+                chartMap[chartKey].resetZoom();
+            }
+        }
 
         function toggleExportDropdown() {
             const menu = document.getElementById('exportDropdownMenu');
@@ -1263,6 +1294,23 @@
 
             const xAxisLabelText = unitType === 'period' ? 'Period (s)' : 'Frequency (Hz)';
 
+            // Common Zoom & Pan Plugin Configuration with hard boundary limits (preventing zoom out past original view)
+            const zoomPluginConfig = {
+                limits: {
+                    x: { min: 'original', max: 'original' },
+                    y: { min: 'original', max: 'original' }
+                },
+                zoom: {
+                    wheel: { enabled: true },
+                    pinch: { enabled: true },
+                    mode: 'xy',
+                },
+                pan: {
+                    enabled: true,
+                    mode: 'xy'
+                }
+            };
+
             // 1. Time Chart
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
@@ -1280,7 +1328,10 @@
                     scales: { 
                         x: { title: { display: true, text: 'Time (s)' } }, 
                         y: { title: { display: true, text: 'Amplitude' } } 
-                    } 
+                    },
+                    plugins: {
+                        zoom: zoomPluginConfig
+                    }
                 }
             });
 
@@ -1303,7 +1354,10 @@
                     scales: { 
                         x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
                         y: { title: { display: true, text: 'Magnitude' } } 
-                    } 
+                    },
+                    plugins: {
+                        zoom: zoomPluginConfig
+                    }
                 }
             });
 
@@ -1338,7 +1392,10 @@
                                 }
                             }
                         } 
-                    } 
+                    },
+                    plugins: {
+                        zoom: zoomPluginConfig
+                    }
                 }
             });
 
@@ -1358,7 +1415,10 @@
                     scales: { 
                         x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
                         y: { title: { display: true, text: 'Unwrapped Phase (rad)' } } 
-                    } 
+                    },
+                    plugins: {
+                        zoom: zoomPluginConfig
+                    }
                 }
             });
 
@@ -1428,6 +1488,7 @@
                         }
                     },
                     plugins: {
+                        zoom: zoomPluginConfig,
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
