@@ -69,7 +69,7 @@
                 <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Peak Detection</h3>
                 <label class="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" id="enablePeaks" class="sr-only peer" checked>
-                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-red-600"></div>
+                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-yellow-500"></div>
                 </label>
             </div>
 
@@ -78,17 +78,17 @@
                     <span class="text-gray-500">Sensitivity:</span>
                     <span id="sensVal" class="font-bold">5%</span>
                 </div>
-                <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-red-600 mb-2">
+                <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-yellow-500 mb-2">
                 
                 <!-- Include DC Offset Checkbox -->
                 <div class="flex items-center space-x-2 mt-2">
-                    <input type="checkbox" id="includeDcPeaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer">
+                    <input type="checkbox" id="includeDcPeaks" class="w-4 h-4 text-yellow-500 border-gray-300 rounded focus:ring-yellow-400 cursor-pointer">
                     <label for="includeDcPeaks" class="text-xs text-gray-700 cursor-pointer">Include DC Offset in Summed Peaks</label>
                 </div>
 
                 <!-- Include Lowest Non-Zero Frequency Checkbox -->
                 <div class="flex items-center space-x-2 mt-2">
-                    <input type="checkbox" id="includeBin1Peaks" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer" checked>
+                    <input type="checkbox" id="includeBin1Peaks" class="w-4 h-4 text-yellow-500 border-gray-300 rounded focus:ring-yellow-400 cursor-pointer" checked>
                     <label for="includeBin1Peaks" class="text-xs text-gray-700 cursor-pointer">Include Lowest Non-Zero Frequency (Bin 1)</label>
                 </div>
             </div>
@@ -100,7 +100,7 @@
                 <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Mag Threshold Reconstruction</h3>
                 <label class="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" id="enableMagThresh" class="sr-only peer">
-                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-600"></div>
+                    <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-red-600"></div>
                 </label>
             </div>
 
@@ -109,8 +109,8 @@
                     <span class="text-gray-500">Threshold:</span>
                     <span id="magThreshVal" class="font-bold">0.00</span>
                 </div>
-                <input type="range" id="magThreshRange" min="0" max="100" step="0.1" value="0" class="w-full accent-purple-600 mb-2">
-                <div class="text-xs text-purple-700 font-medium bg-purple-50 px-2.5 py-1.5 rounded border border-purple-100 flex justify-between items-center">
+                <input type="range" id="magThreshRange" min="0" max="100" step="0.1" value="0" class="w-full accent-red-600 mb-2">
+                <div class="text-xs text-red-700 font-medium bg-red-50 px-2.5 py-1.5 rounded border border-red-100 flex justify-between items-center">
                     <span>Included Components:</span>
                     <span id="magThreshCount" class="font-bold">0</span>
                 </div>
@@ -355,7 +355,6 @@
                     const dt = globalData.times[1] - globalData.times[0];
                     const sampleRate = dt > 0 ? 1.0 / dt : 100;
 
-                    // Initial threshold range estimation setup
                     const padStrategy = document.getElementById('padStrategy').value;
                     const origLen = dataRows.length;
                     
@@ -392,7 +391,6 @@
             });
         });
 
-        // UI Event Listeners for Automatic Triggering
         const enablePeaksCheckbox = document.getElementById('enablePeaks');
         const peakControlsContainer = document.getElementById('peakControlsContainer');
         enablePeaksCheckbox.addEventListener('change', (e) => {
@@ -501,7 +499,7 @@
                     <td class="py-2.5 px-4 font-mono font-bold">${row.mag.toFixed(4)}</td>
                     <td class="py-2.5 px-4 font-mono text-emerald-600 font-semibold">${row.contrib.toFixed(2)}%</td>
                     <td class="py-2.5 px-4 font-mono text-gray-600">${row.phase.toFixed(4)}</td>
-                    <td class="py-2.5 px-4 font-mono text-purple-700 font-semibold">${row.unwrappedPhase.toFixed(4)}</td>
+                    <td class="py-2.5 px-4 font-mono text-blue-600 font-semibold">${row.unwrappedPhase.toFixed(4)}</td>
                 `;
                 tableBody.appendChild(tr);
             });
@@ -525,7 +523,6 @@
             let targetLength;
 
             if (padStrategy === 'framing') {
-                // Next smallest power of 2 chunk size (e.g. 512 for 600 points)
                 targetLength = Math.max(2, Math.pow(2, Math.floor(Math.log2(originalLength))));
                 if (targetLength > originalLength) {
                     targetLength = Math.max(2, Math.pow(2, Math.floor(Math.log2(originalLength))));
@@ -534,13 +531,11 @@
                 processedAmps = amplitudes;
                 processedTimes = times;
 
-                // Chunk 1: Starts at index 0 (points 1 to targetLength)
                 const chunk1Amps = new Array(targetLength);
                 for (let i = 0; i < targetLength; i++) {
                     chunk1Amps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
                 }
 
-                // Chunk 2: Anchored so it ends at the very last data point (index originalLength - targetLength)
                 const startIdx2 = Math.max(0, originalLength - targetLength);
                 const chunk2Amps = new Array(targetLength);
                 for (let i = 0; i < targetLength; i++) {
@@ -562,7 +557,6 @@
                     phase2.push(Math.atan2(spec2[i * 2 + 1], spec2[i * 2]));
                 }
 
-                // Unwrap both phases independently
                 const unwrap1 = new Array(halfN);
                 const unwrap2 = new Array(halfN);
                 unwrap1[0] = phase1[0];
@@ -590,7 +584,6 @@
                     rawFrequencies.push(freq);
                     rawPeriods.push(period);
 
-                    // Chunk 1 mag & psd
                     let m1 = Math.sqrt(spec1[i * 2] ** 2 + spec1[i * 2 + 1] ** 2) / targetLength;
                     if (i > 0) m1 *= 2;
                     if (win1.gain > 0) m1 /= win1.gain;
@@ -598,7 +591,6 @@
                     let psd1 = (spec1[i * 2] ** 2 + spec1[i * 2 + 1] ** 2) / (sampleRate * win1.powerGain * targetLength);
                     if (i > 0 && i < halfN - 1) psd1 *= 2;
 
-                    // Chunk 2 mag & psd
                     let m2 = Math.sqrt(spec2[i * 2] ** 2 + spec2[i * 2 + 1] ** 2) / targetLength;
                     if (i > 0) m2 *= 2;
                     if (win2.gain > 0) m2 /= win2.gain;
@@ -606,7 +598,6 @@
                     let psd2 = (spec2[i * 2] ** 2 + spec2[i * 2 + 1] ** 2) / (sampleRate * win2.powerGain * targetLength);
                     if (i > 0 && i < halfN - 1) psd2 *= 2;
 
-                    // Average magnitudes, phases, and PSDs
                     const avgMag = (m1 + m2) / 2.0;
                     const avgPsd = (psd1 + psd2) / 2.0;
                     const avgUnwrapped = (unwrap1[i] + unwrap2[i]) / 2.0;
@@ -910,15 +901,15 @@
 
             const xAxisLabelText = unitType === 'period' ? 'Period (s)' : 'Frequency (Hz)';
 
-            // 1. Time Chart
+            // 1. Time Chart (Solid Green for Original, Solid Yellow for Summed Peaks, Red for Mag Threshold)
             timeChart = updateOrCreateChart(timeChart, 'timeChart', {
                 type: 'line',
                 data: {
                     labels: processedTimes.map(t => t.toFixed(2)),
                     datasets: [
-                        { label: 'Original Data (Processed)', data: processedAmps, borderColor: 'rgba(156, 163, 175, 0.4)', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, spanGaps: true },
-                        ...(isPeaksEnabled ? [{ label: 'Summed Peak Components', data: summedPeakSignal, borderColor: 'rgb(16, 185, 129)', borderWidth: 2, borderDash: [2, 2], pointRadius: 0 }] : []),
-                        ...(isMagThreshEnabled ? [{ label: 'Mag Threshold Reconstruction', data: magThreshSignal, borderColor: 'rgb(147, 51, 234)', borderWidth: 2, pointRadius: 0 }] : [])
+                        { label: 'Original Data (Processed)', data: processedAmps, borderColor: 'rgb(34, 197, 94)', borderWidth: 1.5, pointRadius: 0, spanGaps: true },
+                        ...(isPeaksEnabled ? [{ label: 'Summed Peak Components', data: summedPeakSignal, borderColor: 'rgb(234, 179, 8)', borderWidth: 2, pointRadius: 0 }] : []),
+                        ...(isMagThreshEnabled ? [{ label: 'Mag Threshold Reconstruction', data: magThreshSignal, borderColor: 'rgb(220, 38, 38)', borderWidth: 2, pointRadius: 0 }] : [])
                     ]
                 },
                 options: { 
@@ -931,16 +922,16 @@
                 }
             });
 
-            // 2. FFT Magnitude Chart
+            // 2. FFT Magnitude Chart (Purple)
             fftChart = updateOrCreateChart(fftChart, 'fftChart', {
                 type: 'line',
                 data: {
                     datasets: [
-                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudePoints, borderColor: 'rgb(220, 38, 38)', borderWidth: 1.5, pointRadius: 0, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: fftPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
+                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudePoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 0, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: fftPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(234, 179, 8)', pointRadius: 5, showLine: false, order: 1 }] : []),
                         ...(isMagThreshEnabled ? [
-                            { label: 'Threshold Cutoff', data: threshLinePoints, borderColor: 'rgba(147, 51, 234, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
-                            { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }
+                            { label: 'Threshold Cutoff', data: threshLinePoints, borderColor: 'rgba(220, 38, 38, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
+                            { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(220, 38, 38)', pointRadius: 4, showLine: false, order: 0 }
                         ] : [])
                     ]
                 },
@@ -954,14 +945,14 @@
                 }
             });
 
-            // 3. PSD Chart
+            // 3. PSD Chart (Purple)
             psdChart = updateOrCreateChart(psdChart, 'psdChart', {
                 type: 'line',
                 data: {
                     datasets: [
-                        { label: 'PSD (V²/Hz)', data: psdPoints, borderColor: 'rgb(16, 185, 129)', borderWidth: 1.5, pointRadius: 1, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: psdPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
-                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: psdThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(147, 51, 234)', pointRadius: 4, showLine: false, order: 0 }] : [])
+                        { label: 'PSD (V²/Hz)', data: psdPoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: psdPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(234, 179, 8)', pointRadius: 5, showLine: false, order: 1 }] : []),
+                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: psdThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(220, 38, 38)', pointRadius: 4, showLine: false, order: 0 }] : [])
                     ]
                 },
                 options: { 
@@ -974,14 +965,14 @@
                 }
             });
 
-            // 4. Phase Chart (Unwrapped)
+            // 4. Phase Chart (Unwrapped) (Blue)
             phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
                 type: 'line',
                 data: {
                     datasets: [
-                        { label: 'Unwrapped Phase (rad)', data: phasePoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: phasePeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(255, 193, 7)', pointRadius: 5, showLine: false, order: 1 }] : []),
-                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: phaseThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(79, 70, 229)', pointRadius: 4, showLine: false, order: 0 }] : [])
+                        { label: 'Unwrapped Phase (rad)', data: phasePoints, borderColor: 'rgb(37, 99, 235)', borderWidth: 1.5, pointRadius: 1, order: 2 },
+                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: phasePeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(234, 179, 8)', pointRadius: 5, showLine: false, order: 1 }] : []),
+                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: phaseThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(220, 38, 38)', pointRadius: 4, showLine: false, order: 0 }] : [])
                     ]
                 },
                 options: { 
@@ -994,7 +985,7 @@
                 }
             });
 
-            // 5. Polar Phase Plot (Unit Circle r = 1)
+            // 5. Polar Phase Plot (Blue components, Yellow peaks, Red threshold)
             polarPhaseChart = updateOrCreateChart(polarPhaseChart, 'polarPhaseChart', {
                 type: 'scatter',
                 data: {
@@ -1022,7 +1013,7 @@
                             label: 'Detected Peaks',
                             data: polarPeakPoints,
                             borderColor: 'transparent',
-                            backgroundColor: 'rgb(255, 193, 7)',
+                            backgroundColor: 'rgb(234, 179, 8)',
                             pointRadius: 6,
                             pointHoverRadius: 8,
                             order: 2
@@ -1031,7 +1022,7 @@
                             label: 'Included Components',
                             data: polarThreshPoints,
                             borderColor: 'transparent',
-                            backgroundColor: 'rgb(147, 51, 234)',
+                            backgroundColor: 'rgb(220, 38, 38)',
                             pointRadius: 6,
                             pointHoverRadius: 8,
                             order: 1
