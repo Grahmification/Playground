@@ -234,42 +234,116 @@
             }
 
             currentModel = new THREE.Group();
-
             let meshCount = 0;
 
-            // Iterate over returned CAD meshes
             result.meshes.forEach((meshData) => {
-                const geometry = new THREE.BufferGeometry();
+                // Check for per-face (per-surface) color attributes from OCCT
+                const faceColors = meshData.attributes?.color?.array;
+                const hasFaceColors = faceColors && faceColors.length > 0;
 
-                // Set Attributes
-                geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
-                
-                if (meshData.attributes.normal) {
-                    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
-                } else {
-                    geometry.computeVertexNormals();
-                }
-
-                if (meshData.index) {
-                    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
-                }
-
-                // Material Settings
-                let color = 0x94a3b8; // Default Slate Light
+                // Check for mesh-level/body-level color fallback
+                let meshColor = null;
                 if (meshData.color) {
-                    color = new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2]);
+                    meshColor = new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2]);
+                } else if (meshData.brep_color) {
+                    meshColor = new THREE.Color(meshData.brep_color[0], meshData.brep_color[1], meshData.brep_color[2]);
+                } else {
+                    meshColor = new THREE.Color(0x94a3b8); // Default fallback color (Slate Light)
                 }
 
-                const material = new THREE.MeshStandardMaterial({
-                    color: color,
-                    roughness: 0.4,
-                    metalness: 0.3,
-                    side: THREE.DoubleSide,
-                    wireframe: wireframeEnabled
-                });
+                // Check for per-face/surface geometry groups
+                const hasGroups = meshData.brep_faces && meshData.brep_faces.length > 0;
 
-                const mesh = new THREE.Mesh(geometry, material);
-                currentModel.add(mesh);
+                if (hasGroups) {
+                    // Method A: Construct multi-material geometry based on STEP BREP surface groups
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+
+                    if (meshData.attributes.normal) {
+                        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                    } else {
+                        geometry.computeVertexNormals();
+                    }
+
+                    if (meshData.index) {
+                        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                    }
+
+                    const materials = [];
+                    meshData.brep_faces.forEach((face, index) => {
+                        geometry.addGroup(face.first, face.count, index);
+
+                        let surfaceColor = meshColor;
+                        if (face.color) {
+                            surfaceColor = new THREE.Color(face.color[0], face.color[1], face.color[2]);
+                        }
+
+                        materials.push(new THREE.MeshStandardMaterial({
+                            color: surfaceColor,
+                            roughness: 0.4,
+                            metalness: 0.3,
+                            side: THREE.DoubleSide,
+                            wireframe: wireframeEnabled
+                        }));
+                    });
+
+                    const mesh = new THREE.Mesh(geometry, materials);
+                    currentModel.add(mesh);
+
+                } else if (hasFaceColors) {
+                    // Method B: Construct geometry with per-vertex color attribute array
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+                    geometry.setAttribute('color', new THREE.Float32BufferAttribute(faceColors, 3));
+
+                    if (meshData.attributes.normal) {
+                        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                    } else {
+                        geometry.computeVertexNormals();
+                    }
+
+                    if (meshData.index) {
+                        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                    }
+
+                    const material = new THREE.MeshStandardMaterial({
+                        vertexColors: true,
+                        roughness: 0.4,
+                        metalness: 0.3,
+                        side: THREE.DoubleSide,
+                        wireframe: wireframeEnabled
+                    });
+
+                    const mesh = new THREE.Mesh(geometry, material);
+                    currentModel.add(mesh);
+
+                } else {
+                    // Method C: Body/Solid fallback color mapping
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.attributes.position.array, 3));
+
+                    if (meshData.attributes.normal) {
+                        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.attributes.normal.array, 3));
+                    } else {
+                        geometry.computeVertexNormals();
+                    }
+
+                    if (meshData.index) {
+                        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.index.array), 1));
+                    }
+
+                    const material = new THREE.MeshStandardMaterial({
+                        color: meshColor,
+                        roughness: 0.4,
+                        metalness: 0.3,
+                        side: THREE.DoubleSide,
+                        wireframe: wireframeEnabled
+                    });
+
+                    const mesh = new THREE.Mesh(geometry, material);
+                    currentModel.add(mesh);
+                }
+
                 meshCount++;
             });
 
@@ -317,7 +391,11 @@
             if (currentModel) {
                 currentModel.traverse((child) => {
                     if (child.isMesh) {
-                        child.material.wireframe = wireframeEnabled;
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach((mat) => mat.wireframe = wireframeEnabled);
+                        } else {
+                            child.material.wireframe = wireframeEnabled;
+                        }
                     }
                 });
             }
