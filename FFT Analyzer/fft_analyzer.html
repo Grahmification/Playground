@@ -24,7 +24,7 @@
             </div>
             
             <p class="text-sm text-gray-600 mb-6">
-                Upload time-series data to view Time Domain, FFT Magnitude, PSD, and Phase analysis.
+                Upload time-series data to view spectral analysis, windowing, and smooth high-res frequency gating.
             </p>
 
             <!-- File Upload Control -->
@@ -42,6 +42,27 @@
                     <option value="hamming">Hamming</option>
                 </select>
             </div>
+
+            <hr class="my-6 border-gray-200">
+
+            <!-- Frequency Gating Controls -->
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">Frequency Gate (Bandpass)</h3>
+            
+            <div class="mb-4">
+                <div class="flex justify-between text-xs text-gray-600 mb-1">
+                    <span>Min Frequency:</span>
+                    <span id="minFreqVal" class="font-bold">0.0 Hz</span>
+                </div>
+                <input type="range" id="minFreqRange" min="0" max="50" step="0.5" value="0" class="w-full accent-blue-600">
+            </div>
+
+            <div class="mb-5">
+                <div class="flex justify-between text-xs text-gray-600 mb-1">
+                    <span>Max Frequency:</span>
+                    <span id="maxFreqVal" class="font-bold">50.0 Hz</span>
+                </div>
+                <input type="range" id="maxFreqRange" min="0" max="50" step="0.5" value="50" class="w-full accent-blue-600">
+            </div>
         </div>
 
         <div class="text-xs text-gray-400 mt-8 pt-4 border-t border-gray-100">
@@ -51,7 +72,6 @@
 
     <!-- Main Content: Expanded Plot Grid Area -->
     <main class="flex-1 p-6 md:p-10 flex flex-col gap-8 max-w-7xl">
-        <!-- Header status info -->
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 gap-4">
             <div>
                 <h2 class="text-lg font-bold text-gray-800">Analysis Output</h2>
@@ -63,7 +83,7 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Time Domain (Raw vs Windowed)</h3>
+                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Time Domain (Original, Windowed & Smooth Gated)</h3>
                 <div class="relative flex-1 w-full h-[280px]">
                     <canvas id="timeChart"></canvas>
                 </div>
@@ -156,6 +176,82 @@
             return results;
         }
 
+        // IFFT with zero-padding interpolation support for smooth high-res curves
+        function computeSmoothIFFT(gatedBins, originalN, interpolationFactor) {
+            const highN = originalN * interpolationFactor;
+            const real = new Array(highN).fill(0);
+            const imag = new Array(highN).fill(0);
+
+            const halfN = originalN / 2;
+            // Map original bins into zero-padded high-resolution spectrum
+            for (let i = 0; i < halfN; i++) {
+                real[i] = gatedBins[i].re * interpolationFactor;
+                imag[i] = gatedBins[i].im * interpolationFactor;
+
+                if (i > 0) {
+                    real[highN - i] = gatedBins[originalN - i].re * interpolationFactor;
+                    imag[highN - i] = gatedBins[originalN - i].im * interpolationFactor;
+                }
+            }
+
+            // Perform Inverse FFT on highN points
+            const res = computeFFT_internal(real, imag.map(v => -v), highN);
+            const reconstructed = new Array(highN);
+            for (let i = 0; i < highN; i++) {
+                reconstructed[i] = res[i].re / highN;
+            }
+            return reconstructed;
+        }
+
+        function computeFFT_internal(real, imag, n) {
+            let j = 0;
+            for (let i = 0; i < n - 1; i++) {
+                if (i < j) {
+                    let tempR = real[i]; real[i] = real[j]; real[j] = tempR;
+                    let tempI = imag[i]; imag[i] = imag[j]; imag[j] = tempI;
+                }
+                let k = n >> 1;
+                while (k <= j) {
+                    j -= k;
+                    k >>= 1;
+                }
+                j += k;
+            }
+
+            for (let len = 2; len <= n; len <<= 1) {
+                let halfLen = len >> 1;
+                let angle = -2 * Math.PI / len;
+                let wStepR = Math.cos(angle);
+                let wStepI = Math.sin(angle);
+
+                for (let i = 0; i < n; i += len) {
+                    let wR = 1.0, wI = 0.0;
+                    for (let m = 0; m < halfLen; m++) {
+                        let uIdx = i + m;
+                        let vIdx = i + m + halfLen;
+
+                        let vR = real[vIdx] * wR - imag[vIdx] * wI;
+                        let vI = real[vIdx] * wI + imag[vIdx] * wR;
+
+                        real[vIdx] = real[uIdx] - vR;
+                        imag[vIdx] = real[uIdx] - vI;
+                        real[uIdx] += vR;
+                        imag[uIdx] += vI;
+
+                        let nextWR = wR * wStepR - wI * wStepI;
+                        let nextWI = wR * wStepI + wI * wStepR;
+                        wR = nextWR;
+                        wI = nextWI;
+                    }
+                }
+            }
+            const results = new Array(n);
+            for (let i = 0; i < n; i++) {
+                results[i] = { re: real[i], im: imag[i] };
+            }
+            return results;
+        }
+
         function applyWindow(signal, type) {
             const n = signal.length;
             const windowed = new Array(n);
@@ -173,9 +269,7 @@
                 sumWeights += w;
                 sumSquaredWeights += w * w;
             }
-            const coherentGain = sumWeights / n;
-            const powerGain = sumSquaredWeights / n;
-            return { windowedData: windowed, gain: coherentGain, powerGain: powerGain };
+            return { windowedData: windowed, gain: sumWeights / n, powerGain: sumSquaredWeights / n };
         }
 
         document.getElementById('csvFile').addEventListener('change', function(e) {
@@ -201,13 +295,32 @@
                         amplitudes: dataRows.map(row => row[1])
                     };
 
-                    document.getElementById('statusText').textContent = `Loaded: ${file.name} (${dataRows.length} points)`;
+                    const dt = globalData.times[1] - globalData.times[0];
+                    const sampleRate = dt > 0 ? 1.0 / dt : 100;
+                    const nyquist = sampleRate / 2;
+
+                    const minRange = document.getElementById('minFreqRange');
+                    const maxRange = document.getElementById('maxFreqRange');
+                    minRange.max = nyquist;
+                    maxRange.max = nyquist;
+                    minRange.value = 0;
+                    maxRange.value = nyquist;
+                    document.getElementById('minFreqVal').textContent = `0.0 Hz`;
+                    document.getElementById('maxFreqVal').textContent = `${nyquist.toFixed(1)} Hz`;
+
+                    document.getElementById('statusText').textContent = `Loaded: ${file.name} (${dataRows.length} points, fs = ${sampleRate}Hz)`;
                     triggerProcessing();
                 }
             });
         });
 
-        document.getElementById('windowType').addEventListener('change', function() {
+        document.getElementById('windowType').addEventListener('change', () => { if (globalData) triggerProcessing(); });
+        document.getElementById('minFreqRange').addEventListener('input', (e) => {
+            document.getElementById('minFreqVal').textContent = parseFloat(e.target.value).toFixed(1) + ' Hz';
+            if (globalData) triggerProcessing();
+        });
+        document.getElementById('maxFreqRange').addEventListener('input', (e) => {
+            document.getElementById('maxFreqVal').textContent = parseFloat(e.target.value).toFixed(1) + ' Hz';
             if (globalData) triggerProcessing();
         });
 
@@ -215,11 +328,13 @@
             const dt = globalData.times[1] - globalData.times[0];
             const sampleRate = dt > 0 ? 1.0 / dt : 100;
             const windowSelection = document.getElementById('windowType').value;
+            const minFreq = parseFloat(document.getElementById('minFreqRange').value);
+            const maxFreq = parseFloat(document.getElementById('maxFreqRange').value);
 
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection);
+            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, minFreq, maxFreq);
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType) {
+        function processAndPlot(times, amplitudes, sampleRate, windowType, minFreq, maxFreq) {
             const power = Math.floor(Math.log2(amplitudes.length));
             const n = Math.pow(2, power);
             
@@ -235,41 +350,100 @@
             const phases = [];
             const frequencies = [];
 
+            const gatedFFT = new Array(n).fill(0).map(() => ({ re: 0, im: 0 }));
+
             for (let i = 0; i < halfN; i++) {
+                const freq = (i * sampleRate) / n;
+                frequencies.push(freq);
+
                 const re = fftResult[i].re;
                 const im = fftResult[i].im;
                 
-                // Magnitude
                 let mag = Math.sqrt(re ** 2 + im ** 2) / halfN;
                 if (gain > 0) mag /= gain;
                 magnitudes.push(mag);
 
-                // PSD Scale (Power Spectral Density)
-                // Scaling: ( |X[k]|^2 ) / (fs * sum(w^2)) with factor of 2 for single-sided (except DC)
                 let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * n);
                 if (i > 0 && i < halfN - 1) psd *= 2;
                 psdValues.push(psd);
 
-                // Phase Spectrum (Radians)
-                let phase = Math.atan2(im, re);
-                phases.push(phase);
+                phases.push(Math.atan2(im, re));
 
-                frequencies.push((i * sampleRate) / n);
+                if (freq >= minFreq && freq <= maxFreq) {
+                    gatedFFT[i] = { re: re, im: im };
+                    if (i > 0 && i < n - i) {
+                        gatedFFT[n - i] = { re: re, im: -im };
+                    }
+                }
             }
 
-            // 1. Time Chart
+            // Generate high-resolution smooth gated signal via interpolation factor of 4
+            const interpFactor = 4;
+            const smoothGatedSignal = computeSmoothIFFT(gatedFFT, n, interpFactor);
+            const dt = truncatedTimes[1] - truncatedTimes[0];
+            const t0 = truncatedTimes[0];
+            const smoothTimes = new Array(n * interpFactor);
+            for (let i = 0; i < n * interpFactor; i++) {
+                smoothTimes[i] = t0 + i * (dt / interpFactor);
+            }
+
+            // 1. Time Chart with 3 distinct lines
             const timeCtx = document.getElementById('timeChart').getContext('2d');
             if (timeChart) timeChart.destroy();
             timeChart = new Chart(timeCtx, {
                 type: 'line',
                 data: {
-                    labels: truncatedTimes.map(t => t.toFixed(2) + 's'),
+                    labels: smoothTimes.map(t => t.toFixed(2)),
                     datasets: [
-                        { label: 'Windowed Signal', data: windowedData, borderColor: 'rgb(37, 99, 235)', borderWidth: 1.5, pointRadius: 0 },
-                        { label: 'Original Reference', data: truncatedAmps, borderColor: 'rgba(156, 163, 175, 0.4)', borderWidth: 1, borderDash: [4, 4], pointRadius: 0 }
+                        { 
+                            label: 'Original Data', 
+                            data: smoothTimes.map(t => {
+                                // Map original points to high-res time grid for alignment
+                                let idx = Math.round((t - t0) / dt);
+                                return (idx >= 0 && idx < truncatedAmps.length) ? truncatedAmps[idx] : null;
+                            }), 
+                            borderColor: 'rgba(156, 163, 175, 0.4)', 
+                            borderWidth: 1.5, 
+                            borderDash: [4, 4], 
+                            pointRadius: 0,
+                            spanGaps: true
+                        },
+                        { 
+                            label: `Windowed Data (${windowType})`, 
+                            data: smoothTimes.map(t => {
+                                let idx = Math.round((t - t0) / dt);
+                                return (idx >= 0 && idx < windowedData.length) ? windowedData[idx] : null;
+                            }), 
+                            borderColor: 'rgb(249, 115, 22)', 
+                            borderWidth: 1.2, 
+                            pointRadius: 0,
+                            spanGaps: true
+                        },
+                        { 
+                            label: `Gated Reconstitution (${minFreq}-${maxFreq} Hz)`, 
+                            data: smoothGatedSignal, 
+                            borderColor: 'rgb(37, 99, 235)', 
+                            borderWidth: 2, 
+                            pointRadius: 0 
+                        }
                     ]
                 },
-                options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'Time (s)' } }, y: { title: { display: true, text: 'Amplitude' } } } }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    scales: { 
+                        x: { 
+                            title: { display: true, text: 'Time (s)' },
+                            ticks: {
+                                callback: function(val, index) {
+                                    // Show tick labels sparsely to avoid crowding
+                                    return index % 20 === 0 ? this.getLabelForValue(val) + 's' : '';
+                                }
+                            }
+                        }, 
+                        y: { title: { display: true, text: 'Amplitude' } } 
+                    } 
+                }
             });
 
             // 2. FFT Magnitude Chart
