@@ -11,56 +11,56 @@
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col md:flex-row font-sans">
+<body class="bg-gray-100 min-h-screen flex flex-col md:flex-row font-sans m-0 p-0 overflow-x-hidden">
 
     <!-- Sidebar Controls -->
-    <aside class="w-full md:w-80 bg-white border-r border-gray-200 p-6 flex flex-col justify-between shadow-sm shrink-0">
+    <aside class="w-full md:w-72 bg-white border-r border-gray-200 p-4 flex flex-col justify-between shadow-sm shrink-0">
         <div>
-            <div class="flex items-center space-x-2 mb-6">
+            <div class="flex items-center space-x-2 mb-4">
                 <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
                 </svg>
-                <h1 class="text-xl font-bold text-gray-800">Spectral Dashboard</h1>
+                <h1 class="text-lg font-bold text-gray-800">Spectral Dashboard</h1>
             </div>
             
-            <p class="text-sm text-gray-600 mb-6">
-                Upload time-series data to view spectral analysis, summed peak reconstitution, and frequency gating.
+            <p class="text-xs text-gray-600 mb-4">
+                Upload time-series data to view large spectral charts and summed peak reconstitution.
             </p>
 
             <!-- File Upload Control -->
-            <div class="mb-5">
-                <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500" for="csvFile">CSV Dataset</label>
-                <input class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2 focus:outline-none" id="csvFile" type="file" accept=".csv">
+            <div class="mb-4">
+                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="csvFile">CSV Dataset</label>
+                <input class="block w-full text-xs text-gray-900 border border-gray-300 rounded cursor-pointer bg-gray-50 p-1.5 focus:outline-none" id="csvFile" type="file" accept=".csv">
             </div>
 
             <!-- Window Function Control -->
-            <div class="mb-5">
-                <label class="block mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500" for="windowType">Window Function</label>
-                <select id="windowType" class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg bg-gray-50 p-2.5 focus:outline-none">
+            <div class="mb-4">
+                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="windowType">Window Function</label>
+                <select id="windowType" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
                     <option value="none">None (Rectangular)</option>
                     <option value="hann" selected>Hann</option>
                     <option value="hamming">Hamming</option>
                 </select>
             </div>
 
-            <hr class="my-6 border-gray-200">
+            <hr class="my-4 border-gray-200">
 
             <!-- Peak Detection Sensitivity Control -->
-            <div class="mb-5">
+            <div class="mb-4">
                 <div class="flex justify-between text-xs text-gray-600 mb-1">
-                    <span class="font-semibold uppercase tracking-wider text-gray-500">Peak Sensitivity:</span>
+                    <span class="font-semibold uppercase tracking-wider text-[11px] text-gray-500">Peak Sensitivity:</span>
                     <span id="sensVal" class="font-bold">5%</span>
                 </div>
                 <input type="range" id="sensRange" min="1" max="25" step="1" value="5" class="w-full accent-red-600">
-                <span class="text-[11px] text-gray-400">Min prominence % of max magnitude</span>
+                <span class="text-[10px] text-gray-400">Min prominence % of max magnitude</span>
             </div>
 
-            <hr class="my-6 border-gray-200">
+            <hr class="my-4 border-gray-200">
 
             <!-- Frequency Gating Controls -->
-            <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">Frequency Gate (Bandpass)</h3>
+            <h3 class="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-3">Frequency Gate (Bandpass)</h3>
             
-            <div class="mb-4">
+            <div class="mb-3">
                 <div class="flex justify-between text-xs text-gray-600 mb-1">
                     <span>Min Frequency:</span>
                     <span id="minFreqVal" class="font-bold">0.0 Hz</span>
@@ -68,7 +68,7 @@
                 <input type="range" id="minFreqRange" min="0" max="50" step="0.5" value="0" class="w-full accent-blue-600">
             </div>
 
-            <div class="mb-5">
+            <div class="mb-4">
                 <div class="flex justify-between text-xs text-gray-600 mb-1">
                     <span>Max Frequency:</span>
                     <span id="maxFreqVal" class="font-bold">50.0 Hz</span>
@@ -77,50 +77,51 @@
             </div>
         </div>
 
-        <div class="text-xs text-gray-400 mt-8 pt-4 border-t border-gray-100">
+        <div class="text-[10px] text-gray-400 mt-4 pt-2 border-t border-gray-100">
             Powered by Chart.js & PapaParse
         </div>
     </aside>
 
-    <!-- Main Content: Expanded Plot Grid Area -->
-    <main class="flex-1 p-6 md:p-10 flex flex-col gap-8 max-w-7xl">
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200 gap-4">
+    <!-- Main Content: Maximized Plot Area -->
+    <main class="flex-1 p-3 md:p-4 flex flex-col gap-4 w-full">
+        <!-- Status Bar -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white px-4 py-2.5 rounded-lg shadow-sm border border-gray-200 gap-2">
             <div>
-                <h2 class="text-lg font-bold text-gray-800">Analysis Output</h2>
-                <p id="statusText" class="text-sm text-gray-500">Awaiting dataset upload...</p>
+                <h2 class="text-sm font-bold text-gray-800">Analysis Output</h2>
+                <p id="statusText" class="text-xs text-gray-500">Awaiting dataset upload...</p>
             </div>
         </div>
 
-        <!-- Grid of 4 Charts -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Grid of 4 Large Charts -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Time Domain (Original, Gated & Summed Peaks)</h3>
-                <div class="relative flex-1 w-full h-[280px]">
+            <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Time Domain (Original, Gated & Summed Peaks)</h3>
+                <div class="relative w-full h-[360px]">
                     <canvas id="timeChart"></canvas>
                 </div>
             </div>
 
             <!-- Frequency Domain Chart Card -->
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Frequency Domain (FFT Magnitude & Peak Detection)</h3>
-                <div class="relative flex-1 w-full h-[280px]">
+            <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Frequency Domain (FFT Magnitude & Peak Detection)</h3>
+                <div class="relative w-full h-[360px]">
                     <canvas id="fftChart"></canvas>
                 </div>
             </div>
 
             <!-- Power Spectral Density (PSD) Chart Card -->
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Power Spectral Density (PSD)</h3>
-                <div class="relative flex-1 w-full h-[280px]">
+            <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Power Spectral Density (PSD)</h3>
+                <div class="relative w-full h-[360px]">
                     <canvas id="psdChart"></canvas>
                 </div>
             </div>
 
             <!-- Phase Information Chart Card -->
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col min-h-[350px]">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-gray-600 mb-4">Phase Spectrum (Radians)</h3>
-                <div class="relative flex-1 w-full h-[280px]">
+            <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">Phase Spectrum (Radians)</h3>
+                <div class="relative w-full h-[360px]">
                     <canvas id="phaseChart"></canvas>
                 </div>
             </div>
