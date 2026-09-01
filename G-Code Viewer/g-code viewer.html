@@ -633,15 +633,16 @@
         const STOCK_BASE_COLOR = 0xb8ac95;
 
         // Colour comes entirely from a nearest-filtered texture holding one texel per
-        // height sample, so the material tint is white and uncut samples are written as
-        // STOCK_BASE_COLOR.
+        // height-map cell, so the material tint is white and uncut cells are written as
+        // STOCK_BASE_COLOR. Every face gets exactly one flat colour: see the UV setup in
+        // buildStockGeometry for how a cell is pinned to its texel, and the colour pass in
+        // refreshStockGeometry for how a cell picks which of its corners it belongs to.
         //
         // A vertex colour attribute cannot express this: colours interpolate across a
         // triangle, so every operation boundary came out as a gradient smeared over a
         // whole cell. Duplicating vertices per face would fix it too, but at six vertices
         // per cell the position buffer -- rewritten on every carve -- grows sixfold, which
-        // the high resolutions cannot absorb. NearestFilter gives each fragment the colour
-        // of the nearest sample instead: hard edges, and the buffers stay as they were.
+        // the high resolutions cannot absorb. A per-cell texture costs nothing extra.
         //
         // three.js here is r128, which predates ColorManagement, so a hex in the texture
         // and the same hex in `material.color` match exactly -- do not add a
@@ -1410,17 +1411,33 @@
 
             const positions = new Float32Array(total * 3);
 
-            // Every vertex points at the texel of the height sample it was built from, so
-            // the colour lookup needs no resampling: the texture is indexed exactly like
-            // `cutIds`. Sampling at texel centres puts the colour boundaries halfway
-            // between samples, which is where the surface stops belonging to one sample
-            // and starts belonging to the next.
+            // One texel per *cell*, not per sample. The height-map surface maps each cell
+            // exactly onto its own texel -- vertex (gx,gy) lands on the texel boundary at
+            // gx/nx -- so with NearestFilter every fragment of a quad reads the same texel
+            // and the quad is one flat colour.
+            //
+            // This is what makes a vertical wall work. A wall is a single steep quad
+            // between a high sample and a low one, and with per-sample texels its colour
+            // split down the middle: the upper half kept the old surface's colour and only
+            // the lower half showed the cut that made the wall. One texel per quad puts
+            // the whole face in one colour, with the change of colour landing exactly on
+            // the top edge where the wall meets the surface above it.
             const uvs = new Float32Array(total * 2);
-            function setUV(vertexIndex, hi) {
+
+            // Height-map vertices: cell-corner aligned.
+            function setSurfaceUV(vertexIndex, gx, gy) {
+                uvs[vertexIndex * 2] = gx / stock.nx;
+                uvs[vertexIndex * 2 + 1] = gy / stock.ny;
+            }
+
+            // Skirt and bottom vertices have no cell of their own, so they take the centre
+            // of the cell their sample borders -- clamped, since the last sample row and
+            // column lie on the far edge of the last cell.
+            function setSampleUV(vertexIndex, hi) {
                 const gx = hi % nxv;
                 const gy = (hi - gx) / nxv;
-                uvs[vertexIndex * 2] = (gx + 0.5) / nxv;
-                uvs[vertexIndex * 2 + 1] = (gy + 0.5) / nyv;
+                uvs[vertexIndex * 2] = (Math.min(gx, stock.nx - 1) + 0.5) / stock.nx;
+                uvs[vertexIndex * 2 + 1] = (Math.min(gy, stock.ny - 1) + 0.5) / stock.ny;
             }
 
             // Preallocated rather than a growing JS array: the count is known exactly --
@@ -1441,7 +1458,7 @@
                     positions[vi * 3] = stock.minX + gx * stock.cellX;
                     positions[vi * 3 + 1] = stock.minY + gy * stock.cellY;
                     positions[vi * 3 + 2] = stock.top;
-                    setUV(vi, vi);   // a top vertex *is* its height sample
+                    setSurfaceUV(vi, gx, gy);
                 }
             }
 
@@ -1471,7 +1488,7 @@
                     positions[v * 3] = px;
                     positions[v * 3 + 1] = py;
                     positions[v * 3 + 2] = stock.top;
-                    setUV(v, hi);
+                    setSampleUV(v, hi);
                     skirt[skirtLen++] = v;
                     skirt[skirtLen++] = hi;
                     v++;
@@ -1481,7 +1498,7 @@
                     positions[v * 3 + 2] = stock.bottom;
                     // Same texel as the vertex above it, so a wall is a solid stripe of
                     // its sample's colour rather than a vertical fade.
-                    setUV(v, hi);
+                    setSampleUV(v, hi);
                     v++;
                 }
                 for (let k = 0; k < heightIndices.length - 1; k++) {
@@ -1517,7 +1534,7 @@
                 positions[v * 3] = c[0];
                 positions[v * 3 + 1] = c[1];
                 positions[v * 3 + 2] = stock.bottom;
-                setUV(v, cornerSamples[i]);
+                setSampleUV(v, cornerSamples[i]);
                 v++;
             });
             tri(base, base + 2, base + 1);
@@ -1535,20 +1552,21 @@
 
             geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-            // One texel per height sample, indexed exactly like `cutIds`. RGBA rather than
-            // RGB so each row is 4-byte aligned, which is what WebGL's default unpack
-            // alignment expects. Alpha is written once here and never touched again.
-            const colorData = new Uint8Array(topCount * 4);
+            // One texel per cell. RGBA rather than RGB so each row is 4-byte aligned,
+            // which is what WebGL's default unpack alignment expects. Alpha is written
+            // once here and never touched again.
+            const cellCount = stock.nx * stock.ny;
+            const colorData = new Uint8Array(cellCount * 4);
             const baseR = (STOCK_BASE_COLOR >> 16) & 0xff;
             const baseG = (STOCK_BASE_COLOR >> 8) & 0xff;
             const baseB = STOCK_BASE_COLOR & 0xff;
-            for (let i = 0; i < topCount; i++) {
+            for (let i = 0; i < cellCount; i++) {
                 colorData[i * 4] = baseR;
                 colorData[i * 4 + 1] = baseG;
                 colorData[i * 4 + 2] = baseB;
                 colorData[i * 4 + 3] = 255;
             }
-            const colorTexture = new THREE.DataTexture(colorData, nxv, nyv, THREE.RGBAFormat);
+            const colorTexture = new THREE.DataTexture(colorData, stock.nx, stock.ny, THREE.RGBAFormat);
             // The whole point: no filtering between texels, so a cut edge is an edge.
             colorTexture.magFilter = THREE.NearestFilter;
             colorTexture.minFilter = THREE.NearestFilter;
@@ -1625,14 +1643,41 @@
                     return c;
                 }
 
-                // One write per height sample covers the whole mesh: the walls and the
-                // bottom read the same texels through their UVs, so there is no separate
-                // skirt pass any more. Alpha was set at build time and stays 255.
-                for (let i = 0; i < stock.topCount; i++) {
-                    const c = rgb(cutIds[i]);
-                    col[i * 4] = c[0];
-                    col[i * 4 + 1] = c[1];
-                    col[i * 4 + 2] = c[2];
+                // A cell takes its deepest corner's cut. On a vertical wall that corner is
+                // the one at the foot of the wall -- the sample the cut actually reached --
+                // so the whole face carries the colour of the tool that made it. On flat
+                // ground all four corners sit at the same height, and the tie goes to the
+                // later operation, which keeps a boundary between two passes from drifting
+                // into whichever corner the scan happened to visit first.
+                //
+                // One write per cell covers the whole mesh: the walls and the bottom read
+                // these same texels through their UVs, so there is no separate skirt pass.
+                // Alpha was set at build time and stays 255.
+                const nxv = stock.nx + 1;
+                for (let cy = 0; cy < stock.ny; cy++) {
+                    for (let cx = 0; cx < stock.nx; cx++) {
+                        const corner = cy * nxv + cx;
+                        const n1 = corner + 1;
+                        const n2 = corner + nxv;
+                        const n3 = n2 + 1;
+
+                        // Unrolled: this runs once per cell, which is over a million
+                        // iterations at the top resolutions.
+                        let bestH = heights[corner];
+                        let bestId = cutIds[corner];
+                        let h = heights[n1], id = cutIds[n1];
+                        if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
+                        h = heights[n2]; id = cutIds[n2];
+                        if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
+                        h = heights[n3]; id = cutIds[n3];
+                        if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
+
+                        const c = rgb(bestId);
+                        const ci = (cy * stock.nx + cx) * 4;
+                        col[ci] = c[0];
+                        col[ci + 1] = c[1];
+                        col[ci + 2] = c[2];
+                    }
                 }
                 stock.colorTexture.needsUpdate = true;
             }
