@@ -228,6 +228,14 @@
             font-family: monospace;
         }
 
+        /* Wraps rather than pushing its label off the row -- file names are the one value
+           here with no bound on their length. */
+        #file-name {
+            min-width: 0;
+            text-align: right;
+            overflow-wrap: anywhere;
+        }
+
         .legend {
             display: flex;
             flex-direction: column;
@@ -795,6 +803,7 @@
 
         <div class="panel">
             <div class="panel-title">File Information</div>
+            <div class="stats-row"><span>File:</span> <span id="file-name" class="stats-value">&mdash;</span></div>
             <div class="stats-row"><span>Status:</span> <span id="status" class="stats-value">Idle</span></div>
             <div class="stats-row"><span>Commands:</span> <span id="line-count" class="stats-value">0</span></div>
             <div class="stats-row"><span>Min Feed:</span> <span id="feed-min" class="stats-value">0 mm/min</span></div>
@@ -1661,6 +1670,9 @@
 
             document.getElementById('loading').style.display = 'block';
             document.getElementById('status').innerText = 'Loading...';
+            const fileNameEl = document.getElementById('file-name');
+            fileNameEl.innerText = file.name;
+            fileNameEl.title = file.name;    // the row wraps, but the tooltip is one line
 
             const reader = new FileReader();
             reader.onload = function(evt) {
