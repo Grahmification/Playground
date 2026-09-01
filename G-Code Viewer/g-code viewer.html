@@ -204,10 +204,15 @@
             min-width: 0;
         }
 
+        /* Positioned so the overlays inside it can be measured against the 3D view alone.
+           #viewport also holds the scrubber, and a panel capped to that would be free to
+           grow down over it. An absolutely positioned child adds nothing to a flex item's
+           height, so the size the renderer measures here is untouched. */
         #canvas-container {
             flex: 1 1 auto;
             width: 100%;
             min-height: 0;
+            position: relative;
         }
 
         /* The stack of panels floated over the top-right of the 3D view. A flow column
@@ -224,6 +229,9 @@
             align-items: flex-end;
             gap: 8px;
             pointer-events: none;
+            /* The expanded line list grows until it runs out of 3D view: the 12px inset at
+               the top, mirrored at the bottom. */
+            max-height: calc(100% - 24px);
         }
 
         .overlay-panel {
@@ -233,6 +241,9 @@
             border-radius: 4px;
             font-size: 0.8rem;
             color: #aaaaaa;
+            /* Flex items refuse to shrink below their content by default, which would let
+               a long list push straight past the stack's max-height. */
+            min-height: 0;
         }
 
         #readout {
@@ -240,6 +251,9 @@
             grid-template-columns: auto auto;
             column-gap: 16px;
             row-gap: 4px;
+            /* When the stack runs out of height it is the line list that gives way, never
+               this -- otherwise a long lookahead would squeeze the status rows shut. */
+            flex: 0 0 auto;
         }
 
         /* The rows are grouping only -- the spans themselves are the grid items, so the
@@ -256,14 +270,30 @@
             overflow-wrap: anywhere;
         }
 
-        /* The line of the program being executed, verbatim. Left-aligned and monospaced
-           because it is source text, not a measurement. */
+        /* The line of the program being executed, verbatim, and on request the lines that
+           follow it. Left-aligned and monospaced because it is source text, not a
+           measurement.
+
+           Collapsed it shrinks to whatever the one line needs, capped so a long line wraps
+           instead of running across the view. Expanded it takes the full width, since the
+           list underneath is sized by the file rather than by the current line. */
         #gcode-line {
+            display: flex;
+            flex-direction: column;
+            max-width: 380px;
+            font-family: monospace;
+            overflow: hidden;
+        }
+
+        #gcode-line.expanded {
+            width: 380px;
+        }
+
+        #gcode-line-head {
+            flex: 0 0 auto;
             display: flex;
             align-items: baseline;
             gap: 10px;
-            max-width: 380px;
-            font-family: monospace;
         }
 
         #gcode-line-number {
@@ -275,6 +305,65 @@
             color: #e0e0e0;
             overflow-wrap: anywhere;
             white-space: pre-wrap;
+        }
+
+        /* The one interactive thing in the overlays, so it is also the only one that takes
+           the mouse back from the stack -- putting this on the panel would make the whole
+           box swallow orbit drags that start on it. */
+        #gcode-expand {
+            margin-left: auto;
+            flex: 0 0 auto;
+            pointer-events: auto;
+            width: 18px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #aaaaaa;
+            font-family: inherit;
+            font-size: 0.75rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        #gcode-expand:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        #gcode-lookahead {
+            flex: 1 1 auto;
+            min-height: 0;
+            margin-top: 8px;
+            border-top: 1px solid #3c3c3c;
+            padding-top: 6px;
+            /* Clipped, not scrolled: "as far down as the viewer is tall" is a clipping
+               rule, and a scroller here would eat wheel events meant for the 3D view. */
+            overflow: hidden;
+        }
+
+        /* One line high whatever the row holds, so a single very long line cannot blow the
+           panel open or throw off how many rows fit. */
+        #gcode-lookahead div {
+            display: flex;
+            gap: 10px;
+            white-space: pre;
+            overflow: hidden;
+            line-height: 1.45;
+        }
+
+        #gcode-lookahead .la-num {
+            flex: 0 0 auto;
+            color: #6e6e6e;
+        }
+
+        #gcode-lookahead .la-text {
+            color: #b0b0b0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            /* A flex item won't shrink below its content without this, and an ellipsis
+               needs the box to be narrower than the text before it has anything to do. */
+            min-width: 0;
         }
 
         /* HSMWorks-style playback scrubber pinned under the 3D view. */
@@ -536,16 +625,22 @@
     </div>
 
     <div id="viewport">
-        <div id="canvas-container"></div>
-        <div id="overlay-stack">
-            <div id="readout" class="overlay-panel">
-                <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
-                <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
-                <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
-            </div>
-            <div id="gcode-line" class="overlay-panel">
-                <span id="gcode-line-number"></span>
-                <span id="gcode-line-text">&mdash;</span>
+        <div id="canvas-container">
+            <div id="overlay-stack">
+                <div id="readout" class="overlay-panel">
+                    <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
+                    <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
+                    <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
+                </div>
+                <div id="gcode-line" class="overlay-panel">
+                    <div id="gcode-line-head">
+                        <span id="gcode-line-number"></span>
+                        <span id="gcode-line-text">&mdash;</span>
+                        <button id="gcode-expand" type="button" title="Show upcoming lines"
+                                aria-expanded="false" hidden>&#9662;</button>
+                    </div>
+                    <div id="gcode-lookahead" hidden></div>
+                </div>
             </div>
         </div>
         <div id="loading">Parsing G-code...</div>
@@ -694,6 +789,10 @@
         // written. Parallel to moveRanges, so the overlay can show the source of whatever
         // the simulation is executing.
         let moveSources = [];
+        // The program itself, verbatim and unfiltered -- comments, blanks and non-motion
+        // lines included -- so the overlay can read ahead of the move being executed. The
+        // line numbers only mean anything if nothing is left out.
+        let gcodeLines = [];
 
         let totalPathLength = 0;
         let isSimulating = false;
@@ -2199,6 +2298,9 @@
             moveSources = [];
 
             const lines = text.split('\n');
+            gcodeLines = lines;
+            // Same line number in a different file is a different line.
+            lookaheadRenderedFor = -1;
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
 
             // Both pre-passes read raw lines, so they belong here, before anything calls
@@ -2699,16 +2801,78 @@
             return parsedSegments[lo];
         }
 
-        // The overlay showing the line of the program being executed. `source` is absent
-        // for a move the file did not command -- only the synthetic approach, which names
-        // itself and carries line 0, so the number is dropped rather than shown as "N0".
+        // The overlay showing the line of the program being executed, and on request the
+        // lines that follow it. `source` is absent for a move the file did not command --
+        // only the synthetic approach, which names itself and carries line 0, so the number
+        // is dropped rather than shown as "0".
         const gcodeLineNumberEl = document.getElementById('gcode-line-number');
         const gcodeLineTextEl = document.getElementById('gcode-line-text');
+        const gcodeExpandEl = document.getElementById('gcode-expand');
+        const gcodeLookaheadEl = document.getElementById('gcode-lookahead');
+        const gcodeLineEl = document.getElementById('gcode-line');
+
+        // How many rows are built, as opposed to how many are visible -- CSS decides the
+        // latter by clipping at the bottom of the 3D view. This only has to beat the row
+        // count of the tallest plausible window, and it keeps a 20,000-line program from
+        // becoming 20,000 elements.
+        const LOOKAHEAD_MAX_ROWS = 200;
+
+        let gcodeExpanded = false;
+        // What the list was last built for, so playback rebuilds it once per line rather
+        // than once per frame. -1 never matches a real line, including the synthetic 0.
+        let lookaheadRenderedFor = -1;
+        // The last thing shown, so the expander can re-render without waiting for the
+        // simulation to move -- it is toggled while paused more often than not.
+        let currentGCodeSource = null;
 
         function showGCodeLine(source) {
+            currentGCodeSource = source;
             gcodeLineNumberEl.innerText = source && source.number > 0 ? String(source.number) : '';
             gcodeLineTextEl.innerText = source ? source.text : '—';
+
+            gcodeExpandEl.hidden = gcodeLines.length === 0;
+            gcodeLookaheadEl.hidden = !gcodeExpanded || gcodeExpandEl.hidden;
+            // Drives the width: only the open panel claims the full column.
+            gcodeLineEl.classList.toggle('expanded', !gcodeLookaheadEl.hidden);
+            if (gcodeLookaheadEl.hidden) return;
+
+            // `number` is 1-based, so it is already the 0-based index of the *next* line.
+            // The synthetic approach reports 0 and so starts the list at the top of the
+            // file, which is exactly what is coming up.
+            const from = source ? source.number : 0;
+            if (from === lookaheadRenderedFor) return;
+            lookaheadRenderedFor = from;
+
+            const rows = [];
+            for (let i = from; i < gcodeLines.length && rows.length < LOOKAHEAD_MAX_ROWS; i++) {
+                const num = document.createElement('span');
+                num.className = 'la-num';
+                num.innerText = String(i + 1);
+
+                const txt = document.createElement('span');
+                txt.className = 'la-text';
+                // A blank line still gets a row, so the numbers down the left stay honest.
+                txt.innerText = gcodeLines[i].trim() || ' ';
+
+                const row = document.createElement('div');
+                row.appendChild(num);
+                row.appendChild(txt);
+                rows.push(row);
+            }
+
+            gcodeLookaheadEl.replaceChildren(...rows);
         }
+
+        gcodeExpandEl.addEventListener('click', () => {
+            gcodeExpanded = !gcodeExpanded;
+            gcodeExpandEl.setAttribute('aria-expanded', String(gcodeExpanded));
+            gcodeExpandEl.innerHTML = gcodeExpanded ? '&#9652;' : '&#9662;';
+            gcodeExpandEl.title = gcodeExpanded ? 'Hide upcoming lines' : 'Show upcoming lines';
+
+            // The list may have been built for a different line, or never built at all.
+            lookaheadRenderedFor = -1;
+            showGCodeLine(currentGCodeSource);
+        });
 
         function updateToolPositionByDistance(dist) {
             if (parsedSegments.length === 0) return;
