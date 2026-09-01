@@ -743,6 +743,13 @@
 
         const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 10000);
         camera.position.set(100, 100, 100);
+        // The scene is authored in machine coordinates, where Z is up: the grid lies in
+        // XY, the stock is a height map along Z, and tool profiles are revolved about Z.
+        // Only the camera was still on three.js' Y-up default, which is what made orbiting
+        // feel like the model was lying on its side. This must be set before OrbitControls
+        // is constructed -- r128 captures the orbit axis from camera.up once, at that
+        // moment, and never re-reads it.
+        camera.up.set(0, 0, 1);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(container.clientWidth, container.clientHeight);
