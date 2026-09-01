@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HSMWorks Tool Library Viewer</title>
+<style>
+    * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+        background-color: #1a1a1a;
+        color: #e0e0e0;
+        font-size: 0.85rem;
+    }
+
+    /* --- Toolbar --- */
+    #toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 14px;
+        background-color: #252526;
+        border-bottom: 1px solid #3c3c3c;
+    }
+
+    h1 {
+        font-size: 1rem;
+        color: #ffffff;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .btn {
+        display: inline-block;
+        padding: 7px 14px;
+        background-color: #0e639c;
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 500;
+        border: none;
+        font-size: 0.85rem;
+        transition: background 0.2s;
+        white-space: nowrap;
+    }
+
+    .btn:hover { background-color: #1177bb; }
+
+    input[type="file"] { display: none; }
+
+    input[type="search"] {
+        width: 240px;
+        padding: 6px 8px;
+        background-color: #1e1e1e;
+        color: #e0e0e0;
+        border: 1px solid #3c3c3c;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        outline: none;
+    }
+
+    input[type="search"]:focus { border-color: #0e639c; }
+
+    #status {
+        color: #9a9a9a;
+        margin-left: auto;
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    #status.error { color: #f48771; }
+
+    .count { color: #4ec9b0; font-family: ui-monospace, Consolas, monospace; }
+
+    /* --- Table --- */
+    #table-wrap {
+        flex: 1 1 auto;
+        overflow: auto;
+        min-height: 0;
+    }
+
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        white-space: nowrap;
+    }
+
+    thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background-color: #2d2d30;
+        color: #cccccc;
+        font-weight: 600;
+        text-align: left;
+        padding: 7px 10px;
+        border-bottom: 1px solid #3c3c3c;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    thead th:hover { background-color: #37373a; }
+    thead th.sorted { color: #ffffff; }
+
+    thead th .arrow {
+        color: #4ec9b0;
+        font-size: 0.7rem;
+        margin-left: 4px;
+    }
+
+    tbody td {
+        padding: 5px 10px;
+        border-bottom: 1px solid #2a2a2a;
+    }
+
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background-color: #2a2d2e; }
+
+    tbody tr.selected,
+    tbody tr.selected:hover { background-color: #094771; }
+
+    td.num, th.num {
+        text-align: right;
+        font-family: ui-monospace, Consolas, monospace;
+        color: #4ec9b0;
+    }
+
+    tbody tr.selected td.num { color: #b6f0e2; }
+
+    .type-cell { display: flex; align-items: center; gap: 7px; }
+    .type-cell svg { flex: 0 0 auto; color: #c8a978; }
+    tbody tr.selected .type-cell svg { color: #ffd699; }
+
+    .muted { color: #6f6f6f; }
+
+    #empty {
+        padding: 40px;
+        text-align: center;
+        color: #7a7a7a;
+        line-height: 1.6;
+    }
+
+    /* --- Bottom split --- */
+    #bottom {
+        flex: 0 0 330px;
+        display: flex;
+        min-height: 0;
+        border-top: 1px solid #3c3c3c;
+        background-color: #252526;
+    }
+
+    #preview-pane {
+        flex: 0 0 38%;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        border-right: 1px solid #3c3c3c;
+    }
+
+    #props-pane {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        min-width: 0;
+        padding: 10px 14px 16px;
+    }
+
+    .pane-head {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid #2a2a2a;
+        color: #ffffff;
+        font-weight: 600;
+    }
+
+    .pane-head .sub {
+        color: #9a9a9a;
+        font-weight: 400;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .check-row {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 400;
+        color: #cccccc;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .check-row input { cursor: pointer; }
+
+    #canvas-holder {
+        flex: 1 1 auto;
+        min-height: 0;
+        position: relative;
+    }
+
+    #preview { display: block; width: 100%; height: 100%; }
+
+    .group-title {
+        color: #ffffff;
+        font-weight: 600;
+        margin: 12px 0 5px;
+        padding-bottom: 3px;
+        border-bottom: 1px solid #3c3c3c;
+    }
+
+    .group-title:first-child { margin-top: 0; }
+
+    .prop-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 1px 24px;
+    }
+
+    .prop {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 2px 0;
+    }
+
+    .prop span:first-child { color: #9a9a9a; }
+
+    .prop span:last-child {
+        font-family: ui-monospace, Consolas, monospace;
+        color: #4ec9b0;
+        text-align: right;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .warn {
+        color: #f4bf75;
+        cursor: help;
+        margin-left: 4px;
+    }
+
+    #drop-hint {
+        position: fixed;
+        inset: 0;
+        background: rgba(14, 99, 156, 0.25);
+        border: 3px dashed #0e639c;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        color: #ffffff;
+        z-index: 50;
+        pointer-events: none;
+    }
+
+    body.dragging #drop-hint { display: flex; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+    <h1>Tool Library Viewer</h1>
+    <label for="file-input" class="btn">Open Tool Library</label>
+    <input type="file" id="file-input" accept=".hsmlib,.xml,.tools,.json">
+    <input type="search" id="search" placeholder="Filter tools&hellip;" disabled>
+    <div id="status">No library loaded &mdash; open a .hsmlib file or drop one here</div>
+</div>
+
+<div id="table-wrap">
+    <div id="empty">
+        Open an HSMWorks tool library (<code>.hsmlib</code>) to begin.<br>
+        You can also drag and drop the file anywhere on this window.
+    </div>
+    <table id="tool-table" hidden>
+        <thead><tr id="header-row"></tr></thead>
+        <tbody id="tool-body"></tbody>
+    </table>
+</div>
+
+<div id="bottom">
+    <div id="preview-pane">
+        <div class="pane-head">
+            <span>Preview</span>
+            <span class="sub" id="preview-sub"></span>
+            <label class="check-row">
+                <input type="checkbox" id="show-holder" checked>
+                <span>Holder</span>
+            </label>
+        </div>
+        <div id="canvas-holder"><canvas id="preview"></canvas></div>
+    </div>
+    <div id="props-pane">
+        <div class="muted" id="props-empty">Select a tool to see its full definition.</div>
+        <div id="props"></div>
+    </div>
+</div>
+
+<div id="drop-hint">Drop tool library to open</div>
+
+<script>
+// =============================================================
+//  HSMWorks .hsmlib (XML) tool library viewer
+//  Single file, no dependencies. Data is only ever read from a
+//  user-supplied file: pages served from file:// or githack
+//  cannot fetch anything themselves.
+// =============================================================
+
+const IN_TO_MM = 25.4;
+
+let tools = [];         // parsed library
+let view = [];          // filtered + sorted view of `tools`
+let selectedKey = null; // tools[].key of the selected row
+let sortKey = null;
+let sortDir = 1;
+
+// --- Small helpers ---------------------------------------------------------
+
+function esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function clamp(v, lo, hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Trims trailing zeros so 6.350 reads as 6.35 and 12 as 12
+function fmt(v, dp) {
+    if (v == null || !isFinite(v)) return '—';
+    return String(parseFloat(v.toFixed(dp == null ? 4 : dp)));
+}
+
+function fmtLen(v, tool) {
+    if (v == null || !isFinite(v)) return '—';
+    return fmt(v) + ' ' + tool.unitAbbrev;
+}
+
+function fmtFeed(v, tool) {
+    if (v == null || !isFinite(v)) return '—';
+    return fmt(v, 2) + ' ' + tool.unitAbbrev + '/min';
+}
+
+function fmtAngle(v) {
+    return (v == null || !isFinite(v)) ? '—' : fmt(v, 3) + '°';
+}
+
+function text(parent, name) {
+    const el = parent && parent.getElementsByTagNameNS('*', name)[0];
+    return el ? el.textContent.trim() : '';
+}
+
+function attr(el, name) {
+    return el ? (el.getAttribute(name) || '') : '';
+}
+
+function numAttr(el, name) {
+    if (!el) return NaN;
+    const raw = el.getAttribute(name);
+    if (raw == null || raw === '') return NaN;
+    const v = parseFloat(raw);
+    return isFinite(v) ? v : NaN;
+}
+
+function orDash(s) {
+    return (s == null || s === '') ? '—' : s;
+}
+
+// Files exported on Windows often carry a UTF-8 byte order mark, which would
+// otherwise sit in front of the XML declaration and confuse the sniff below.
+function stripBom(s) {
+    return s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s;
+}
+
+// --- Tool type families ----------------------------------------------------
+// Order matters: "spot drill" must be caught before "drill", and
+// "bull nose end mill" before the generic "mill".
+const TYPE_PATTERNS = [
+    [/spot/, 'spot'],
+    [/counter\s*sink|countersink/, 'countersink'],
+    [/chamfer|taper|dove/, 'chamfer'],
+    [/ball/, 'ball'],
+    [/bull|radius/, 'bull'],
+    [/drill/, 'drill'],
+    [/tap\b|tapping/, 'tap'],
+    [/thread/, 'thread'],
+    [/ream/, 'reamer'],
+    [/bor(e|ing)/, 'boring'],
+    [/probe/, 'probe'],
+    [/mill|counter\s*bore/, 'flat']
+];
+
+function toolFamily(type) {
+    const s = String(type || '').toLowerCase();
+    for (const [re, family] of TYPE_PATTERNS) {
+        if (re.test(s)) return family;
+    }
+    return 'other';
+}
+
+const CONE_FAMILIES = { chamfer: 1, spot: 1, drill: 1, countersink: 1 };
+
+// The XML reuses `taper-angle` for two different conventions, and this very
+// library proves both. A drill's 118 and a spot drill's 90 are *included* tip
+// angles (a 90 deg spot drill read as a half angle would have a zero-height
+// tip). A chamfer mill's 45 is measured *from the axis*: it makes the cone
+// exactly as tall as the tool radius, which matches its 3.175 flute length.
+function coneHalfAngle(family, taperAngle) {
+    const included = family !== 'chamfer';
+    const fallback = family === 'chamfer' ? 45 : (family === 'drill' ? 118 : 90);
+    const raw = (isFinite(taperAngle) && taperAngle > 0) ? taperAngle : fallback;
+    return included ? raw / 2 : raw;
+}
+
+// --- Parsing ---------------------------------------------------------------
+
+function parseLibrary(xmlText) {
+    const head = stripBom(xmlText.slice(0, 400)).trim();
+    if (head.startsWith('{') || head.startsWith('[')) {
+        throw new Error('This looks like a Fusion JSON tool library. This viewer reads the XML .hsmlib format.');
+    }
+
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    const bad = doc.getElementsByTagName('parsererror')[0];
+    if (bad) throw new Error('Could not parse XML: ' + bad.textContent.trim().split('\n')[0]);
+
+    const nodes = doc.getElementsByTagNameNS('*', 'tool');
+    if (!nodes.length) throw new Error('No <tool> elements found. Is this an HSMWorks tool library?');
+
+    const out = [];
+    for (let i = 0; i < nodes.length; i++) out.push(parseTool(nodes[i], i));
+    return out;
+}
+
+function parseTool(node, index) {
+    const unit = attr(node, 'unit').toLowerCase();
+    const inches = unit.indexOf('inch') === 0 || unit === 'in';
+    const scale = inches ? IN_TO_MM : 1;
+
+    const bodyNode = node.getElementsByTagNameNS('*', 'body')[0];
+    const ncEl = node.getElementsByTagNameNS('*', 'nc')[0];
+    const holderEl = node.getElementsByTagNameNS('*', 'holder')[0];
+    const motionEl = node.getElementsByTagNameNS('*', 'motion')[0];
+    const coolantEl = node.getElementsByTagNameNS('*', 'coolant')[0];
+    const materialEl = node.getElementsByTagNameNS('*', 'material')[0];
+
+    const body = {
+        diameter: numAttr(bodyNode, 'diameter'),
+        cornerRadius: numAttr(bodyNode, 'corner-radius'),
+        tipDiameter: numAttr(bodyNode, 'tip-diameter'),
+        taperAngle: numAttr(bodyNode, 'taper-angle'),
+        taperAngle2: numAttr(bodyNode, 'taper-angle2'),
+        threadProfileAngle: numAttr(bodyNode, 'thread-profile-angle'),
+        fluteLength: numAttr(bodyNode, 'flute-length'),
+        shoulderLength: numAttr(bodyNode, 'shoulder-length'),
+        shaftDiameter: numAttr(bodyNode, 'shaft-diameter'),
+        bodyLength: numAttr(bodyNode, 'body-length'),
+        overallLength: numAttr(bodyNode, 'overall-length'),
+        numberOfFlutes: numAttr(bodyNode, 'number-of-flutes'),
+        threadPitch: numAttr(bodyNode, 'thread-pitch')
+    };
+
+    const sections = [];
+    if (holderEl) {
+        const secs = holderEl.getElementsByTagNameNS('*', 'section');
+        for (let i = 0; i < secs.length; i++) {
+            sections.push({
+                diameter: numAttr(secs[i], 'diameter'),
+                length: numAttr(secs[i], 'length')
+            });
+        }
+    }
+
+    const type = attr(node, 'type');
+    const tool = {
+        key: index,
+        id: attr(node, 'id'),
+        type,
+        family: toolFamily(type),
+        unit: unit || 'millimeters',
+        unitAbbrev: inches ? 'in' : 'mm',
+        scale,
+        guid: attr(node, 'guid'),
+        description: text(node, 'description'),
+        comment: text(node, 'comment'),
+        manufacturer: text(node, 'manufacturer'),
+        productId: text(node, 'product-id'),
+        material: attr(materialEl, 'name'),
+        coolant: attr(coolantEl, 'mode'),
+        body,
+        nc: {
+            number: numAttr(ncEl, 'number'),
+            diameterOffset: numAttr(ncEl, 'diameter-offset'),
+            lengthOffset: numAttr(ncEl, 'length-offset'),
+            turret: numAttr(ncEl, 'turret'),
+            breakControl: attr(ncEl, 'break-control'),
+            manualToolChange: attr(ncEl, 'manual-tool-change')
+        },
+        holder: {
+            description: attr(holderEl, 'description'),
+            comment: attr(holderEl, 'comment'),
+            vendor: attr(holderEl, 'vendor'),
+            productId: attr(holderEl, 'product-id'),
+            libraryName: attr(holderEl, 'library-name'),
+            sections
+        },
+        motion: {
+            spindleRpm: numAttr(motionEl, 'spindle-rpm'),
+            rampSpindleRpm: numAttr(motionEl, 'ramp-spindle-rpm'),
+            clockwise: attr(motionEl, 'clockwise'),
+            feedMode: attr(motionEl, 'feed-mode'),
+            cutting: numAttr(motionEl, 'cutting-feedrate'),
+            entry: numAttr(motionEl, 'entry-feedrate'),
+            exit: numAttr(motionEl, 'exit-feedrate'),
+            plunge: numAttr(motionEl, 'plunge-feedrate'),
+            ramp: numAttr(motionEl, 'ramp-feedrate'),
+            retract: numAttr(motionEl, 'retract-feedrate')
+        }
+    };
+
+    // Millimetre-normalised copy. Sorting and the preview work from this so a
+    // mixed-unit library still orders and scales correctly.
+    tool.mm = {
+        diameter: body.diameter * scale,
+        cornerRadius: body.cornerRadius * scale,
+        tipDiameter: body.tipDiameter * scale,
+        fluteLength: body.fluteLength * scale,
+        shoulderLength: body.shoulderLength * scale,
+        shaftDiameter: body.shaftDiameter * scale,
+        bodyLength: body.bodyLength * scale,
+        overallLength: body.overallLength * scale,
+        cutting: tool.motion.cutting * scale,
+        plunge: tool.motion.plunge * scale,
+        holderLength: sections.reduce((sum, s) => sum + (isFinite(s.length) ? s.length : 0), 0) * scale
+    };
+
+    return tool;
+}
+
+// --- Geometry --------------------------------------------------------------
+// Half profiles are lists of {z, r} in millimetres, tip at z = 0, running up
+// the tool. They get mirrored about the axis when drawn.
+
+const ARC_STEPS = 20;
+
+function buildToolProfile(t) {
+    const g = t.mm;
+    const R = (isFinite(g.diameter) && g.diameter > 0) ? g.diameter / 2 : 1;
+    const pts = [];
+    let tipHeight = 0;
+
+    if (t.family === 'ball' || t.family === 'probe') {
+        // Hemisphere: r = R sin0, z = R - R cos0
+        for (let i = 0; i <= ARC_STEPS; i++) {
+            const a = (Math.PI / 2) * (i / ARC_STEPS);
+            pts.push({ z: R - R * Math.cos(a), r: R * Math.sin(a) });
+        }
+        tipHeight = R;
+    } else if (t.family === 'bull') {
+        const cr = clamp(isFinite(g.cornerRadius) ? g.cornerRadius : 0, 0, R);
+        if (cr <= 0) {
+            pts.push({ z: 0, r: R });
+        } else {
+            for (let i = 0; i <= ARC_STEPS; i++) {
+                const a = (Math.PI / 2) * (i / ARC_STEPS);
+                pts.push({ z: cr - cr * Math.cos(a), r: (R - cr) + cr * Math.sin(a) });
+            }
+        }
+        tipHeight = cr;
+    } else if (CONE_FAMILIES[t.family]) {
+        const tipR = clamp(isFinite(g.tipDiameter) ? g.tipDiameter / 2 : 0, 0, R * 0.999);
+        const half = clamp(coneHalfAngle(t.family, t.body.taperAngle), 0.5, 89.5);
+        const h = (R - tipR) / Math.tan(half * Math.PI / 180);
+        pts.push({ z: 0, r: tipR });
+        pts.push({ z: h, r: R });
+        tipHeight = h;
+    } else {
+        pts.push({ z: 0, r: R });
+    }
+
+    // Sanitise the length stack so bad data can't fold the outline back on itself
+    const flute = Math.max(isFinite(g.fluteLength) ? g.fluteLength : 0, tipHeight);
+    const shoulder = Math.max(isFinite(g.shoulderLength) ? g.shoulderLength : flute, flute);
+    const shaftR = (isFinite(g.shaftDiameter) && g.shaftDiameter > 0) ? g.shaftDiameter / 2 : R;
+    const oal = Math.max(isFinite(g.overallLength) ? g.overallLength : shoulder * 1.4, shoulder);
+
+    pts.push({ z: shoulder, r: R });
+    if (Math.abs(shaftR - R) > 1e-9) pts.push({ z: shoulder, r: shaftR });
+    pts.push({ z: oal, r: shaftR });
+
+    return pts;
+}
+
+// Sections run from the tool end upward. Each one advances z by its length and
+// ends at its diameter, so length="0" is a pure step change in diameter.
+function buildHolderProfile(t) {
+    const secs = t.holder.sections;
+    if (!secs.length) return null;
+
+    const pts = [];
+    let z = 0;
+    for (const s of secs) {
+        const len = isFinite(s.length) ? s.length : 0;
+        const dia = isFinite(s.diameter) ? s.diameter : 0;
+        z += len * t.scale;
+        pts.push({ z, r: (dia * t.scale) / 2 });
+    }
+    if (pts.length < 2) return null;
+
+    // The tool protrudes `body-length` from the holder; the rest of its overall
+    // length is gripped inside, so the holder face sits that far above the tip.
+    const g = t.mm;
+    let base = isFinite(g.bodyLength) ? g.bodyLength : NaN;
+    const oal = isFinite(g.overallLength) ? g.overallLength : NaN;
+    if (!isFinite(base) || (isFinite(oal) && base > oal)) base = isFinite(oal) ? oal : 0;
+
+    return pts.map(p => ({ z: p.z + base, r: p.r }));
+}
+
+// --- Preview rendering -----------------------------------------------------
+
+const canvas = document.getElementById('preview');
+const ctx = canvas.getContext('2d');
+const showHolderEl = document.getElementById('show-holder');
+
+function profileBounds(profiles) {
+    let maxR = 0, maxZ = 0;
+    for (const pts of profiles) {
+        if (!pts) continue;
+        for (const p of pts) {
+            if (p.r > maxR) maxR = p.r;
+            if (p.z > maxZ) maxZ = p.z;
+        }
+    }
+    return { maxR, maxZ };
+}
+
+function tracePath(pts, xOf, yOf) {
+    ctx.beginPath();
+    ctx.moveTo(xOf(pts[0].r), yOf(pts[0].z));
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(xOf(pts[i].r), yOf(pts[i].z));
+    for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(xOf(-pts[i].r), yOf(pts[i].z));
+    ctx.closePath();
+}
+
+function drawPreview() {
+    const holderBox = document.getElementById('canvas-holder');
+    const dpr = window.devicePixelRatio || 1;
+    const w = holderBox.clientWidth;
+    const h = holderBox.clientHeight;
+    if (w <= 0 || h <= 0) return;
+
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const tool = tools.find(t => t.key === selectedKey);
+    if (!tool) return;
+
+    const toolPts = buildToolProfile(tool);
+    const holderPts = showHolderEl.checked ? buildHolderProfile(tool) : null;
+
+    const bounds = profileBounds([toolPts, holderPts]);
+    if (!(bounds.maxR > 0) || !(bounds.maxZ > 0)) return;
+
+    const padX = 18, padTop = 14, padBottom = 14;
+    const scale = Math.min(
+        (w - padX * 2) / (bounds.maxR * 2),
+        (h - padTop - padBottom) / bounds.maxZ
+    );
+    const cx = w / 2;
+    const baseY = h - padBottom;
+    const xOf = r => cx + r * scale;
+    const yOf = z => baseY - z * scale;
+
+    // Tool first, holder over the top so the gripped shank is hidden naturally
+    tracePath(toolPts, xOf, yOf);
+    ctx.fillStyle = '#c8a978';
+    ctx.fill();
+    ctx.strokeStyle = '#8c7350';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (holderPts) {
+        tracePath(holderPts, xOf, yOf);
+        ctx.fillStyle = '#5a5a5e';
+        ctx.fill();
+        ctx.strokeStyle = '#7b7b80';
+        ctx.stroke();
+    }
+}
+
+showHolderEl.addEventListener('change', drawPreview);
+if (window.ResizeObserver) {
+    new ResizeObserver(drawPreview).observe(document.getElementById('canvas-holder'));
+} else {
+    window.addEventListener('resize', drawPreview);
+}
+
+// --- Type icons ------------------------------------------------------------
+
+const ICON_PATHS = {
+    flat:        'M4 1 H10 V17 H4 Z',
+    ball:        'M4 1 H10 V12 A3 3 0 0 1 4 12 Z',
+    bull:        'M4 1 H10 V14 Q10 17 7.8 17 H6.2 Q4 17 4 14 Z',
+    chamfer:     'M4 1 H10 V11 L7 17 L4 11 Z',
+    drill:       'M4 1 H10 V10 L7 17 L4 10 Z',
+    spot:        'M4 1 H10 V13 L7 17 L4 13 Z',
+    countersink: 'M4 1 H10 V12 L7 17 L4 12 Z',
+    tap:         'M4 1 H10 V17 H4 Z M4 5 H10 M4 8 H10 M4 11 H10 M4 14 H10',
+    thread:      'M4 1 H10 V17 H4 Z M4 5 H10 M4 9 H10 M4 13 H10',
+    reamer:      'M4 1 H10 V14 L7 17 L4 14 Z',
+    boring:      'M5 1 H10 V17 H5 Z',
+    probe:       'M6 1 H8 V11 A3 3 0 1 1 6 11 Z',
+    other:       'M4 1 H10 V17 H4 Z'
+};
+
+function typeIcon(family) {
+    const d = ICON_PATHS[family] || ICON_PATHS.other;
+    const stroked = (family === 'tap' || family === 'thread');
+    return '<svg width="14" height="18" viewBox="0 0 14 18" aria-hidden="true">' +
+        '<path d="' + d + '" fill="' + (stroked ? 'none' : 'currentColor') + '" ' +
+        'stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>';
+}
+
+// --- Table -----------------------------------------------------------------
+
+const COLUMNS = [
+    { key: 'number', label: '#', num: true,
+      sort: t => t.nc.number,
+      cell: t => fmt(t.nc.number, 0) },
+    { key: 'type', label: 'Type',
+      sort: t => t.type.toLowerCase(),
+      cell: t => '<span class="type-cell">' + typeIcon(t.family) + '<span>' + esc(t.type || '—') + '</span></span>' },
+    { key: 'description', label: 'Description',
+      sort: t => t.description.toLowerCase(),
+      cell: t => esc(orDash(t.description)) },
+    { key: 'diameter', label: 'Diameter', num: true,
+      sort: t => t.mm.diameter,
+      cell: t => fmtLen(t.body.diameter, t) },
+    { key: 'cornerRadius', label: 'Corner Rad', num: true,
+      sort: t => t.mm.cornerRadius,
+      cell: t => isFinite(t.body.cornerRadius) ? fmtLen(t.body.cornerRadius, t) : '—' },
+    { key: 'fluteLength', label: 'Flute Len', num: true,
+      sort: t => t.mm.fluteLength,
+      cell: t => fmtLen(t.body.fluteLength, t) },
+    { key: 'overallLength', label: 'OAL', num: true,
+      sort: t => t.mm.overallLength,
+      cell: t => fmtLen(t.body.overallLength, t) },
+    { key: 'flutes', label: 'Flutes', num: true,
+      sort: t => t.body.numberOfFlutes,
+      cell: t => fmt(t.body.numberOfFlutes, 0) },
+    { key: 'material', label: 'Material',
+      sort: t => t.material.toLowerCase(),
+      cell: t => esc(orDash(t.material)) },
+    { key: 'holder', label: 'Holder',
+      sort: t => t.holder.description.toLowerCase(),
+      cell: t => esc(orDash(t.holder.description)) },
+    { key: 'rpm', label: 'RPM', num: true,
+      sort: t => t.motion.spindleRpm,
+      cell: t => fmt(t.motion.spindleRpm, 0) },
+    { key: 'feed', label: 'Cutting Feed', num: true,
+      sort: t => t.mm.cutting,
+      cell: t => fmtFeed(t.motion.cutting, t) },
+    { key: 'coolant', label: 'Coolant',
+      sort: t => t.coolant.toLowerCase(),
+      cell: t => esc(orDash(t.coolant)) }
+];
+
+const tableEl = document.getElementById('tool-table');
+const bodyEl = document.getElementById('tool-body');
+const searchEl = document.getElementById('search');
+
+function renderHeader() {
+    document.getElementById('header-row').innerHTML = COLUMNS.map(c => {
+        const sorted = c.key === sortKey;
+        const arrow = sorted ? '<span class="arrow">' + (sortDir > 0 ? '▲' : '▼') + '</span>' : '';
+        return '<th data-key="' + c.key + '" class="' + (c.num ? 'num ' : '') + (sorted ? 'sorted' : '') + '">' +
+               esc(c.label) + arrow + '</th>';
+    }).join('');
+}
+
+// Missing numbers sort last in either direction rather than scattering
+function compareBy(col, a, b) {
+    const va = col.sort(a);
+    const vb = col.sort(b);
+    if (col.num) {
+        const na = isFinite(va), nb = isFinite(vb);
+        if (!na && !nb) return 0;
+        if (!na) return 1;
+        if (!nb) return -1;
+        return (va - vb) * sortDir;
+    }
+    const sa = String(va || ''), sb = String(vb || '');
+    if (sa === sb) return 0;
+    if (sa === '') return 1;
+    if (sb === '') return -1;
+    return sa.localeCompare(sb) * sortDir;
+}
+
+function applyView() {
+    const q = searchEl.value.trim().toLowerCase();
+    view = tools.filter(t => {
+        if (!q) return true;
+        return [t.type, t.description, t.comment, t.material, t.holder.description,
+                t.productId, t.manufacturer, String(t.nc.number), String(t.id)]
+            .some(f => String(f || '').toLowerCase().includes(q));
+    });
+
+    if (sortKey) {
+        const col = COLUMNS.find(c => c.key === sortKey);
+        if (col) view = view.slice().sort((a, b) => compareBy(col, a, b));
+    }
+
+    renderRows();
+    updateStatus();
+}
+
+function renderRows() {
+    bodyEl.innerHTML = view.map(t =>
+        '<tr data-key="' + t.key + '"' + (t.key === selectedKey ? ' class="selected"' : '') + '>' +
+        COLUMNS.map(c => '<td' + (c.num ? ' class="num"' : '') + '>' + c.cell(t) + '</td>').join('') +
+        '</tr>'
+    ).join('');
+}
+
+bodyEl.addEventListener('click', e => {
+    const tr = e.target.closest('tr');
+    if (tr) select(parseInt(tr.dataset.key, 10), false);
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    if (document.activeElement === searchEl || !view.length) return;
+    e.preventDefault();
+
+    const at = view.findIndex(t => t.key === selectedKey);
+    const next = e.key === 'ArrowDown'
+        ? Math.min(at + 1, view.length - 1)
+        : Math.max(at - 1, 0);
+    select(view[at < 0 ? 0 : next].key, true);
+});
+
+function select(key, scrollIntoView) {
+    selectedKey = key;
+    for (const tr of bodyEl.children) {
+        tr.classList.toggle('selected', parseInt(tr.dataset.key, 10) === key);
+    }
+    if (scrollIntoView) {
+        const row = bodyEl.querySelector('tr.selected');
+        if (row) row.scrollIntoView({ block: 'nearest' });
+    }
+    renderProps();
+    drawPreview();
+}
+
+document.getElementById('header-row').addEventListener('click', e => {
+    const th = e.target.closest('th');
+    if (!th) return;
+    const key = th.dataset.key;
+    if (sortKey === key) sortDir = -sortDir;
+    else { sortKey = key; sortDir = 1; }
+    renderHeader();
+    applyView();
+});
+
+searchEl.addEventListener('input', applyView);
+
+// --- Properties panel ------------------------------------------------------
+
+const propsEl = document.getElementById('props');
+const propsEmptyEl = document.getElementById('props-empty');
+
+function row(label, value, warnTitle) {
+    const flag = warnTitle ? '<span class="warn" title="' + esc(warnTitle) + '">!</span>' : '';
+    return '<div class="prop"><span>' + esc(label) + '</span><span>' + value + flag + '</span></div>';
+}
+
+function group(title, rows) {
+    return '<div class="group-title">' + esc(title) + '</div><div class="prop-grid">' + rows.join('') + '</div>';
+}
+
+function renderProps() {
+    const t = tools.find(x => x.key === selectedKey);
+    const sub = document.getElementById('preview-sub');
+
+    if (!t) {
+        propsEl.innerHTML = '';
+        propsEmptyEl.hidden = false;
+        sub.textContent = '';
+        return;
+    }
+    propsEmptyEl.hidden = true;
+    sub.textContent = (isFinite(t.nc.number) ? 'T' + fmt(t.nc.number, 0) + ' — ' : '') +
+                      (t.description || t.type || '');
+
+    const b = t.body, m = t.motion, h = t.holder;
+    // The sample library really does contain overall-length="69850" on one
+    // tool, so flag values that cannot be a real cutter rather than silently
+    // drawing a needle.
+    const oalWarn = (isFinite(t.mm.overallLength) && t.mm.overallLength > 1000)
+        ? 'Implausible overall length — likely a data entry error in the library file'
+        : null;
+
+    propsEl.innerHTML =
+        group('General', [
+            row('Library ID', esc(orDash(t.id))),
+            row('Tool Number', fmt(t.nc.number, 0)),
+            row('Type', esc(orDash(t.type))),
+            row('Description', esc(orDash(t.description))),
+            row('Comment', esc(orDash(t.comment))),
+            row('Manufacturer', esc(orDash(t.manufacturer))),
+            row('Product ID', esc(orDash(t.productId))),
+            row('Material', esc(orDash(t.material))),
+            row('Coolant', esc(orDash(t.coolant))),
+            row('Unit', esc(t.unit)),
+            row('GUID', esc(orDash(t.guid)))
+        ]) +
+        group('Cutter', [
+            row('Diameter', fmtLen(b.diameter, t)),
+            row('Corner Radius', isFinite(b.cornerRadius) ? fmtLen(b.cornerRadius, t) : '—'),
+            row('Tip Diameter', isFinite(b.tipDiameter) ? fmtLen(b.tipDiameter, t) : '—'),
+            row('Taper Angle', fmtAngle(b.taperAngle)),
+            row('Secondary Taper Angle', fmtAngle(b.taperAngle2)),
+            row('Thread Profile Angle', fmtAngle(b.threadProfileAngle)),
+            row('Flute Length', fmtLen(b.fluteLength, t)),
+            row('Shoulder Length', fmtLen(b.shoulderLength, t)),
+            row('Number of Flutes', fmt(b.numberOfFlutes, 0)),
+            row('Thread Pitch', isFinite(b.threadPitch) ? fmtLen(b.threadPitch, t) : '—')
+        ]) +
+        group('Shaft & Holder', [
+            row('Shaft Diameter', fmtLen(b.shaftDiameter, t)),
+            row('Body Length', fmtLen(b.bodyLength, t)),
+            row('Overall Length', fmtLen(b.overallLength, t), oalWarn),
+            row('Holder', esc(orDash(h.description))),
+            row('Holder Vendor', esc(orDash(h.vendor))),
+            row('Holder Product ID', esc(orDash(h.productId))),
+            row('Holder Library', esc(orDash(h.libraryName))),
+            row('Holder Sections', String(h.sections.length)),
+            row('Holder Length', h.sections.length ? fmt(t.mm.holderLength / t.scale) + ' ' + t.unitAbbrev : '—')
+        ]) +
+        group('Offsets', [
+            row('Diameter Offset', fmt(t.nc.diameterOffset, 0)),
+            row('Length Offset', fmt(t.nc.lengthOffset, 0)),
+            row('Turret', fmt(t.nc.turret, 0)),
+            row('Break Control', t.nc.breakControl === '1' ? 'yes' : (t.nc.breakControl === '0' ? 'no' : '—')),
+            row('Manual Tool Change', t.nc.manualToolChange === '1' ? 'yes' : (t.nc.manualToolChange === '0' ? 'no' : '—'))
+        ]) +
+        group('Feeds & Speeds', [
+            row('Spindle Speed', isFinite(m.spindleRpm) ? fmt(m.spindleRpm, 0) + ' rpm' : '—'),
+            row('Ramp Spindle Speed', isFinite(m.rampSpindleRpm) ? fmt(m.rampSpindleRpm, 0) + ' rpm' : '—'),
+            row('Direction', m.clockwise === 'yes' ? 'clockwise' : (m.clockwise === 'no' ? 'counter-clockwise' : '—')),
+            row('Feed Mode', esc(orDash(m.feedMode))),
+            row('Cutting Feedrate', fmtFeed(m.cutting, t)),
+            row('Entry Feedrate', fmtFeed(m.entry, t)),
+            row('Exit Feedrate', fmtFeed(m.exit, t)),
+            row('Plunge Feedrate', fmtFeed(m.plunge, t)),
+            row('Ramp Feedrate', fmtFeed(m.ramp, t)),
+            row('Retract Feedrate', fmtFeed(m.retract, t))
+        ]);
+}
+
+// --- Loading ---------------------------------------------------------------
+
+const statusEl = document.getElementById('status');
+let loadedName = '';
+
+function updateStatus() {
+    if (!tools.length) return;
+    const shown = view.length === tools.length
+        ? '<span class="count">' + tools.length + '</span> tools'
+        : '<span class="count">' + view.length + '</span> of ' + tools.length + ' tools';
+    statusEl.classList.remove('error');
+    statusEl.innerHTML = esc(loadedName) + ' &mdash; ' + shown;
+}
+
+function showError(message) {
+    statusEl.classList.add('error');
+    statusEl.textContent = message;
+}
+
+function loadFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+
+    reader.onload = evt => {
+        try {
+            const parsed = parseLibrary(String(evt.target.result));
+            tools = parsed;
+            loadedName = file.name;
+            selectedKey = null;
+            sortKey = null;
+            sortDir = 1;
+            searchEl.value = '';
+            searchEl.disabled = false;
+
+            document.getElementById('empty').hidden = true;
+            tableEl.hidden = false;
+            renderHeader();
+            applyView();
+            if (view.length) select(view[0].key, false);
+            else { renderProps(); drawPreview(); }
+        } catch (err) {
+            tools = [];
+            view = [];
+            selectedKey = null;
+            bodyEl.innerHTML = '';
+            tableEl.hidden = true;
+            document.getElementById('empty').hidden = false;
+            searchEl.disabled = true;
+            renderProps();
+            drawPreview();
+            showError(file.name + ' — ' + err.message);
+        }
+    };
+
+    reader.onerror = () => showError('Could not read ' + file.name);
+    reader.readAsText(file);
+}
+
+document.getElementById('file-input').addEventListener('change', e => {
+    loadFile(e.target.files[0]);
+    e.target.value = '';
+});
+
+// Drag and drop anywhere on the window
+let dragDepth = 0;
+window.addEventListener('dragenter', e => {
+    e.preventDefault();
+    dragDepth++;
+    document.body.classList.add('dragging');
+});
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('dragleave', () => {
+    if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); }
+});
+window.addEventListener('drop', e => {
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove('dragging');
+    if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+});
+</script>
+</body>
+</html>
