@@ -235,6 +235,9 @@
             text-align: right;
         }
 
+        /* The track paints the operation timeline. Custom properties inherit into
+           pseudo-elements, which is the only way JS can reach the track's background;
+           the fallback is the plain track shown before a file is loaded. */
         #sim-progress {
             flex: 1 1 auto;
             width: auto;
@@ -243,15 +246,15 @@
             background: transparent;
             border: none;
             border-radius: 0;
-            height: 18px;
+            height: 20px;
             cursor: pointer;
             -webkit-appearance: none;
             appearance: none;
         }
 
         #sim-progress::-webkit-slider-runnable-track {
-            height: 6px;
-            background-color: #1e1e1e;
+            height: 10px;
+            background: var(--track-gradient, #1e1e1e);
             border: 1px solid #3c3c3c;
             border-radius: 3px;
         }
@@ -259,31 +262,31 @@
         #sim-progress::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
-            width: 14px;
-            height: 14px;
-            margin-top: -5px;
-            border-radius: 50%;
-            background-color: #0e639c;
-            border: 1px solid #1177bb;
+            width: 8px;
+            height: 18px;
+            margin-top: -3px;
+            border-radius: 2px;
+            background-color: #f0f0f0;
+            border: 1px solid #1a1a1a;
         }
 
         #sim-progress:hover::-webkit-slider-thumb {
-            background-color: #1177bb;
+            background-color: #ffffff;
         }
 
         #sim-progress::-moz-range-track {
-            height: 6px;
-            background-color: #1e1e1e;
+            height: 10px;
+            background: var(--track-gradient, #1e1e1e);
             border: 1px solid #3c3c3c;
             border-radius: 3px;
         }
 
         #sim-progress::-moz-range-thumb {
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background-color: #0e639c;
-            border: 1px solid #1177bb;
+            width: 8px;
+            height: 18px;
+            border-radius: 2px;
+            background-color: #f0f0f0;
+            border: 1px solid #1a1a1a;
         }
 
         #loading {
@@ -774,6 +777,7 @@
                 renderToolpath();
                 updateLegend();
                 updateToolLegend();
+                updateProgressGradient();
                 fitCameraToBounds();
                 resetSimulation();
                 applySuggestedStockExtents();
@@ -809,6 +813,76 @@
             if (parsedSegments.length === 0) return;
             currentDistance = (pct / 100) * totalPathLength;
             updateToolPositionByDistance(currentDistance);
+        });
+
+        // --- Operation timeline on the scrubber ------------------------------------
+        // The track is painted with one band per operation, sized by that operation's
+        // share of the path length, so the shape of the job is readable without playing
+        // it. Always by operation, whatever the toolpath colour mode is set to.
+        //
+        // Spans are coalesced from the segments rather than read off
+        // operations[].firstSegIndex, which handles the synthetic lead-in move (opIndex
+        // null) and any empty trailing operation without special cases.
+        let opSpans = [];
+
+        function buildOpSpans() {
+            opSpans = [];
+            parsedSegments.forEach(seg => {
+                const last = opSpans[opSpans.length - 1];
+                if (last && last.opIndex === seg.opIndex) {
+                    last.end = seg.startDist + seg.length;
+                } else {
+                    opSpans.push({
+                        opIndex: seg.opIndex,
+                        start: seg.startDist,
+                        end: seg.startDist + seg.length
+                    });
+                }
+            });
+        }
+
+        function cssHex(hex) {
+            return `#${hex.toString(16).padStart(6, '0')}`;
+        }
+
+        function updateProgressGradient() {
+            buildOpSpans();
+            if (opSpans.length === 0 || totalPathLength <= 0) {
+                progressSlider.style.removeProperty('--track-gradient');
+                return;
+            }
+
+            // Two stops per span at the same colour gives a hard edge between operations
+            // instead of a blend.
+            const stops = [];
+            opSpans.forEach(span => {
+                const color = span.opIndex == null
+                    ? cssHex(UNASSIGNED_COLOR)
+                    : cssHex(colorForCutId(span.opIndex + 1, 'op'));
+                const from = (span.start / totalPathLength) * 100;
+                const to = (span.end / totalPathLength) * 100;
+                stops.push(`${color} ${from.toFixed(3)}%`, `${color} ${to.toFixed(3)}%`);
+            });
+            progressSlider.style.setProperty('--track-gradient',
+                `linear-gradient(to right, ${stops.join(', ')})`);
+        }
+
+        function opSpanAtDistance(dist) {
+            for (let i = 0; i < opSpans.length; i++) {
+                if (dist < opSpans[i].end) return opSpans[i];
+            }
+            return opSpans[opSpans.length - 1] || null;
+        }
+
+        // Rewriting `title` on every mousemove would make the browser dismiss and
+        // re-open the tooltip, so it only changes when the band under the cursor does.
+        progressSlider.addEventListener('mousemove', (e) => {
+            if (opSpans.length === 0 || totalPathLength <= 0) return;
+            const ratio = clamp(e.offsetX / progressSlider.clientWidth, 0, 1);
+            const span = opSpanAtDistance(ratio * totalPathLength);
+            const label = span == null ? '' :
+                (span.opIndex == null ? 'Rapid to start' : opLabel(span.opIndex));
+            if (progressSlider.title !== label) progressSlider.title = label;
         });
 
         // --- Tool Profile ---
@@ -1052,6 +1126,14 @@
         // number -- gets neutral grey rather than borrowing slot 0, so it cannot be
         // mistaken for the first cutting tool.
         const UNASSIGNED_COLOR = 0x7c7c7c;
+
+        // Display name for an operation. Files that name their operations in an N-word
+        // comment get that; anything else is numbered. Shared by the legend and the
+        // scrubber tooltip so the two always say the same thing.
+        function opLabel(i) {
+            const op = operations[i];
+            return (op && op.label) || `Operation ${i + 1}`;
+        }
 
         function colorForCutId(id, mode) {
             if (id === 0) return STOCK_BASE_COLOR;
@@ -2195,7 +2277,6 @@
         // The swatch list for a per-tool or per-operation palette. Shared by the toolpath
         // legend and the stock legend so the two can never drift apart.
         function renderPaletteLegend(mode) {
-            const hex = n => '#' + n.toString(16).padStart(6, '0');
             // Operation labels come straight out of a file comment, so they cannot go
             // into innerHTML unescaped.
             const esc = s => String(s).replace(/[&<>"]/g, ch =>
@@ -2222,13 +2303,13 @@
             } else {
                 if (operations.length === 0) return '<div class="legend"><div class="legend-item"><span>No operations found.</span></div></div>';
                 operations.forEach((op, i) => {
-                    rows.push([PALETTE[i % PALETTE.length], op.label || `Operation ${i + 1}`]);
+                    rows.push([PALETTE[i % PALETTE.length], opLabel(i)]);
                 });
             }
 
             const items = rows.map(([color, label]) => `
                         <div class="legend-item">
-                            <div class="color-box" style="background-color: ${color === null ? 'transparent' : hex(color)}; ${color === null ? 'border: 1px dashed #666;' : ''}"></div>
+                            <div class="color-box" style="background-color: ${color === null ? 'transparent' : cssHex(color)}; ${color === null ? 'border: 1px dashed #666;' : ''}"></div>
                             <span>${esc(label)}</span>
                         </div>`).join('');
             return `<div class="legend">${items}\n                    </div>`;
