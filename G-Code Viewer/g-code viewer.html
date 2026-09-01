@@ -50,83 +50,6 @@
             color: #aaaaaa;
         }
 
-        /* A label with a help affordance beside it. Positioned so the popup below can
-           stretch to the full width of the control group -- the row is a flex item in a
-           column, so it already spans it. */
-        .label-row {
-            position: relative;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .help {
-            display: inline-flex;
-        }
-
-        .help[hidden] {
-            display: none;
-        }
-
-        .help-icon {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 14px;
-            height: 14px;
-            border: 1px solid #5a5a5a;
-            border-radius: 50%;
-            color: #aaaaaa;
-            font-size: 0.62rem;
-            line-height: 1;
-            cursor: help;
-            user-select: none;
-        }
-
-        .help:hover .help-icon,
-        .help:focus-within .help-icon {
-            border-color: #0e639c;
-            color: #ffffff;
-        }
-
-        /* Opens directly under the label, over the control it describes, rather than below
-           it: the popup is a descendant of .help, so it stays open while the pointer is on
-           it, and a straight line down from the icon never leaves the hover target. */
-        .help-popup {
-            display: none;
-            position: absolute;
-            top: calc(100% + 4px);
-            left: 0;
-            right: 0;
-            z-index: 20;
-            /* Sized entirely by its content. A capped height meant the rapid-gouge key
-               tipping a long operation list over the limit put a scrollbar in a tooltip,
-               which is a worse way to read a colour key than a tall popup is. */
-            padding: 8px;
-            background-color: #1e1e1e;
-            border: 1px solid #4a4a4a;
-            border-radius: 4px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
-        }
-
-        .help:hover .help-popup,
-        .help:focus-within .help-popup {
-            display: block;
-        }
-
-        /* The legend blocks bring their own panel chrome, which would double up inside a
-           popup that already has some. */
-        .help-popup .legend {
-            background-color: transparent;
-            border: none;
-            padding: 0;
-        }
-
-        .help-popup .legend + .legend {
-            margin-top: 8px;
-            padding-top: 8px;
-            border-top: 1px solid #3c3c3c;
-        }
 
         select, input[type="range"], input[type="number"] {
             width: 100%;
@@ -312,6 +235,68 @@
             max-height: calc(100% - 24px);
         }
 
+        /* Mirror of #overlay-stack down the other side of the view. Its own stack rather
+           than a corner offset on the panel, so the same max-height rule keeps a long
+           legend inside the 3D view. */
+        #legend-stack {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 5;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+            pointer-events: none;
+            max-height: calc(100% - 24px);
+        }
+
+        #stock-legend {
+            display: flex;
+            flex-direction: column;
+            max-width: 280px;
+            overflow: hidden;
+        }
+
+        /* An id setting `display` outranks the browser's own [hidden] rule, so hiding the
+           panel has to be spelled out or it never goes away. */
+        #stock-legend[hidden] {
+            display: none;
+        }
+
+        #stock-legend-head {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #e0e0e0;
+        }
+
+        #tool-legend {
+            flex: 1 1 auto;
+            min-height: 0;
+            margin-top: 8px;
+            border-top: 1px solid #3c3c3c;
+            padding-top: 8px;
+            /* Clipped rather than scrolled, like the g-code lookahead: a scroller here
+               would eat wheel events meant for the 3D view. */
+            overflow: hidden;
+        }
+
+        /* The legend blocks carry their own panel chrome, which would double up inside a
+           panel that already has some. */
+        #tool-legend .legend {
+            background-color: transparent;
+            border: none;
+            padding: 0;
+        }
+
+        #tool-legend .legend + .legend {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #3c3c3c;
+        }
+
         .overlay-panel {
             padding: 10px 12px;
             background-color: rgba(30, 30, 30, 0.78);
@@ -385,10 +370,10 @@
             white-space: pre-wrap;
         }
 
-        /* The one interactive thing in the overlays, so it is also the only one that takes
-           the mouse back from the stack -- putting this on the panel would make the whole
-           box swallow orbit drags that start on it. */
-        #gcode-expand {
+        /* The only interactive things in the overlays, so also the only ones that take the
+           mouse back from their stack -- putting this on a panel would make the whole box
+           swallow orbit drags that start on it. */
+        .panel-toggle {
             margin-left: auto;
             flex: 0 0 auto;
             pointer-events: auto;
@@ -404,7 +389,7 @@
             cursor: pointer;
         }
 
-        #gcode-expand:hover {
+        .panel-toggle:hover {
             background-color: #3c3c3c;
             color: #ffffff;
         }
@@ -631,13 +616,7 @@
                 </select>
             </div>
             <div class="control-group">
-                <div class="label-row">
-                    <label for="stock-color-mode">Stock Color</label>
-                    <span class="help" id="stock-color-help" tabindex="0" hidden>
-                        <span class="help-icon" aria-hidden="true">?</span>
-                        <div class="help-popup"><div id="tool-legend"></div></div>
-                    </span>
-                </div>
+                <label for="stock-color-mode">Stock Color</label>
                 <select id="stock-color-mode">
                     <option value="off">Uniform</option>
                     <option value="tool">By Tool</option>
@@ -709,6 +688,16 @@
 
     <div id="viewport">
         <div id="canvas-container">
+            <div id="legend-stack">
+                <div id="stock-legend" class="overlay-panel" hidden>
+                    <div id="stock-legend-head">
+                        <span>Stock Colors</span>
+                        <button id="stock-legend-toggle" class="panel-toggle" type="button"
+                                title="Show stock colors" aria-expanded="false">&#9662;</button>
+                    </div>
+                    <div id="tool-legend" hidden></div>
+                </div>
+            </div>
             <div id="overlay-stack">
                 <div id="readout" class="overlay-panel">
                     <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
@@ -720,7 +709,7 @@
                     <div id="gcode-line-head">
                         <span id="gcode-line-number"></span>
                         <span id="gcode-line-text">&mdash;</span>
-                        <button id="gcode-expand" type="button" title="Show upcoming lines"
+                        <button id="gcode-expand" class="panel-toggle" type="button" title="Show upcoming lines"
                                 aria-expanded="false" hidden>&#9662;</button>
                     </div>
                     <div id="gcode-lookahead" hidden></div>
@@ -3239,9 +3228,13 @@
         // updateLegend() rewrites that element wholesale and would wipe this on every
         // toolpath colour-mode change. Behind a popup because a job with thirty operations
         // produced thirty rows, and the sidebar became a wall of swatches.
+        // Collapsed by default: a job with thirty operations is thirty rows, which is a
+        // wall of swatches to have standing over the model until it is asked for.
+        let stockLegendExpanded = false;
+
         function updateToolLegend() {
             const el = document.getElementById('tool-legend');
-            const help = document.getElementById('stock-color-help');
+            const panel = document.getElementById('stock-legend');
             const mode = stockColorModeEl.value;
             const palette = mode === 'off' ? '' : renderPaletteLegend(mode);
 
@@ -3256,10 +3249,19 @@
                     </div>` : '';
 
             el.innerHTML = palette + gouge;
-            // No point offering help that would open onto nothing -- Uniform mode with no
-            // gouge to explain has no colours to key.
-            help.hidden = palette === '' && gouge === '';
+            // The whole panel goes away when there is nothing to key -- Uniform mode with
+            // no gouge to explain has no colours worth a box over the model.
+            panel.hidden = palette === '' && gouge === '';
+            el.hidden = !stockLegendExpanded || panel.hidden;
         }
+
+        document.getElementById('stock-legend-toggle').addEventListener('click', (e) => {
+            stockLegendExpanded = !stockLegendExpanded;
+            e.currentTarget.setAttribute('aria-expanded', String(stockLegendExpanded));
+            e.currentTarget.innerHTML = stockLegendExpanded ? '&#9652;' : '&#9662;';
+            e.currentTarget.title = stockLegendExpanded ? 'Hide stock colors' : 'Show stock colors';
+            updateToolLegend();
+        });
 
         function updateLegend() {
             const container = document.getElementById('legend-container');
