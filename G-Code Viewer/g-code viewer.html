@@ -133,6 +133,10 @@
             line-height: 1.3;
         }
 
+        .hint-muted {
+            color: #808080;
+        }
+
         .panel {
             background-color: #1e1e1e;
             border-radius: 4px;
@@ -249,6 +253,29 @@
             <div class="control-group">
                 <label for="tool-diameter">Tool Diameter (mm) [Optional]</label>
                 <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1">
+            </div>
+            <div class="control-group">
+                <label for="tool-type">Tool Type</label>
+                <select id="tool-type">
+                    <option value="flat" selected>Flat End Mill</option>
+                    <option value="ball">Ball Nose</option>
+                    <option value="bull">Bull Nose</option>
+                    <option value="chamfer">Chamfer / V-Bit</option>
+                </select>
+            </div>
+            <div class="control-group" id="row-corner-radius">
+                <label for="tool-corner-radius">Corner Radius (mm)</label>
+                <input type="number" id="tool-corner-radius" value="1" min="0" step="0.1">
+            </div>
+            <div class="control-group" id="row-wall-angle">
+                <label for="tool-wall-angle">Wall Angle from Axis (deg)</label>
+                <input type="number" id="tool-wall-angle" value="45" min="1" max="89" step="1">
+                <div class="hint hint-muted">45&deg; cuts a 45&deg; chamfer.</div>
+            </div>
+            <div class="control-group" id="row-tip-diameter">
+                <label for="tool-tip-diameter">Tip Diameter (mm)</label>
+                <input type="number" id="tool-tip-diameter" value="0" min="0" step="0.1">
+                <div class="hint hint-muted">0 for a sharp V-bit.</div>
             </div>
             <div class="control-group">
                 <label for="sim-speed">Simulation Speed</label>
@@ -374,7 +401,12 @@
         let isSimulating = false;
         let currentDistance = 0;
         let lastTimestamp = null;
-        let currentToolDiameter = null;
+        // null when no valid diameter is entered: no cutting, marker sphere, stock hint.
+        // Everything the carve loop needs is derived once here so the hot loop does no
+        // trigonometry. `flatRadius` is the radius of the tool's flat bottom, which
+        // unifies all four profiles: it is the full radius for a flat end mill, zero
+        // for a ball nose, radius - cornerRadius for a bull nose, the tip flat for a cone.
+        let currentTool = null;
         const DEFAULT_RAPID_FEED = 5000;
 
         // --- Stock (material removal) state ---
@@ -443,13 +475,14 @@
             updateLegend();
         });
 
-        document.getElementById('tool-diameter').addEventListener('input', (e) => {
-            const val = parseFloat(e.target.value);
-            currentToolDiameter = (!isNaN(val) && val > 0) ? val : null;
+        // Every tool field changes the shape of the cut, so they all run this.
+        function onToolChanged() {
+            currentTool = readToolInputs();
+            updateToolFieldVisibility();
             updateToolGeometry();
             updateStockHint();
 
-            // The cut depends on the tool size, so re-cut the stock from scratch.
+            // The cut depends on the tool, so re-cut the stock from scratch.
             if (stock) {
                 resetStockHeights();
                 requestCarve(currentDistance);
@@ -457,7 +490,12 @@
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(currentDistance);
             }
+        }
+
+        ['tool-diameter', 'tool-corner-radius', 'tool-wall-angle', 'tool-tip-diameter'].forEach(id => {
+            document.getElementById(id).addEventListener('input', onToolChanged);
         });
+        document.getElementById('tool-type').addEventListener('change', onToolChanged);
 
         // --- Stock controls ---
         stockEnabledEl.addEventListener('change', rebuildStock);
@@ -514,21 +552,100 @@
             updateToolPositionByDistance(currentDistance);
         });
 
+        // --- Tool Profile ---
+        function clamp(val, lo, hi) {
+            return val < lo ? lo : (val > hi ? hi : val);
+        }
+
+        function numberFrom(id, fallback) {
+            const val = parseFloat(document.getElementById(id).value);
+            return isNaN(val) ? fallback : val;
+        }
+
+        function readToolInputs() {
+            const diameter = numberFrom('tool-diameter', NaN);
+            if (isNaN(diameter) || diameter <= 0) return null;
+
+            const radius = diameter / 2;
+            const type = document.getElementById('tool-type').value;
+            const tool = {
+                type,
+                diameter,
+                radius,
+                r2: radius * radius,
+                isCone: type === 'chamfer',
+                cornerRadius: 0,
+                invTanWall: 1
+            };
+
+            if (type === 'chamfer') {
+                // Wall angle is measured from the tool axis, so it is the cone's half
+                // angle: 45 deg gives a 45 deg chamfer. Smaller means a sharper, taller cone.
+                const wall = clamp(numberFrom('tool-wall-angle', 45), 1, 89);
+                tool.invTanWall = 1 / Math.tan(wall * Math.PI / 180);
+                tool.flatRadius = clamp(numberFrom('tool-tip-diameter', 0) / 2, 0, radius * 0.999);
+            } else {
+                if (type === 'ball') tool.cornerRadius = radius;
+                else if (type === 'bull') tool.cornerRadius = clamp(numberFrom('tool-corner-radius', 0), 0, radius);
+                tool.flatRadius = radius - tool.cornerRadius;
+            }
+
+            tool.flatSq = tool.flatRadius * tool.flatRadius;
+            tool.cr2 = tool.cornerRadius * tool.cornerRadius;
+            return tool;
+        }
+
+        // Height of the tool's cutting surface above its tip, at radial distance d from
+        // the tool axis (d <= radius). Zero at d = 0 for every profile, which is what
+        // makes the G-code Z the tool tip.
+        function toolHeightAt(tool, d) {
+            if (d <= tool.flatRadius) return 0;
+            const k = d - tool.flatRadius;
+            if (tool.isCone) return k * tool.invTanWall;
+            return tool.cornerRadius - Math.sqrt(Math.max(tool.cr2 - k * k, 0));
+        }
+
+        function updateToolFieldVisibility() {
+            const type = document.getElementById('tool-type').value;
+            document.getElementById('row-corner-radius').style.display = type === 'bull' ? 'flex' : 'none';
+            document.getElementById('row-wall-angle').style.display = type === 'chamfer' ? 'flex' : 'none';
+            document.getElementById('row-tip-diameter').style.display = type === 'chamfer' ? 'flex' : 'none';
+        }
+
         // --- Tool Mesh Builder ---
         function updateToolGeometry() {
             toolMesh.geometry.dispose();
 
-            if (currentToolDiameter) {
-                // Square End Mill: Cylinder with diameter and height = 3 * diameter
-                const radius = currentToolDiameter / 2;
-                const height = currentToolDiameter * 3;
-                
-                const geom = new THREE.CylinderGeometry(radius, radius, height, 32);
-                
-                // Align cylinder so its cutting tip sits exactly at (0,0,0) and extends upward (+Z)
+            if (currentTool) {
+                // Lathe the same profile the simulation carves with, so the displayed
+                // tool is always the tool being simulated.
+                const tool = currentTool;
+                const pts = [new THREE.Vector2(0, 0)];
+
+                if (tool.flatRadius > 0) pts.push(new THREE.Vector2(tool.flatRadius, 0));
+
+                if (tool.isCone) {
+                    pts.push(new THREE.Vector2(tool.radius, toolHeightAt(tool, tool.radius)));
+                } else if (tool.cornerRadius > 0) {
+                    const STEPS = 16;
+                    for (let i = 1; i <= STEPS; i++) {
+                        const d = tool.flatRadius + (tool.radius - tool.flatRadius) * (i / STEPS);
+                        pts.push(new THREE.Vector2(d, toolHeightAt(tool, d)));
+                    }
+                }
+
+                // Shank, so the cutter always reads as a tool rather than a bare tip.
+                // The closing point back on the axis caps the top, which matters because
+                // the default view looks down at the tool from above.
+                const shankTop = toolHeightAt(tool, tool.radius) + tool.diameter * 2;
+                pts.push(new THREE.Vector2(tool.radius, shankTop));
+                pts.push(new THREE.Vector2(0, shankTop));
+
+                const geom = new THREE.LatheGeometry(pts, 32);
+
+                // Lathe builds around +Y with the tip at the origin; stand it up in +Z.
                 geom.rotateX(Math.PI / 2);
-                geom.translate(0, 0, height / 2);
-                
+
                 toolMesh.geometry = geom;
             } else {
                 // Default fallback: Sphere scaled to part size
@@ -544,7 +661,7 @@
 
         // --- Stock Simulation ---
         function updateStockHint() {
-            const show = stockEnabledEl.checked && !currentToolDiameter;
+            const show = stockEnabledEl.checked && !currentTool;
             document.getElementById('stock-hint').style.display = show ? 'block' : 'none';
         }
 
@@ -767,12 +884,19 @@
             document.getElementById('stock-removed').innerText = `${pct.toFixed(1)} %`;
         }
 
-        // Removes material under the swept disc of a flat end mill travelling from
-        // (x0,y0) to (x1,y1) with its tip at height z.
+        // Removes material under the swept tool travelling from (x0,y0) to (x1,y1) with
+        // its tip at height z. Each sample is cut to the height of the tool's surface at
+        // that sample's distance from the tool axis. That distance is the sample's closest
+        // approach to the swept axis: the tool is rotationally symmetric and its profile
+        // rises monotonically outward, so the closest approach is where the tool reaches
+        // lowest over the sweep. Exact for a constant-Z move; carveSweep slices the rest.
         function carveCapsule(x0, y0, x1, y1, z) {
-            const r = currentToolDiameter / 2;
-            const cz = Math.max(z, stock.bottom);
-            if (cz >= stock.top) return false;
+            const tool = currentTool;
+            const r = tool.radius;
+
+            // toolHeightAt(0) is 0 for every profile, so the tip is the tool's lowest
+            // point: nothing at all is removed once it sits above the stock.
+            if (z >= stock.top) return false;
 
             const gx0 = Math.max(0, Math.floor((Math.min(x0, x1) - r - stock.minX) / stock.cellX));
             const gx1 = Math.min(stock.nx, Math.ceil((Math.max(x0, x1) + r - stock.minX) / stock.cellX));
@@ -783,7 +907,9 @@
             const dx = x1 - x0;
             const dy = y1 - y0;
             const lenSq = dx * dx + dy * dy;
-            const r2 = r * r;
+            const r2 = tool.r2;
+            const flatSq = tool.flatSq;
+            const stockBottom = stock.bottom;
             const nxv = stock.nx + 1;
             const heights = stock.heights;
             let changed = false;
@@ -799,11 +925,16 @@
 
                     const ex = px - (x0 + t * dx);
                     const ey = py - (y0 + t * dy);
-                    if (ex * ex + ey * ey > r2) continue;
+                    const distSq = ex * ex + ey * ey;
+                    if (distSq > r2) continue;
+
+                    // A flat end mill has flatSq === r2, so it never reaches the sqrt.
+                    let target = distSq <= flatSq ? z : z + toolHeightAt(tool, Math.sqrt(distSq));
+                    if (target < stockBottom) target = stockBottom;
 
                     const hi = rowBase + gx;
-                    if (heights[hi] > cz) {
-                        heights[hi] = cz;
+                    if (heights[hi] > target) {
+                        heights[hi] = target;
                         changed = true;
                     }
                 }
@@ -840,7 +971,7 @@
         }
 
         function carveTo(dist) {
-            if (!stock || !currentToolDiameter) return;
+            if (!stock || !currentTool) return;
             if (dist < carvedDistance - 1e-9) resetStockHeights();
             if (dist <= carvedDistance) return;
 
@@ -1318,9 +1449,10 @@
             }
         }
 
-        // Initialize Legend
+        // Initialize Legend, and the tool state (which hides the fields the default
+        // flat end mill doesn't use).
         updateLegend();
-        updateStockHint();
+        onToolChanged();
     </script>
 </body>
 </html>
