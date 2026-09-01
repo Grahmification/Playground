@@ -241,6 +241,10 @@
                 <option value="tool">Tool</option>
                 <option value="op">Operation</option>
             </select>
+            <label class="check-row">
+                <input type="checkbox" id="show-toolpath" checked>
+                <span>Show toolpath lines</span>
+            </label>
         </div>
 
         <div id="legend-container"></div>
@@ -521,6 +525,13 @@
         document.getElementById('color-mode').addEventListener('change', () => {
             renderToolpath();
             updateLegend();
+        });
+
+        // Hiding the lines is purely a view toggle -- the segments stay parsed so the
+        // simulation and stock carving are unaffected.
+        const showToolpathEl = document.getElementById('show-toolpath');
+        showToolpathEl.addEventListener('change', () => {
+            toolpathGroup.visible = showToolpathEl.checked;
         });
 
         // Every tool field changes the shape of the cut, so they all run this. So does
