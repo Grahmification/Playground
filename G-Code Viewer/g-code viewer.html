@@ -630,6 +630,7 @@
                 <div id="readout" class="overlay-panel">
                     <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
                     <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
+                    <div class="readout-row"><span>Spindle</span> <span id="sim-spindle">Off</span></div>
                     <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
                 </div>
                 <div id="gcode-line" class="overlay-panel">
@@ -2341,6 +2342,16 @@
             const fileHasM6 = lines.some(raw => /(?:^|\s)M0?6(?:\s|$)/.test(cleanLine(raw)));
             let activeTool = null;      // committed T number
             let pendingTool = null;     // seen a T word, waiting for M6
+
+            // --- Spindle state ---
+            // Same question as M6, for the same reason: a posted program starts the spindle
+            // with M3/M4 and stops it with M5, but plenty of hand-written files just state
+            // an S and expect it to be running. Deciding up front which convention a file
+            // follows keeps the second kind from reading as "spindle off" from top to
+            // bottom. The trailing character class is what stops M30 matching M3.
+            const fileHasSpindleM = lines.some(raw => /(?:^|\s)M0?[345](?:\s|$)/.test(cleanLine(raw)));
+            let spindleSpeed = 0;
+            let spindleOn = !fileHasSpindleM;
             let currentOp = -1;
 
             // An operation starts at an N-word comment, at a tool change, or at the first
@@ -2430,6 +2441,8 @@
                     toolNum: activeTool,
                     opIndex: currentOp < 0 ? null : currentOp,
                     moveIndex: currentMove,
+                    // 0 means stopped, whether it was never started or an M5 stopped it.
+                    spindleRpm: spindleOn ? spindleSpeed : 0,
                     carve: false
                 });
                 totalPathLength += segDist;
@@ -2513,6 +2526,7 @@
                     toolNum: null,
                     opIndex: null,
                     moveIndex: currentMove,
+                    spindleRpm: 0,
                     carve: false
                 });
                 totalPathLength = startPoint.clearance;
@@ -2588,7 +2602,14 @@
                     else if (cmd === 'R') { rWord = val; hasR = true; }
                     else if (cmd === 'Q') qWord = Math.abs(val);
                     else if (cmd === 'T') lineTool = val;
-                    else if (cmd === 'M' && val === 6) lineM6 = true;
+                    else if (cmd === 'S') spindleSpeed = Math.abs(val);
+                    else if (cmd === 'M') {
+                        if (val === 6) lineM6 = true;
+                        // M3 clockwise, M4 counter-clockwise, M5 stop. Direction is not
+                        // reported, only whether the spindle is turning and how fast.
+                        else if (val === 3 || val === 4) spindleOn = true;
+                        else if (val === 5 || val === 2 || val === 30) spindleOn = false;
+                    }
                 });
 
                 // Resolved at end of line rather than inside the token loop, so the
@@ -2921,6 +2942,8 @@
 
             const activeFeed = seg.motion === 'G0' ? 'RAPID' : `${seg.feedrate} mm/min`;
             document.getElementById('sim-feed').innerText = activeFeed;
+            document.getElementById('sim-spindle').innerText =
+                seg.spindleRpm > 0 ? `${seg.spindleRpm} rpm` : 'Off';
             document.getElementById('sim-tool').innerText = segTool ? toolDescription(segTool) : '—';
             document.getElementById('sim-pos').innerText = `X${posX.toFixed(1)} Y${posY.toFixed(1)} Z${posZ.toFixed(1)}`;
         }
@@ -2938,6 +2961,7 @@
                 applyToolMeshTint(null);
                 showProgressPct(0);
                 showGCodeLine(null);
+                document.getElementById('sim-spindle').innerText = 'Off';
                 document.getElementById('sim-tool').innerText = '—';
                 toolMesh.visible = false;
                 refreshToolpathVisibility();
