@@ -870,11 +870,16 @@
         // three.js here is r128, which predates ColorManagement, so a hex in the texture
         // and the same hex in `material.color` match exactly -- do not add a
         // convertSRGBToLinear() call.
+        // alphaTest is what opens a hole where the tool cut clean through. A height map
+        // cannot describe a void -- a fully cut cell just sits at the bottom of the block,
+        // coplanar with the underside, leaving a paper-thin membrane closing what should be
+        // an opening. Those cells are written with alpha 0 and discarded outright.
         const stockMaterial = new THREE.MeshStandardMaterial({
             color: 0xffffff,
             roughness: 0.85,
             metalness: 0.05,
-            flatShading: true
+            flatShading: true,
+            alphaTest: 0.5
         });
 
         // Attaching or detaching a map flips a shader define, so the recompile is forced
@@ -892,6 +897,10 @@
         // Whether any rapid has removed material in the cut so far. Drives the legend
         // key, and forces colour uploads that Uniform mode would otherwise skip.
         let stockHasGouge = false;
+        // Whether anything has reached the bottom of the block. The per-cell alpha pass
+        // exists only to punch those holes, so until one appears it can be skipped --
+        // which is what keeps Uniform mode as cheap as it was.
+        let stockAnyThroughCut = false;
         let carvedDistance = 0;    // how far along the path the stock has been carved
         let carveSegIndex = 0;     // resume point into parsedSegments for carving
         let pendingCarve = null;   // coalesces carve requests to one per animation frame
@@ -1740,20 +1749,27 @@
             // the top edge where the wall meets the surface above it.
             const uvs = new Float32Array(total * 2);
 
+            // One row past the cells, holding a texel that is always opaque. The flat
+            // bottom points at it so that alpha-testing a cut-through cell can never take
+            // the bottom of the block with it -- see the alpha pass in
+            // refreshStockGeometry.
+            const texRows = stock.ny + 1;
+            const BOTTOM_ROW_V = (stock.ny + 0.5) / texRows;
+
             // Height-map vertices: cell-corner aligned.
             function setSurfaceUV(vertexIndex, gx, gy) {
                 uvs[vertexIndex * 2] = gx / stock.nx;
-                uvs[vertexIndex * 2 + 1] = gy / stock.ny;
+                uvs[vertexIndex * 2 + 1] = gy / texRows;
             }
 
-            // Skirt and bottom vertices have no cell of their own, so they take the centre
-            // of the cell their sample borders -- clamped, since the last sample row and
-            // column lie on the far edge of the last cell.
+            // Skirt vertices have no cell of their own, so they take the centre of the cell
+            // their sample borders -- clamped, since the last sample row and column lie on
+            // the far edge of the last cell.
             function setSampleUV(vertexIndex, hi) {
                 const gx = hi % nxv;
                 const gy = (hi - gx) / nxv;
                 uvs[vertexIndex * 2] = (Math.min(gx, stock.nx - 1) + 0.5) / stock.nx;
-                uvs[vertexIndex * 2 + 1] = (Math.min(gy, stock.ny - 1) + 0.5) / stock.ny;
+                uvs[vertexIndex * 2 + 1] = (Math.min(gy, stock.ny - 1) + 0.5) / texRows;
             }
 
             // Preallocated rather than a growing JS array: the count is known exactly --
@@ -1842,15 +1858,16 @@
             const maxX = stock.minX + stock.nx * stock.cellX;
             const maxY = stock.minY + stock.ny * stock.cellY;
             const corners = [[stock.minX, stock.minY], [maxX, stock.minY], [maxX, maxY], [stock.minX, maxY]];
-            // The height samples sitting over each corner, in the same order, so the
-            // bottom face meets the wall bottoms in the same colour.
-            const cornerSamples = [0, stock.nx, stock.ny * nxv + stock.nx, stock.ny * nxv];
             const base = v;
-            corners.forEach((c, i) => {
+            corners.forEach(c => {
                 positions[v * 3] = c[0];
                 positions[v * 3 + 1] = c[1];
                 positions[v * 3 + 2] = stock.bottom;
-                setSampleUV(v, cornerSamples[i]);
+                // The reserved opaque row, not a cell: the bottom is one quad spanning the
+                // whole footprint, so a cell it happened to sample being cut away would
+                // erase the entire underside of the block.
+                uvs[v * 2] = 0.5;
+                uvs[v * 2 + 1] = BOTTOM_ROW_V;
                 v++;
             });
             tri(base, base + 2, base + 1);
@@ -1868,21 +1885,22 @@
 
             geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-            // One texel per cell. RGBA rather than RGB so each row is 4-byte aligned,
-            // which is what WebGL's default unpack alignment expects. Alpha is written
-            // once here and never touched again.
-            const cellCount = stock.nx * stock.ny;
-            const colorData = new Uint8Array(cellCount * 4);
+            // One texel per cell, plus the reserved opaque row on the end. RGBA rather than
+            // RGB so each row is 4-byte aligned, which is what WebGL's default unpack
+            // alignment expects. Alpha starts opaque everywhere and is only ever cleared
+            // for a cell that gets cut clean through.
+            const texelCount = stock.nx * texRows;
+            const colorData = new Uint8Array(texelCount * 4);
             const baseR = (STOCK_BASE_COLOR >> 16) & 0xff;
             const baseG = (STOCK_BASE_COLOR >> 8) & 0xff;
             const baseB = STOCK_BASE_COLOR & 0xff;
-            for (let i = 0; i < cellCount; i++) {
+            for (let i = 0; i < texelCount; i++) {
                 colorData[i * 4] = baseR;
                 colorData[i * 4 + 1] = baseG;
                 colorData[i * 4 + 2] = baseB;
                 colorData[i * 4 + 3] = 255;
             }
-            const colorTexture = new THREE.DataTexture(colorData, stock.nx, stock.ny, THREE.RGBAFormat);
+            const colorTexture = new THREE.DataTexture(colorData, stock.nx, texRows, THREE.RGBAFormat);
             // The whole point: no filtering between texels, so a cut edge is an edge.
             colorTexture.magFilter = THREE.NearestFilter;
             colorTexture.minFilter = THREE.NearestFilter;
@@ -1922,6 +1940,13 @@
                 stockColorDirty = true;
                 updateToolLegend();
             }
+            // Holes have to close again. The flag is cleared here, so the alpha pass would
+            // not run on its own -- force one last full pass to put the alpha back to
+            // opaque before it goes quiet.
+            if (stockAnyThroughCut) {
+                stockAnyThroughCut = false;
+                stockColorDirty = true;
+            }
             if (stockColorModeEl.value !== 'off') stockColorDirty = true;
         }
 
@@ -1947,10 +1972,21 @@
                 attr.needsUpdate = true;
             }
 
-            if (doColors) {
+            // The alpha half of this pass follows the height map, not the cut ids, so it
+            // has to run whenever geometry moves -- but only once something has actually
+            // reached the underside. Until then there is no hole to punch and Uniform mode
+            // costs exactly what it always did.
+            const doAlpha = doPositions && stockAnyThroughCut;
+
+            if (doColors || doAlpha) {
                 const col = stock.colorData;
                 const cutIds = stock.cutIds;
                 const mode = stockColorModeEl.value;
+
+                // Cut clean through: every corner of the cell is on the floor of the block,
+                // so no material spans it. Compared against a hair above the bottom because
+                // the heights are Float32 and stock.bottom is not.
+                const throughLevel = stock.bottom + Math.max((stock.top - stock.bottom) * 1e-5, 1e-9);
 
                 // Cache one RGB triple per distinct id so the palette lookup runs a
                 // handful of times rather than once per vertex.
@@ -1974,7 +2010,6 @@
                 //
                 // One write per cell covers the whole mesh: the walls and the bottom read
                 // these same texels through their UVs, so there is no separate skirt pass.
-                // Alpha was set at build time and stays 255.
                 const nxv = stock.nx + 1;
                 for (let cy = 0; cy < stock.ny; cy++) {
                     for (let cx = 0; cx < stock.nx; cx++) {
@@ -1984,21 +2019,32 @@
                         const n3 = n2 + 1;
 
                         // Unrolled: this runs once per cell, which is over a million
-                        // iterations at the top resolutions.
+                        // iterations at the top resolutions. `worstH` is the highest corner,
+                        // and so the one that decides whether anything is left standing.
                         let bestH = heights[corner];
                         let bestId = cutIds[corner];
+                        let worstH = bestH;
                         let h = heights[n1], id = cutIds[n1];
+                        if (h > worstH) worstH = h;
                         if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
                         h = heights[n2]; id = cutIds[n2];
+                        if (h > worstH) worstH = h;
                         if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
                         h = heights[n3]; id = cutIds[n3];
+                        if (h > worstH) worstH = h;
                         if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
 
-                        const c = rgb(bestId);
                         const ci = (cy * stock.nx + cx) * 4;
-                        col[ci] = c[0];
-                        col[ci + 1] = c[1];
-                        col[ci + 2] = c[2];
+                        if (doColors) {
+                            const c = rgb(bestId);
+                            col[ci] = c[0];
+                            col[ci + 1] = c[1];
+                            col[ci + 2] = c[2];
+                        }
+                        // Discarded by the material's alphaTest, which is the only way a
+                        // height map can show a hole rather than a membrane lying on the
+                        // floor of the block.
+                        col[ci + 3] = worstH <= throughLevel ? 0 : 255;
                     }
                 }
                 stock.colorTexture.needsUpdate = true;
@@ -2061,7 +2107,12 @@
 
                     // A flat end mill has flatSq === r2, so it never reaches the sqrt.
                     let target = distSq <= flatSq ? z : z + toolHeightAt(tool, Math.sqrt(distSq));
-                    if (target < stockBottom) target = stockBottom;
+                    if (target < stockBottom) {
+                        target = stockBottom;
+                        // Reaching the underside is what the alpha pass looks for; noting
+                        // it here saves that pass from running at all until it can matter.
+                        stockAnyThroughCut = true;
+                    }
 
                     const hi = rowBase + gx;
                     if (heights[hi] > target) {
