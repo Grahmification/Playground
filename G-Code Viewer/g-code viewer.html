@@ -554,14 +554,18 @@
             <input type="file" id="gcode-file" accept=".gcode,.nc,.cnc,.tap,.txt">
         </div>
 
-        <div class="control-group">
-            <label for="color-mode">Color Mode</label>
-            <select id="color-mode">
-                <option value="type">Motion Type (G0/G1/G2/G3)</option>
-                <option value="feedrate">Feed Rate Heatmap</option>
-                <option value="tool">Tool</option>
-                <option value="op">Operation</option>
-            </select>
+        <!-- Toolpath Lines -->
+        <div class="panel">
+            <div class="panel-title">Toolpath Lines</div>
+            <div class="control-group">
+                <label for="color-mode">Color Mode</label>
+                <select id="color-mode">
+                    <option value="type">Motion Type (G0/G1/G2/G3)</option>
+                    <option value="feedrate">Feed Rate Heatmap</option>
+                    <option value="tool">Tool</option>
+                    <option value="op">Operation</option>
+                </select>
+            </div>
             <label class="check-row">
                 <input type="checkbox" id="show-toolpath" checked>
                 <span>Show toolpath lines</span>
