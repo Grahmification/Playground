@@ -537,6 +537,14 @@
         gridHelper.rotation.x = Math.PI / 2; // Orient grid along X/Y plane for CNC
         scene.add(gridHelper);
 
+        // Marks the program origin. Built at a known length so updateOriginMarker() can
+        // size it by scale rather than rebuilding geometry; it stays at 0,0,0 whatever the
+        // grid does. Depth-tested like any other object, so it is genuinely "inside" the
+        // stock rather than floating over it.
+        const AXES_BASE_LENGTH = 10;
+        const originMarker = new THREE.AxesHelper(AXES_BASE_LENGTH);
+        scene.add(originMarker);
+
         let toolpathGroup = new THREE.Group();
         scene.add(toolpathGroup);
 
@@ -838,6 +846,7 @@
                 updateLegend();
                 updateToolLegend();
                 updateProgressGradient();
+                updateOriginMarker();
                 fitCameraToBounds();
                 resetSimulation();
                 applySuggestedStockExtents();
@@ -1316,7 +1325,12 @@
             disposeStock();
             updateStockHint();
 
-            if (!stockEnabledEl.checked || parsedSegments.length === 0) return;
+            // Both exits settle the grid: disposeStock() above has already cleared `stock`,
+            // so turning the stock off drops the floor back to the toolpath's own depth.
+            if (!stockEnabledEl.checked || parsedSegments.length === 0) {
+                updateGridPlacement();
+                return;
+            }
 
             let top = parseFloat(stockTopEl.value);
             let bottom = parseFloat(stockBottomEl.value);
@@ -1358,6 +1372,7 @@
             buildStockGeometry();
             resetStockHeights();
             requestCarve(currentDistance);
+            updateGridPlacement();
         }
 
         // Builds a fixed-topology mesh: a height-map top surface, four side walls that
@@ -2481,6 +2496,33 @@
                     </div>
                 `;
             }
+        }
+
+        // Most programs cut into negative Z, so a grid left at Z0 sits between the camera
+        // and the part and hides the very thing being watched. Drop it to the floor of
+        // whatever is on screen: the underside of the stock when there is stock, otherwise
+        // the deepest point the program reaches.
+        function updateGridPlacement() {
+            let floorZ = 0;
+            if (stock) {
+                floorZ = stock.bottom;
+            } else if (parsedSegments.length > 0 && isFinite(bounds.minZ)) {
+                floorZ = bounds.minZ;
+            }
+            gridHelper.position.z = floorZ;
+        }
+
+        // Scaled to the job so the origin stays findable on a 500mm part without becoming
+        // three long rods through a 20mm one.
+        function updateOriginMarker() {
+            const maxDim = Math.max(
+                bounds.maxX - bounds.minX,
+                bounds.maxY - bounds.minY,
+                bounds.maxZ - bounds.minZ);
+            const length = (parsedSegments.length > 0 && isFinite(maxDim) && maxDim > 0)
+                ? clamp(maxDim * 0.08, 2, 25)
+                : AXES_BASE_LENGTH;
+            originMarker.scale.setScalar(length / AXES_BASE_LENGTH);
         }
 
         function fitCameraToBounds() {
