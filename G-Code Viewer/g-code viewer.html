@@ -474,9 +474,10 @@
             <div class="control-group">
                 <label for="stock-res">Stock Resolution</label>
                 <select id="stock-res">
-                    <option value="100">Low (fastest)</option>
-                    <option value="220" selected>Medium</option>
-                    <option value="360">High (slowest)</option>
+                    <option value="220">Low (fastest)</option>
+                    <option value="360" selected>High</option>
+                    <option value="500">Very High</option>
+                    <option value="1200">Ultra (slowest)</option>
                 </select>
             </div>
             <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
@@ -1349,11 +1350,14 @@
             const sizeX = Math.max((fp.maxX - fp.minX) + 2 * margin, 1e-3);
             const sizeY = Math.max((fp.maxY - fp.minY) + 2 * margin, 1e-3);
 
-            // Square-ish cells sized so the longest side gets the requested sample count
-            const cells = parseInt(stockResEl.value, 10) || 220;
+            // Square-ish cells sized so the longest side gets the requested sample count.
+            // The cap is a backstop against a malformed value in the select, not a working
+            // limit: `target` is set from the longest side, so neither axis can exceed
+            // `cells` on its own. It has to stay at or above the largest option.
+            const cells = parseInt(stockResEl.value, 10) || 360;
             const target = Math.max(sizeX, sizeY) / cells;
-            const nx = Math.max(1, Math.min(600, Math.round(sizeX / target)));
-            const ny = Math.max(1, Math.min(600, Math.round(sizeY / target)));
+            const nx = Math.max(1, Math.min(1600, Math.round(sizeX / target)));
+            const ny = Math.max(1, Math.min(1600, Math.round(sizeY / target)));
 
             stock = {
                 nx, ny, minX, minY, margin,
@@ -1386,7 +1390,18 @@
             const total = topCount + skirtCount + 4;
 
             const positions = new Float32Array(total * 3);
-            const indices = [];
+
+            // Preallocated rather than a growing JS array: the count is known exactly --
+            // two triangles per height-map cell, two per wall quad across four walls, and
+            // two for the bottom -- and at Ultra that array would otherwise be ~8.6M boxed
+            // numbers (tens of MB) held only to be copied into a typed array anyway.
+            const indices = new Uint32Array(6 * stock.nx * stock.ny + 12 * (stock.nx + stock.ny) + 6);
+            let ii = 0;
+            function tri(a, b, c) {
+                indices[ii++] = a;
+                indices[ii++] = b;
+                indices[ii++] = c;
+            }
 
             for (let gy = 0; gy < nyv; gy++) {
                 for (let gx = 0; gx < nxv; gx++) {
@@ -1403,7 +1418,8 @@
                     const b = a + 1;
                     const c = a + nxv + 1;
                     const d = a + nxv;
-                    indices.push(a, b, c, a, c, d);
+                    tri(a, b, c);
+                    tri(a, c, d);
                 }
             }
 
@@ -1433,8 +1449,8 @@
                 }
                 for (let k = 0; k < heightIndices.length - 1; k++) {
                     const t0 = startV + k * 2, b0 = t0 + 1, t1 = t0 + 2, b1 = t0 + 3;
-                    if (forward) indices.push(t0, b0, b1, t0, b1, t1);
-                    else indices.push(t0, b1, b0, t0, t1, b1);
+                    if (forward) { tri(t0, b0, b1); tri(t0, b1, t1); }
+                    else { tri(t0, b1, b0); tri(t0, t1, b1); }
                 }
             }
 
@@ -1463,7 +1479,8 @@
                 positions[v * 3 + 2] = stock.bottom;
                 v++;
             });
-            indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+            tri(base, base + 2, base + 1);
+            tri(base, base + 3, base + 2);
 
             const geometry = new THREE.BufferGeometry();
             const posAttr = new THREE.BufferAttribute(positions, 3);
@@ -1476,7 +1493,7 @@
             geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
 
             // Normalized bytes rather than floats: a quarter the upload, and `total` can
-            // reach ~366k vertices at High resolution. Every vertex starts at the uncut
+            // reach ~1.4M vertices at Ultra resolution. Every vertex starts at the uncut
             // stock colour, so an untouched stock renders exactly as it did before
             // vertex colouring existed.
             const colors = new Uint8Array(total * 3);
@@ -1492,7 +1509,7 @@
             colorAttr.setUsage(THREE.DynamicDrawUsage);
             geometry.setAttribute('color', colorAttr);
 
-            geometry.setIndex(indices);
+            geometry.setIndex(new THREE.BufferAttribute(indices, 1));
             geometry.computeBoundingSphere();
 
             stock.geometry = geometry;
