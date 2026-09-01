@@ -838,12 +838,18 @@
             </div>
             <!-- Simulation Controls -->
             <div id="sim-controls">
+                <button id="btn-reset" class="icon-btn" type="button" title="Reset to start" aria-label="Reset to start">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h2.2v11H3zm11 0v11L6 8z"/></svg>
+                </button>
+                <button id="btn-rewind" class="icon-btn" type="button" title="Back 1 second" aria-label="Back 1 second">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M14.5 2.5v11L8 8zM7.5 2.5v11L1 8z"/></svg>
+                </button>
                 <button id="btn-play" class="icon-btn" type="button" title="Play" aria-label="Play">
                     <svg class="icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>
                     <svg class="icon-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h3.2v11H4zm4.8 0H12v11H8.8z"/></svg>
                 </button>
-                <button id="btn-reset" class="icon-btn" type="button" title="Reset to start" aria-label="Reset to start">
-                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h2.2v11H3zm11 0v11L6 8z"/></svg>
+                <button id="btn-forward" class="icon-btn" type="button" title="Forward 1 second" aria-label="Forward 1 second">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2.5v11L8 8zM8.5 2.5v11L15 8z"/></svg>
                 </button>
                 <select id="sim-speed" title="Simulation speed" aria-label="Simulation speed">
                     <option value="0.01">0.01x</option>
@@ -1628,6 +1634,8 @@
 
         const btnPlay = document.getElementById('btn-play');
         const btnReset = document.getElementById('btn-reset');
+        const btnRewind = document.getElementById('btn-rewind');
+        const btnForward = document.getElementById('btn-forward');
         const progressSlider = document.getElementById('sim-progress');
         const progressValue = document.getElementById('sim-progress-value');
 
@@ -1652,6 +1660,20 @@
         });
 
         btnReset.addEventListener('click', resetSimulation);
+
+        // Program time, not wall-clock: a skip is the same second of machining whatever
+        // the speed multiplier is set to. Playback is left as it was found -- skipping
+        // while running keeps running, and while paused stays paused.
+        const SEEK_SECONDS = 1;
+
+        function seekBySeconds(seconds) {
+            if (parsedSegments.length === 0) return;
+            currentDistance = distanceAfterSeconds(currentDistance, seconds);
+            updateToolPositionByDistance(currentDistance);
+        }
+
+        btnRewind.addEventListener('click', () => seekBySeconds(-SEEK_SECONDS));
+        btnForward.addEventListener('click', () => seekBySeconds(SEEK_SECONDS));
 
         progressSlider.addEventListener('input', (e) => {
             const pct = parseFloat(e.target.value);
@@ -3354,9 +3376,7 @@
             updateToolPositionByDistance(currentDistance);
         }
 
-        function getCurrentSegment(dist) {
-            if (parsedSegments.length === 0) return null;
-
+        function getCurrentSegmentIndex(dist) {
             // Segments are ordered by startDist, so binary search instead of scanning.
             let lo = 0;
             let hi = parsedSegments.length - 1;
@@ -3365,7 +3385,48 @@
                 if (parsedSegments[mid].startDist <= dist) lo = mid;
                 else hi = mid - 1;
             }
-            return parsedSegments[lo];
+            return lo;
+        }
+
+        function getCurrentSegment(dist) {
+            if (parsedSegments.length === 0) return null;
+            return parsedSegments[getCurrentSegmentIndex(dist)];
+        }
+
+        // Where the tool stands `seconds` of program time from `dist` (negative walks
+        // backwards). Time is not proportional to distance -- a rapid covers far more of
+        // the path per second than a finishing pass does -- so the seconds are spent
+        // segment by segment at each one's own feed, the same clock the timeline and
+        // playback use.
+        function distanceAfterSeconds(dist, seconds) {
+            if (parsedSegments.length === 0 || totalPathLength <= 0) return 0;
+
+            let at = Math.min(Math.max(dist, 0), totalPathLength);
+            let remaining = Math.abs(seconds);
+            const step = seconds < 0 ? -1 : 1;
+            let i = getCurrentSegmentIndex(at);
+
+            while (remaining > 0 && i >= 0 && i < parsedSegments.length) {
+                const seg = parsedSegments[i];
+                const mmPerSec = effectiveFeedFor(seg) / 60;
+                // What is left of this segment in the direction of travel. Zero at a
+                // boundary, which costs no time and falls through to the next segment --
+                // the index always moves, so this cannot spin.
+                const available = step > 0
+                    ? (seg.startDist + seg.length) - at
+                    : at - seg.startDist;
+
+                if (remaining * mmPerSec < available) {
+                    at += step * remaining * mmPerSec;
+                    break;
+                }
+
+                remaining -= available / mmPerSec;
+                at += step * available;
+                i += step;
+            }
+
+            return Math.min(Math.max(at, 0), totalPathLength);
         }
 
         // The overlay showing the line of the program being executed, and on request the
