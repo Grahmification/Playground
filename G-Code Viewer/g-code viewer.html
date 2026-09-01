@@ -620,11 +620,27 @@
 
         // Categorical palette, cycled. Chosen to stay legible against both the dark
         // background and the tan of uncut stock.
+        //
+        // Deliberately holds nothing red or red-adjacent -- the salmon, pink and rose that
+        // used to be here are gone. Red is reserved for a rapid that reaches the material
+        // (see RAPID_GOUGE_COLOR), and that warning is only worth anything if no ordinary
+        // operation or tool can wear a colour close to it.
         const PALETTE = [
-            0x4e9de6, 0xe6704e, 0x5fbf6a, 0xc86fd0,
-            0xe0b93c, 0x4ec9b0, 0xe05f8a, 0x8f7ae0,
-            0x9ec44e, 0xd99a4e, 0x5ac8e0, 0xb0566a
+            0x4e9de6, 0x5fbf6a, 0xe0b93c, 0xc86fd0,
+            0x4ec9b0, 0xd99a4e, 0x8f7ae0, 0x9ec44e,
+            0x5f7ae0, 0x5ac8e0
         ];
+
+        // A rapid is supposed to travel through air. One that removes material is a
+        // programming mistake, not a machining choice, so it is called out in red in every
+        // stock colour mode -- Uniform included -- rather than being something a mode can
+        // hide. This is the same red the toolpath draws G0 lines in.
+        //
+        // Real cut ids are `opIndex + 1`, so the top of the Uint16 range is free to act as
+        // a sentinel; it also sorts above every real id, which is what makes a gouge win
+        // the tie-break in the per-cell colour pass.
+        const RAPID_CUT_ID = 0xffff;
+        const RAPID_GOUGE_COLOR = 0xff2a2a;
 
         // --- Stock (material removal) state ---
         // The stock is modelled as a Z-height map: one height sample per grid vertex.
@@ -666,6 +682,9 @@
         let stockMesh = null;
         let stockGeomDirty = false;
         let stockColorDirty = false;
+        // Whether any rapid has removed material in the cut so far. Drives the legend
+        // key, and forces colour uploads that Uniform mode would otherwise skip.
+        let stockHasGouge = false;
         let carvedDistance = 0;    // how far along the path the stock has been carved
         let carveSegIndex = 0;     // resume point into parsedSegments for carving
         let pendingCarve = null;   // coalesces carve requests to one per animation frame
@@ -1265,6 +1284,15 @@
             return PALETTE[(id - 1) % PALETTE.length];
         }
 
+        // What the stock paints a cut id, which is not quite the toolpath's question: it
+        // has a Uniform mode, and it has gouges. The gouge test comes first precisely so
+        // that Uniform cannot swallow it.
+        function stockColorForCutId(id, mode) {
+            if (id === RAPID_CUT_ID) return RAPID_GOUGE_COLOR;
+            if (mode === 'off') return STOCK_BASE_COLOR;
+            return colorForCutId(id, mode);
+        }
+
         // --- Stock Simulation ---
         function updateStockHint() {
             // In file mode the sidebar diameter is irrelevant, so nagging for one is a lie.
@@ -1331,6 +1359,12 @@
                 stock.colorTexture.dispose();
             }
             stock = null;
+            // Nothing is cut any more, so nothing is gouged. Matters for the path where
+            // the stock is switched off entirely and resetStockHeights never runs.
+            if (stockHasGouge) {
+                stockHasGouge = false;
+                updateToolLegend();
+            }
             document.getElementById('stock-removed').innerText = '0.0 %';
         }
 
@@ -1609,9 +1643,15 @@
             carvedDistance = 0;
             carveSegIndex = 0;
             stockGeomDirty = true;
-            // In Uniform mode the colour buffer is already all base colour and nothing
+            // In Uniform mode the colour texture is already all base colour and nothing
             // has written over it, so a repaint would be pure cost. Backward scrubbing
-            // lands here once per frame.
+            // lands here once per frame. A gouge is the exception: it painted red even in
+            // Uniform mode, and scrubbing back before it has to take that red away again.
+            if (stockHasGouge) {
+                stockHasGouge = false;
+                stockColorDirty = true;
+                updateToolLegend();
+            }
             if (stockColorModeEl.value !== 'off') stockColorDirty = true;
         }
 
@@ -1648,7 +1688,7 @@
                 function rgb(id) {
                     let c = cache.get(id);
                     if (c === undefined) {
-                        const hex = mode === 'off' ? STOCK_BASE_COLOR : colorForCutId(id, mode);
+                        const hex = stockColorForCutId(id, mode);
                         c = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
                         cache.set(id, c);
                     }
@@ -1801,6 +1841,7 @@
             if (dist <= carvedDistance) return;
 
             let changed = false;
+            let gouged = false;
             for (let i = carveSegIndex; i < parsedSegments.length; i++) {
                 const seg = parsedSegments[i];
                 if (seg.startDist >= dist) break;
@@ -1816,12 +1857,20 @@
                     const dxs = seg.end[0] - seg.start[0];
                     const dys = seg.end[1] - seg.start[1];
                     const dzs = seg.end[2] - seg.start[2];
-                    const cutId = seg.opIndex != null ? seg.opIndex + 1 : 1;
+                    // A rapid that gets here is already past the preamble guard -- `carve`
+                    // only goes true once its tool block has started cutting -- so it is
+                    // travelling through material it has no business being in.
+                    const isRapid = seg.motion === 'G0';
+                    const cutId = isRapid ? RAPID_CUT_ID
+                        : (seg.opIndex != null ? seg.opIndex + 1 : 1);
                     if (carveSweep(
                         tool, cutId,
                         seg.start[0] + dxs * t0, seg.start[1] + dys * t0, seg.start[2] + dzs * t0,
                         seg.start[0] + dxs * t1, seg.start[1] + dys * t1, seg.start[2] + dzs * t1
-                    )) changed = true;
+                    )) {
+                        changed = true;
+                        if (isRapid) gouged = true;
+                    }
                 }
 
                 if (segEnd <= dist) carveSegIndex = i + 1;
@@ -1829,12 +1878,21 @@
             }
 
             carvedDistance = dist;
+
+            // The key for red only appears once there is red to explain.
+            if (gouged && !stockHasGouge) {
+                stockHasGouge = true;
+                updateToolLegend();
+            }
+
             if (changed) {
                 stockGeomDirty = true;
-                // Only worth re-uploading the colour buffer if it is actually being
-                // looked at. In Uniform mode every vertex already holds the base colour,
-                // so playback costs exactly what it did before colouring existed.
-                if (stockColorModeEl.value !== 'off') stockColorDirty = true;
+                // Only worth re-uploading the colour texture if it is actually being
+                // looked at. In Uniform mode every cell already holds the base colour, so
+                // playback costs exactly what it did before colouring existed -- unless a
+                // gouge has painted something red, which Uniform mode still has to show,
+                // and which later cuts can paint back over.
+                if (stockColorModeEl.value !== 'off' || stockHasGouge) stockColorDirty = true;
             }
         }
 
@@ -2567,7 +2625,19 @@
         function updateToolLegend() {
             const el = document.getElementById('tool-legend');
             const mode = stockColorModeEl.value;
-            el.innerHTML = mode === 'off' ? '' : renderPaletteLegend(mode);
+            const palette = mode === 'off' ? '' : renderPaletteLegend(mode);
+
+            // Its own block rather than a row inside the palette legend: red is not a
+            // palette slot, it appears in Uniform mode where there is no palette legend at
+            // all, and it should only be on screen while there is actually red to explain.
+            const gouge = stockHasGouge ? `<div class="legend">
+                        <div class="legend-item">
+                            <div class="color-box" style="background-color: ${cssHex(RAPID_GOUGE_COLOR)};"></div>
+                            <span>Cut by a rapid (G0)</span>
+                        </div>
+                    </div>` : '';
+
+            el.innerHTML = palette + gouge;
         }
 
         function updateLegend() {
