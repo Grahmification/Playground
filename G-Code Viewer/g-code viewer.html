@@ -874,6 +874,58 @@
         }
 
         // --- G-Code Parser ---
+        function cleanLine(line) {
+            return line.replace(/\(.*?\)/g, '').replace(/;.*/, '').trim().toUpperCase();
+        }
+
+        // G-code never states where the tool sits before the first move. Assuming the
+        // machine origin drags it across the job from (0,0,0), so instead find the first
+        // point the program commands and start directly above it.
+        function findStartPoint(lines) {
+            const first = { x: null, y: null, z: null };
+            const range = { x: [Infinity, -Infinity], y: [Infinity, -Infinity], z: [Infinity, -Infinity] };
+            let relative = false;
+
+            lines.forEach(raw => {
+                const line = cleanLine(raw);
+                if (!line) return;
+
+                line.split(/\s+/).forEach(token => {
+                    const cmd = token[0];
+                    const val = parseFloat(token.substring(1));
+                    if (isNaN(val)) return;
+
+                    if (cmd === 'G') {
+                        // Note G91.1 (arc centre mode) must not be read as G91
+                        if (val === 90) relative = false;
+                        else if (val === 91) relative = true;
+                        return;
+                    }
+                    if (relative) return;
+
+                    const axis = (cmd === 'X' || cmd === 'Y' || cmd === 'Z') ? cmd.toLowerCase() : null;
+                    if (!axis) return;
+
+                    if (first[axis] === null) first[axis] = val;
+                    range[axis][0] = Math.min(range[axis][0], val);
+                    range[axis][1] = Math.max(range[axis][1], val);
+                });
+            });
+
+            let span = 0;
+            ['x', 'y', 'z'].forEach(axis => {
+                if (isFinite(range[axis][0])) span = Math.max(span, range[axis][1] - range[axis][0]);
+            });
+
+            return {
+                x: first.x === null ? 0 : first.x,
+                y: first.y === null ? 0 : first.y,
+                z: first.z === null ? 0 : first.z,
+                // "Slightly above", scaled to the job so it reads the same at any size
+                clearance: span > 0 ? span * 0.05 : 1
+            };
+        }
+
         function parseGCode(text) {
             parsedSegments = [];
             minFeed = Infinity;
@@ -883,7 +935,11 @@
             const lines = text.split('\n');
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
 
-            let currentPos = { x: 0, y: 0, z: 0 };
+            // The modal position starts *at* the first point, not above it: a program
+            // that never commands Z must still run at its own Z, not at the raised one.
+            // The approach height only exists as the start of the prepended descent.
+            const startPoint = findStartPoint(lines);
+            let currentPos = { x: startPoint.x, y: startPoint.y, z: startPoint.z };
             let relativeMode = false;
             let currentMotion = 'G0';
             let currentFeed = 0;
@@ -903,8 +959,29 @@
                 bounds.maxZ = Math.max(bounds.maxZ, z);
             }
 
-            lines.forEach(line => {
-                line = line.replace(/\(.*?\)/g, '').replace(/;.*/, '').trim().toUpperCase();
+            // Prepend the straight-down approach to the first point.
+            if (startPoint.clearance > 0) {
+                const above = [startPoint.x, startPoint.y, startPoint.z + startPoint.clearance];
+                const firstPoint = [startPoint.x, startPoint.y, startPoint.z];
+
+                parsedSegments.push({
+                    start: above,
+                    end: firstPoint,
+                    motion: 'G0',
+                    feedrate: 0,
+                    length: startPoint.clearance,
+                    startDist: 0
+                });
+                totalPathLength = startPoint.clearance;
+
+                // The raised point is ours, not the file's, so it stays out of the
+                // reported dimensions. The first point itself is picked up by the
+                // main loop when it processes the move that commands it.
+                updateBounds(firstPoint[0], firstPoint[1], firstPoint[2]);
+            }
+
+            lines.forEach(raw => {
+                const line = cleanLine(raw);
                 if (!line) return;
 
                 const tokens = line.split(/\s+/);
@@ -1022,8 +1099,8 @@
 
             updateToolGeometry();
 
-            // The machine's true start position is unknown, so the rapids leading up to
-            // the first cutting move would otherwise gouge the stock from the origin.
+            // Safety net for the approach: the Z the program is at before its first Z
+            // command is still guesswork, so don't let preamble rapids gouge the stock.
             firstCutSegIndex = parsedSegments.findIndex(seg => seg.motion !== 'G0');
             if (firstCutSegIndex < 0) firstCutSegIndex = parsedSegments.length;
 
