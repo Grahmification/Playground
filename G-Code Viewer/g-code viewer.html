@@ -951,17 +951,36 @@
         function buildOpSpans() {
             opSpans = [];
             parsedSegments.forEach(seg => {
+                // Band width is path length, which is not time -- a slow finishing pass and
+                // a rapid-heavy stretch can look alike and take wildly different amounts of
+                // it. So each span carries its own clock, summed at the same feeds playback
+                // will run the segments at.
+                const seconds = (seg.length / effectiveFeedFor(seg)) * 60;
                 const last = opSpans[opSpans.length - 1];
                 if (last && last.opIndex === seg.opIndex) {
                     last.end = seg.startDist + seg.length;
+                    last.seconds += seconds;
                 } else {
                     opSpans.push({
                         opIndex: seg.opIndex,
                         start: seg.startDist,
-                        end: seg.startDist + seg.length
+                        end: seg.startDist + seg.length,
+                        seconds: seconds
                     });
                 }
             });
+        }
+
+        // Coarse by design: the largest two units and no more. Floored rather than rounded
+        // so a very short span reads "0s" instead of rounding up into a lie.
+        function formatDuration(seconds) {
+            const total = Math.max(Math.floor(seconds), 0);
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            if (h > 0) return `${h}h ${m}m`;
+            if (m > 0) return `${m}m ${s}s`;
+            return `${s}s`;
         }
 
         function cssHex(hex) {
@@ -1013,9 +1032,8 @@
                 return;
             }
 
-            timelineTip.textContent = span.opIndex == null
-                ? 'Rapid to start'
-                : opLabel(span.opIndex);
+            const label = span.opIndex == null ? 'Rapid to start' : opLabel(span.opIndex);
+            timelineTip.textContent = `${label} — ${formatDuration(span.seconds)}`;
             timelineTip.hidden = false;
 
             // Unhidden before measuring, or offsetWidth reads 0 and the clamp is wrong
@@ -2409,6 +2427,21 @@
         }
 
         // --- Simulation Execution ---
+        // The speed a segment is played back at. A rapid carries no F word, so it is taken
+        // as half again the fastest cutting feed in the file, or a flat default for a file
+        // that never states a feed at all. Both branches are strictly positive, which is
+        // what lets the timeline divide by this to get a duration.
+        //
+        // This is the simulation's clock: at 1x, playback advances at exactly this rate.
+        // Anything that reports a time has to ask this function rather than restate the
+        // rule, or the number on screen stops matching the thing being watched.
+        function effectiveFeedFor(seg) {
+            if (seg.motion === 'G0' || seg.feedrate <= 0) {
+                return maxFeed > 0 ? maxFeed * 1.5 : DEFAULT_RAPID_FEED;
+            }
+            return seg.feedrate;
+        }
+
         function updateSimulationStep(deltaSeconds) {
             const currentSeg = getCurrentSegment(currentDistance);
             if (!currentSeg) {
@@ -2417,10 +2450,7 @@
                 return;
             }
 
-            let effectiveFeed = currentSeg.feedrate;
-            if (currentSeg.motion === 'G0' || effectiveFeed <= 0) {
-                effectiveFeed = maxFeed > 0 ? maxFeed * 1.5 : DEFAULT_RAPID_FEED;
-            }
+            const effectiveFeed = effectiveFeedFor(currentSeg);
 
             const speedMultiplier = parseFloat(document.getElementById('sim-speed').value);
             const mmPerSec = (effectiveFeed / 60) * speedMultiplier;
