@@ -210,6 +210,40 @@
             min-height: 0;
         }
 
+        /* Live simulation readout, floated over the top-right of the 3D view. Transparent
+           to the mouse so it never steals an orbit drag that starts on it. */
+        #readout {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 5;
+            display: grid;
+            grid-template-columns: auto auto;
+            column-gap: 16px;
+            row-gap: 4px;
+            padding: 10px 12px;
+            background-color: rgba(30, 30, 30, 0.78);
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #aaaaaa;
+            pointer-events: none;
+        }
+
+        /* The rows are grouping only -- the spans themselves are the grid items, so the
+           values line up in a column however long the labels get. */
+        #readout .readout-row {
+            display: contents;
+        }
+
+        #readout .readout-row span:last-child {
+            color: #4ec9b0;
+            font-family: monospace;
+            text-align: right;
+            max-width: 260px;
+            overflow-wrap: anywhere;
+        }
+
         /* HSMWorks-style playback scrubber pinned under the 3D view. */
         #timeline-bar {
             flex: 0 0 auto;
@@ -399,9 +433,6 @@
                     <option value="50">50x Speed</option>
                 </select>
             </div>
-            <div class="stats-row"><span>Active Tool:</span> <span id="sim-tool" class="stats-value">&mdash;</span></div>
-            <div class="stats-row"><span>Current Feed:</span> <span id="sim-feed" class="stats-value">0 mm/min</span></div>
-            <div class="stats-row"><span>Tool Pos:</span> <span id="sim-pos" class="stats-value">X0 Y0 Z0</span></div>
         </div>
 
         <!-- Stock Simulation -->
@@ -466,6 +497,11 @@
 
     <div id="viewport">
         <div id="canvas-container"></div>
+        <div id="readout">
+            <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
+            <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
+            <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
+        </div>
         <div id="loading">Parsing G-code...</div>
         <div id="timeline-bar">
             <label for="sim-progress" class="timeline-label">Progress</label>
