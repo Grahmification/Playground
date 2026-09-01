@@ -896,9 +896,56 @@
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
 
-        // Lighting & Grid Helper
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        // --- Lighting ------------------------------------------------------------------
+        // Lit for reading surface finish. A defect is a degree or two of normal change,
+        // visible only as brightness against neighbouring facets -- so ambient is kept to
+        // a floor (it adds equally to every normal, erasing exactly that difference) and
+        // the key and fill are rebuilt in camera space each frame, since a world-fixed
+        // light leaves the far side of the part on ambient alone.
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
         scene.add(ambientLight);
+
+        // Better than more ambient: varies with the normal's Z, so faces off horizontal
+        // still shift tone where neither directional reaches.
+        const hemiLight = new THREE.HemisphereLight(0xdfe8f2, 0x2e2e2a, 0.30);
+        scene.add(hemiLight);
+
+        // Raking, not a headlight -- a light on the view axis peaks where cos falls off
+        // slowest, washing out shallow relief. Offset, the steep part lands on flat faces.
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+        scene.add(keyLight);
+
+        // Opposite side, weak, so faces turned from the key still shade.
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.30);
+        scene.add(fillLight);
+
+        // Both targets stay at the default origin, so aiming a light is just placing it
+        // along the direction it shines from.
+        const LIGHT_DISTANCE = 1000;
+        const camBasisX = new THREE.Vector3();
+        const camBasisY = new THREE.Vector3();
+        const camBasisZ = new THREE.Vector3();
+        const lightDir = new THREE.Vector3();
+
+        function updateInspectionLights() {
+            // The renderer would do this, but not until after the rig is built from it.
+            camera.updateMatrixWorld();
+            // Camera axes in world space. Its Z points back toward the camera, so a
+            // positive Z term reads as "from behind the viewer".
+            camera.matrixWorld.extractBasis(camBasisX, camBasisY, camBasisZ);
+
+            lightDir.copy(camBasisZ).multiplyScalar(0.72)
+                .addScaledVector(camBasisY, 0.55)
+                .addScaledVector(camBasisX, -0.42)
+                .normalize();
+            keyLight.position.copy(lightDir).multiplyScalar(LIGHT_DISTANCE);
+
+            lightDir.copy(camBasisZ).multiplyScalar(0.55)
+                .addScaledVector(camBasisY, -0.62)
+                .addScaledVector(camBasisX, 0.50)
+                .normalize();
+            fillLight.position.copy(lightDir).multiplyScalar(LIGHT_DISTANCE);
+        }
 
         const gridHelper = new THREE.GridHelper(200, 50, 0x444444, 0x222222);
         gridHelper.rotation.x = Math.PI / 2; // Orient grid along X/Y plane for CNC
@@ -999,11 +1046,6 @@
         toolMesh.visible = false;
         scene.add(toolMesh);
 
-        // Add a dedicated directional light so the 3D tool cylinder highlights nicely
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-        dirLight.position.set(1, 1, 2);
-        scene.add(dirLight);
-
         // --- Data & Simulation State ---
         let parsedSegments = [];
         let minFeed = Infinity;
@@ -1099,10 +1141,13 @@
         // cannot describe a void -- a fully cut cell just sits at the bottom of the block,
         // coplanar with the underside, leaving a paper-thin membrane closing what should be
         // an opening. Those cells are written with alpha 0 and discarded outright.
+        // Semi-matte, not matte: diffuse changes slowly with the normal, a broad specular
+        // lobe changes fast, so slight facet differences read as an edge. Not glossier --
+        // that narrows the lobe to a hotspot that hides more than it shows.
         const stockMaterial = new THREE.MeshStandardMaterial({
             color: 0xffffff,
-            roughness: 0.85,
-            metalness: 0.05,
+            roughness: 0.62,
+            metalness: 0.08,
             flatShading: true,
             alphaTest: 0.5
         });
@@ -1414,6 +1459,9 @@
             // had put it there.
             updateViewTurn();
             controls.update();
+            // After controls.update(), like the highlight below: built from where the
+            // camera ended up this frame.
+            updateInspectionLights();
             // After controls.update(), so a zoom or orbit this frame is already accounted
             // for: the highlight's thickness depends on where the camera ended up.
             updateActiveSegmentThickness();
