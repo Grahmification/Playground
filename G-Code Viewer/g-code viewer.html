@@ -1068,6 +1068,246 @@
         const useFileToolsEl = document.getElementById('use-file-tools');
         const stockColorModeEl = document.getElementById('stock-color-mode');
 
+        // --- View cube ---------------------------------------------------------------
+        // A navigation widget in the bottom-right of the 3D view. It is not a DOM element
+        // and not a second renderer: it is a second render pass of the same WebGL context
+        // into a scissored corner of the same canvas, which is why it costs nothing to
+        // keep in sync and cannot drift out of alignment with the view it describes.
+        //
+        // Six textured planes rather than one textured box. A BoxGeometry's UVs put the
+        // texture's "up" along +Y on four faces and along ∓Z on the other two, so labels
+        // would sit sideways on a Z-up model; building each face as its own plane means
+        // the orientation is stated outright instead of inherited.
+
+        const VIEW_CUBE_SIZE = 96;      // css px, square
+        const VIEW_CUBE_INSET = 12;     // matches the overlay panels' inset
+        const VIEW_CUBE_TURN_MS = 420;
+        // Fraction of the half-extent past which a hit counts as being on that axis's
+        // side. 0.5 is the face edge, so this leaves the middle 60% of a face as a plain
+        // face view and the rim as the edge and corner views.
+        const VIEW_CUBE_RIM = 0.30;
+
+        const viewCubeScene = new THREE.Scene();
+        const viewCubeCamera = new THREE.OrthographicCamera(-1.15, 1.15, 1.15, -1.15, 0.1, 20);
+
+        // Named for a mill standing in front of you: Z up, the operator at -Y.
+        const VIEW_CUBE_FACES = [
+            { label: 'TOP',    normal: [0, 0, 1],  up: [0, 1, 0] },
+            { label: 'BOTTOM', normal: [0, 0, -1], up: [0, 1, 0] },
+            { label: 'FRONT',  normal: [0, -1, 0], up: [0, 0, 1] },
+            { label: 'BACK',   normal: [0, 1, 0],  up: [0, 0, 1] },
+            { label: 'RIGHT',  normal: [1, 0, 0],  up: [0, 0, 1] },
+            { label: 'LEFT',   normal: [-1, 0, 0], up: [0, 0, 1] }
+        ];
+
+        function makeViewCubeTexture(label) {
+            const c = document.createElement('canvas');
+            c.width = c.height = 128;
+            const g = c.getContext('2d');
+            g.fillStyle = '#3a3a3a';
+            g.fillRect(0, 0, 128, 128);
+            g.strokeStyle = '#565656';
+            g.lineWidth = 4;
+            g.strokeRect(2, 2, 124, 124);
+            g.fillStyle = '#e0e0e0';
+            g.font = 'bold 21px "Segoe UI", Arial, sans-serif';
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.fillText(label, 64, 64);
+            const tex = new THREE.CanvasTexture(c);
+            tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+            return tex;
+        }
+
+        const viewCubeFaces = [];
+        {
+            // One geometry for all six; only the transform differs.
+            const faceGeom = new THREE.PlaneGeometry(1, 1);
+            const n = new THREE.Vector3();
+            const u = new THREE.Vector3();
+            const r = new THREE.Vector3();
+            const basis = new THREE.Matrix4();
+
+            VIEW_CUBE_FACES.forEach(face => {
+                const mesh = new THREE.Mesh(faceGeom, new THREE.MeshBasicMaterial({
+                    map: makeViewCubeTexture(face.label)
+                }));
+                // A plane's own axes are +X right, +Y up, +Z out of its face. Line those
+                // up with the world axes this face should read against and the label is
+                // upright from the only direction it is ever seen from.
+                n.fromArray(face.normal);
+                u.fromArray(face.up);
+                r.crossVectors(u, n);
+                basis.makeBasis(r, u, n);
+                mesh.quaternion.setFromRotationMatrix(basis);
+                mesh.position.copy(n).multiplyScalar(0.5);
+                mesh.userData.face = face;
+                viewCubeScene.add(mesh);
+                viewCubeFaces.push(mesh);
+            });
+
+            const outline = new THREE.LineSegments(
+                new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+                new THREE.LineBasicMaterial({ color: 0x1a1a1a })
+            );
+            outline.scale.setScalar(1.004);   // clear of the faces, so it cannot z-fight
+            viewCubeScene.add(outline);
+        }
+
+        const viewCubeRaycaster = new THREE.Raycaster();
+        const viewCubePointer = new THREE.Vector2();
+        let viewCubeHover = null;
+        let viewCubePress = null;
+        let viewTurn = null;    // an in-progress camera swing, or null
+
+        // Top-left corner of the widget in css px within the canvas. WebGL's viewport
+        // counts from the bottom, so the render pass uses the inset directly for y.
+        function viewCubeOriginX() {
+            return container.clientWidth - VIEW_CUBE_SIZE - VIEW_CUBE_INSET;
+        }
+
+        function viewCubePick(event) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            const px = event.clientX - rect.left;
+            const py = event.clientY - rect.top;
+            const ox = viewCubeOriginX();
+            const oy = container.clientHeight - VIEW_CUBE_SIZE - VIEW_CUBE_INSET;
+            if (px < ox || px > ox + VIEW_CUBE_SIZE) return null;
+            if (py < oy || py > oy + VIEW_CUBE_SIZE) return null;
+
+            viewCubePointer.x = ((px - ox) / VIEW_CUBE_SIZE) * 2 - 1;
+            viewCubePointer.y = -((py - oy) / VIEW_CUBE_SIZE) * 2 + 1;
+            viewCubeRaycaster.setFromCamera(viewCubePointer, viewCubeCamera);
+            const hits = viewCubeRaycaster.intersectObjects(viewCubeFaces, false);
+            return hits.length > 0 ? hits[0] : null;
+        }
+
+        // The cube sits at the origin unrotated, so a hit point is already in cube space
+        // and each coordinate says how far toward that side of the cube the click landed.
+        // Reading all three is what gets the 26 standard views -- faces, edges and
+        // corners -- out of six flat quads.
+        function viewDirectionFromHit(hit) {
+            const side = v => (Math.abs(v) > VIEW_CUBE_RIM ? Math.sign(v) : 0);
+            const dir = new THREE.Vector3(side(hit.point.x), side(hit.point.y), side(hit.point.z));
+            if (dir.lengthSq() === 0) dir.fromArray(hit.object.userData.face.normal);
+            return dir.normalize();
+        }
+
+        function goToView(dir) {
+            const from = camera.position.clone().sub(controls.target);
+            const dist = from.length();
+            if (dist < 1e-6) return;
+
+            const to = dir.clone();
+            // Straight down the orbit axis is the pole, where lookAt has no defined roll
+            // and OrbitControls' own epsilon clamp would settle it arbitrarily. Leaning a
+            // ten-thousandth of a radian off the axis costs nothing visually and pins the
+            // roll: the component of camera.up left perpendicular to the view is then +Y,
+            // which is the top view every CAD program draws.
+            const alongUp = to.dot(camera.up);
+            if (Math.abs(alongUp) > 0.999) {
+                to.y = -Math.sign(alongUp) * 1e-4;
+                to.normalize();
+            }
+
+            viewTurn = { from: from.normalize(), to, dist, start: performance.now() };
+        }
+
+        const viewTurnFull = new THREE.Quaternion();
+        const viewTurnStep = new THREE.Quaternion();
+        const viewTurnDir = new THREE.Vector3();
+
+        function updateViewTurn() {
+            if (!viewTurn) return;
+            const t = Math.min(1, (performance.now() - viewTurn.start) / VIEW_CUBE_TURN_MS);
+            const eased = t * t * (3 - 2 * t);
+
+            viewTurnFull.setFromUnitVectors(viewTurn.from, viewTurn.to);
+            viewTurnStep.set(0, 0, 0, 1).slerp(viewTurnFull, eased);
+            viewTurnDir.copy(viewTurn.from).applyQuaternion(viewTurnStep);
+
+            camera.position.copy(controls.target).addScaledVector(viewTurnDir, viewTurn.dist);
+            if (t >= 1) viewTurn = null;
+        }
+
+        function setViewCubeHover(mesh) {
+            if (viewCubeHover === mesh) return;
+            if (viewCubeHover) viewCubeHover.material.color.setHex(0xffffff);
+            viewCubeHover = mesh;
+            if (viewCubeHover) viewCubeHover.material.color.setHex(0x7fb2ff);
+            renderer.domElement.style.cursor = mesh ? 'pointer' : '';
+        }
+
+        function renderViewCube() {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            if (w === 0 || h === 0) return;
+
+            // The cube reports the scene's orientation, so it borrows the main camera's
+            // direction and views the origin from a fixed distance.
+            viewCubeCamera.position.copy(camera.position).sub(controls.target);
+            if (viewCubeCamera.position.lengthSq() < 1e-12) return;
+            viewCubeCamera.position.normalize().multiplyScalar(4);
+            viewCubeCamera.up.copy(camera.up);
+            viewCubeCamera.lookAt(0, 0, 0);
+            viewCubeCamera.updateMatrixWorld();
+
+            // autoClear off so the main render survives; clearDepth inside the scissor so
+            // the cube is not buried by whatever the scene left in the depth buffer there.
+            renderer.autoClear = false;
+            renderer.setScissorTest(true);
+            renderer.setScissor(viewCubeOriginX(), VIEW_CUBE_INSET, VIEW_CUBE_SIZE, VIEW_CUBE_SIZE);
+            renderer.setViewport(viewCubeOriginX(), VIEW_CUBE_INSET, VIEW_CUBE_SIZE, VIEW_CUBE_SIZE);
+            // A depth clear is masked out by depthMask, and the last thing the main scene
+            // draws is the active-segment highlight, which turns depthWrite off. Without
+            // this the clear silently does nothing and the cube is buried in the scene's
+            // leftover depth. The state cache is updated too, so the next material that
+            // asks for depthWrite:false still gets it.
+            renderer.state.buffers.depth.setMask(true);
+            renderer.clearDepth();
+            renderer.render(viewCubeScene, viewCubeCamera);
+            renderer.setScissorTest(false);
+            renderer.setViewport(0, 0, w, h);
+            renderer.autoClear = true;
+        }
+
+        // Capture phase on the container, which is an ancestor of the canvas OrbitControls
+        // is bound to: a press that belongs to the cube is stopped before the orbit ever
+        // starts. On the canvas itself this would not work, since listeners on the same
+        // element run in the order they were added regardless of the capture flag.
+        container.addEventListener('pointerdown', (e) => {
+            const hit = viewCubePick(e);
+            if (!hit) {
+                viewTurn = null;    // an orbit or pan overrides a swing in flight
+                return;
+            }
+            e.stopPropagation();
+            e.preventDefault();
+            viewCubePress = { x: e.clientX, y: e.clientY, hit };
+        }, true);
+
+        container.addEventListener('pointerup', (e) => {
+            if (!viewCubePress) return;
+            const press = viewCubePress;
+            viewCubePress = null;
+            e.stopPropagation();
+            // A drag that began on the cube was aiming at something else.
+            if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return;
+            const hit = viewCubePick(e) || press.hit;
+            goToView(viewDirectionFromHit(hit));
+        }, true);
+
+        // Released off the widget, or off the window entirely.
+        window.addEventListener('pointerup', () => { viewCubePress = null; });
+        window.addEventListener('pointercancel', () => { viewCubePress = null; });
+
+        container.addEventListener('pointermove', (e) => {
+            const hit = viewCubePick(e);
+            setViewCubeHover(hit ? hit.object : null);
+        });
+
+        container.addEventListener('pointerleave', () => setViewCubeHover(null));
+
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
             camera.updateProjectionMatrix();
@@ -1099,11 +1339,16 @@
                 stockColorDirty = false;
             }
 
+            // Before controls.update(), which reads the camera position back out: a swing
+            // in progress moves the camera, and the controls then settle it as if the user
+            // had put it there.
+            updateViewTurn();
             controls.update();
             // After controls.update(), so a zoom or orbit this frame is already accounted
             // for: the highlight's thickness depends on where the camera ended up.
             updateActiveSegmentThickness();
             renderer.render(scene, camera);
+            renderViewCube();
         }
         animate();
 
