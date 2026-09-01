@@ -1925,6 +1925,38 @@
             return line.replace(/\(.*?\)/g, '').replace(/;.*/, '').trim().toUpperCase();
         }
 
+        // --- Arc tessellation ---------------------------------------------------------
+        // Arcs are flattened into chords, and a fixed chord count is wrong at both ends of
+        // the size range: it turns a large bore into a visibly faceted polygon while
+        // spending the same effort on a corner blend far below display resolution. Step
+        // from the sagitta instead -- the gap between the chord and the true arc -- so
+        // every arc is flat to the same tolerance whatever its radius.
+        //
+        // A chord subtending angle t on radius r has sagitta r * (1 - cos(t / 2)), so the
+        // widest chord inside the tolerance spans 2 * acos(1 - tol / r).
+        const ARC_CHORD_TOLERANCE = 0.005;   // mm
+        const ARC_MAX_STEPS = 512;
+
+        function arcStepCount(radius, sweep) {
+            const absSweep = Math.abs(sweep);
+            if (!(absSweep > 0)) return 1;
+
+            // A quarter turn per chord is the coarsest that still describes the shape at
+            // all. It is also what stops a full circle -- whose start and end points
+            // coincide -- from collapsing into one zero-length chord, which pushSegment
+            // would drop, taking the whole arc with it.
+            let steps = Math.ceil(absSweep / (Math.PI / 2));
+
+            // An arc smaller than the tolerance is already within it; only the floor above
+            // applies, and the division is skipped rather than producing a useless angle.
+            if (radius > ARC_CHORD_TOLERANCE) {
+                const maxAngle = 2 * Math.acos(1 - ARC_CHORD_TOLERANCE / radius);
+                steps = Math.max(steps, Math.ceil(absSweep / maxAngle));
+            }
+
+            return Math.min(Math.max(steps, 2), ARC_MAX_STEPS);
+        }
+
         // CAM posts declare each tool's geometry in a comment block above the program:
         //
         //   (T4  D=12.7 CR=0. - ZMIN=-13.5 - flat end mill)
@@ -2330,7 +2362,8 @@
                         if (isCW && endAngle >= startAngle) endAngle -= 2 * Math.PI;
                         if (!isCW && endAngle <= startAngle) endAngle += 2 * Math.PI;
 
-                        const segments = 16;
+                        const radius = Math.hypot(arcIJ.i, arcIJ.j);
+                        const segments = arcStepCount(radius, endAngle - startAngle);
                         let prevPt = [currentPos.x, currentPos.y, currentPos.z];
 
                         for (let step = 1; step <= segments; step++) {
@@ -2338,8 +2371,8 @@
                             const angle = startAngle + t * (endAngle - startAngle);
                             const interpolatedZ = currentPos.z + t * (target.z - currentPos.z);
                             const nextPt = [
-                                centerX + Math.cos(angle) * Math.hypot(arcIJ.i, arcIJ.j),
-                                centerY + Math.sin(angle) * Math.hypot(arcIJ.i, arcIJ.j),
+                                centerX + Math.cos(angle) * radius,
+                                centerY + Math.sin(angle) * radius,
                                 interpolatedZ
                             ];
 
@@ -2356,7 +2389,7 @@
 
             // --- Post-pass -------------------------------------------------------
             // Runs on the finished segment list rather than inline, because the arc
-            // branch above emits 16 segments per line and threading state through it is
+            // branch above emits many segments per line and threading state through it is
             // where a bug would hide.
             //
             // `carve` is the safety net for the approach: the Z a program sits at before
