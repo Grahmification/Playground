@@ -394,6 +394,12 @@
             overflow-wrap: anywhere;
         }
 
+        /* The axes are padded to a fixed width so they hold still as the tool moves; HTML
+           would otherwise collapse that padding to a single space. */
+        #sim-pos {
+            white-space: pre;
+        }
+
         /* The line of the program being executed, verbatim, and on request the lines that
            follow it. Left-aligned and monospaced because it is source text, not a
            measurement.
@@ -824,7 +830,7 @@
                     <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
                     <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
                     <div class="readout-row"><span>Spindle</span> <span id="sim-spindle">Off</span></div>
-                    <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
+                    <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X   0.000 Y   0.000 Z   0.000</span></div>
                 </div>
                 <div id="gcode-line" class="overlay-panel">
                     <div id="gcode-line-head">
@@ -3560,6 +3566,12 @@
             showGCodeLine(currentGCodeSource);
         });
 
+        // Wide enough for a sign and three digits either side of the point (-123.432), so
+        // the three axes keep their columns instead of shuffling as the tool moves.
+        function axisReadout(v) {
+            return v.toFixed(3).padStart(8);
+        }
+
         function updateToolPositionByDistance(dist) {
             if (parsedSegments.length === 0) return;
 
@@ -3597,7 +3609,8 @@
             document.getElementById('sim-spindle').innerText =
                 seg.spindleRpm > 0 ? `${seg.spindleRpm} rpm` : 'Off';
             document.getElementById('sim-tool').innerText = segTool ? toolDescription(segTool) : '—';
-            document.getElementById('sim-pos').innerText = `X${posX.toFixed(1)} Y${posY.toFixed(1)} Z${posZ.toFixed(1)}`;
+            document.getElementById('sim-pos').innerText =
+                `X${axisReadout(posX)} Y${axisReadout(posY)} Z${axisReadout(posZ)}`;
         }
 
         function resetSimulation() {
