@@ -1749,12 +1749,16 @@
             // the top edge where the wall meets the surface above it.
             const uvs = new Float32Array(total * 2);
 
-            // One row past the cells, holding a texel that is always opaque. The flat
-            // bottom points at it so that alpha-testing a cut-through cell can never take
-            // the bottom of the block with it -- see the alpha pass in
-            // refreshStockGeometry.
-            const texRows = stock.ny + 1;
-            const BOTTOM_ROW_V = (stock.ny + 0.5) / texRows;
+            // The texture is two blocks of cells stacked: rows [0, ny) are the surface, and
+            // rows [ny, 2ny) shadow them for the flat bottom. The bottom is one quad
+            // spanning the whole footprint, so it cannot take a single texel -- a hole cut
+            // through the block has to open in the underside too, and that means the quad
+            // needs per-fragment alpha across the same grid. Its own block, rather than
+            // sampling the surface's, keeps the underside from being painted in the colours
+            // of cuts that only ever touched the top.
+            const texRows = stock.ny * 2;
+            const BOTTOM_V0 = stock.ny / texRows;
+            const BOTTOM_V1 = 1;
 
             // Height-map vertices: cell-corner aligned.
             function setSurfaceUV(vertexIndex, gx, gy) {
@@ -1858,16 +1862,17 @@
             const maxX = stock.minX + stock.nx * stock.cellX;
             const maxY = stock.minY + stock.ny * stock.cellY;
             const corners = [[stock.minX, stock.minY], [maxX, stock.minY], [maxX, maxY], [stock.minX, maxY]];
+            // Stretched across the bottom block of the texture, in the same order as the
+            // corners, so every fragment of the quad lands on the shadow of the cell
+            // directly above it.
+            const cornerUVs = [[0, BOTTOM_V0], [1, BOTTOM_V0], [1, BOTTOM_V1], [0, BOTTOM_V1]];
             const base = v;
-            corners.forEach(c => {
+            corners.forEach((c, i) => {
                 positions[v * 3] = c[0];
                 positions[v * 3 + 1] = c[1];
                 positions[v * 3 + 2] = stock.bottom;
-                // The reserved opaque row, not a cell: the bottom is one quad spanning the
-                // whole footprint, so a cell it happened to sample being cut away would
-                // erase the entire underside of the block.
-                uvs[v * 2] = 0.5;
-                uvs[v * 2 + 1] = BOTTOM_ROW_V;
+                uvs[v * 2] = cornerUVs[i][0];
+                uvs[v * 2 + 1] = cornerUVs[i][1];
                 v++;
             });
             tri(base, base + 2, base + 1);
@@ -1885,10 +1890,10 @@
 
             geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-            // One texel per cell, plus the reserved opaque row on the end. RGBA rather than
-            // RGB so each row is 4-byte aligned, which is what WebGL's default unpack
-            // alignment expects. Alpha starts opaque everywhere and is only ever cleared
-            // for a cell that gets cut clean through.
+            // Two texels per cell: one for the surface, one for the bottom's shadow of it.
+            // RGBA rather than RGB so each row is 4-byte aligned, which is what WebGL's
+            // default unpack alignment expects. Everything starts as opaque uncut stock --
+            // the bottom block keeps that colour for good and only its alpha ever moves.
             const texelCount = stock.nx * texRows;
             const colorData = new Uint8Array(texelCount * 4);
             const baseR = (STOCK_BASE_COLOR >> 16) & 0xff;
@@ -2008,9 +2013,11 @@
                 // later operation, which keeps a boundary between two passes from drifting
                 // into whichever corner the scan happened to visit first.
                 //
-                // One write per cell covers the whole mesh: the walls and the bottom read
-                // these same texels through their UVs, so there is no separate skirt pass.
+                // One pass covers the whole mesh: the walls read these same texels through
+                // their UVs, so there is no separate skirt pass, and the bottom's shadow
+                // block is a second alpha write a fixed distance along the same buffer.
                 const nxv = stock.nx + 1;
+                const bottomOffset = stock.nx * stock.ny * 4;
                 for (let cy = 0; cy < stock.ny; cy++) {
                     for (let cx = 0; cx < stock.nx; cx++) {
                         const corner = cy * nxv + cx;
@@ -2043,8 +2050,11 @@
                         }
                         // Discarded by the material's alphaTest, which is the only way a
                         // height map can show a hole rather than a membrane lying on the
-                        // floor of the block.
-                        col[ci + 3] = worstH <= throughLevel ? 0 : 255;
+                        // floor of the block. The underside opens with it, or the hole
+                        // would be visible from above and closed from below.
+                        const alpha = worstH <= throughLevel ? 0 : 255;
+                        col[ci + 3] = alpha;
+                        col[bottomOffset + ci + 3] = alpha;
                     }
                 }
                 stock.colorTexture.needsUpdate = true;
