@@ -219,6 +219,25 @@
             padding: 10px 16px;
             background-color: #252526;
             border-top: 1px solid #3c3c3c;
+            position: relative;
+        }
+
+        /* Drawn rather than a native title tooltip: a title set during mousemove is
+           unreliable on a form control, since the browser arms its tooltip timer on
+           enter. Floats above the bar, over the 3D view, and never eats a drag. */
+        #timeline-tip {
+            position: absolute;
+            bottom: calc(100% - 4px);
+            transform: translateX(-50%);
+            padding: 4px 9px;
+            background-color: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            color: #e0e0e0;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 20;
         }
 
         #timeline-bar .timeline-label {
@@ -452,6 +471,7 @@
             <label for="sim-progress" class="timeline-label">Progress</label>
             <input type="range" id="sim-progress" min="0" max="100" value="0" step="0.1">
             <span id="sim-progress-value">0.0 %</span>
+            <div id="timeline-tip" hidden></div>
         </div>
     </div>
 
@@ -874,15 +894,37 @@
             return opSpans[opSpans.length - 1] || null;
         }
 
-        // Rewriting `title` on every mousemove would make the browser dismiss and
-        // re-open the tooltip, so it only changes when the band under the cursor does.
+        const timelineBar = document.getElementById('timeline-bar');
+        const timelineTip = document.getElementById('timeline-tip');
+
         progressSlider.addEventListener('mousemove', (e) => {
-            if (opSpans.length === 0 || totalPathLength <= 0) return;
+            if (opSpans.length === 0 || totalPathLength <= 0) {
+                timelineTip.hidden = true;
+                return;
+            }
+
             const ratio = clamp(e.offsetX / progressSlider.clientWidth, 0, 1);
             const span = opSpanAtDistance(ratio * totalPathLength);
-            const label = span == null ? '' :
-                (span.opIndex == null ? 'Rapid to start' : opLabel(span.opIndex));
-            if (progressSlider.title !== label) progressSlider.title = label;
+            if (span == null) {
+                timelineTip.hidden = true;
+                return;
+            }
+
+            timelineTip.textContent = span.opIndex == null
+                ? 'Rapid to start'
+                : opLabel(span.opIndex);
+            timelineTip.hidden = false;
+
+            // Unhidden before measuring, or offsetWidth reads 0 and the clamp is wrong
+            // on the frame the tooltip first appears.
+            const barRect = timelineBar.getBoundingClientRect();
+            const half = timelineTip.offsetWidth / 2;
+            const x = e.clientX - barRect.left;
+            timelineTip.style.left = `${clamp(x, half + 4, barRect.width - half - 4)}px`;
+        });
+
+        progressSlider.addEventListener('mouseleave', () => {
+            timelineTip.hidden = true;
         });
 
         // --- Tool Profile ---
