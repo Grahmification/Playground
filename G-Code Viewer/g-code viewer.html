@@ -627,7 +627,8 @@
             </div>
             <div class="control-group">
                 <label for="stock-margin">Stock Margin (mm)</label>
-                <input type="number" id="stock-margin" value="5" min="0" step="1">
+                <input type="number" id="stock-margin" value="5" step="1">
+                <div class="hint hint-muted">Negative starts the block inside the cutting extent.</div>
             </div>
             <div class="btn-row">
                 <div class="control-group">
@@ -1164,16 +1165,12 @@
             updateToolGeometry(activeToolAt(currentDistance));
             updateStockHint();
 
-            // The cut depends on the tool, so re-cut the stock from scratch. A bigger
-            // tool also needs a wider footprint than the one the grid was built for,
-            // and that can only come from a full rebuild.
+            // The cut depends on the tool, so re-cut the stock from scratch. The grid
+            // itself is sized from the cutting extent and the margin alone, neither of
+            // which the tool touches, so it can be reused as it stands.
             if (stock) {
-                if (Math.abs(stock.margin - effectiveStockMargin()) > 1e-9) {
-                    rebuildStock();
-                } else {
-                    resetStockHeights();
-                    requestCarve(currentDistance);
-                }
+                resetStockHeights();
+                requestCarve(currentDistance);
             }
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(currentDistance);
@@ -1736,24 +1733,28 @@
             document.getElementById('stock-removed').innerText = '0.0 %';
         }
 
-        // The largest radius that can reach the stock, across whichever tool source is
-        // active. Used to keep the stock footprint wider than the tool sweep.
-        function maxToolRadiusInUse() {
-            let r = currentTool ? currentTool.radius : 0;
-            if (useFileToolsEl.checked) {
-                fileTools.forEach(tool => { if (tool.radius > r) r = tool.radius; });
-            }
-            return r;
-        }
-
-        // `bounds` is the tool *axis* extent, so a tool whose radius exceeds the margin
-        // sweeps past the stock edge. The boundary column would then be cut to full
-        // depth, and since that column is also the height source for the skirt, the whole
-        // outer wall drops with it and the stock looks like its side was machined off.
-        // Grow the footprint instead, without touching the number the user typed.
+        // How far the stock stands out past the cutting extent, exactly as typed.
+        //
+        // Negative is allowed and means what it says: the block starts inside the
+        // toolpath, and the outer passes machine its sides away. `bounds` is the tool
+        // *axis* extent, so this is also what happens whenever the margin is smaller than
+        // the tool radius -- the tool sweeps past the edge, the boundary samples are cut,
+        // and the skirt that hangs off them follows. That is the truth about the cut, not
+        // a glitch, so the number is honoured rather than quietly widened to the tool.
+        //
+        // The one thing that is not honoured is a margin deep enough to collapse the
+        // block: past half of the shorter side the footprint inverts, and the grid it
+        // sizes goes with it. Clamp to leave a sliver.
         function effectiveStockMargin() {
-            const userMargin = Math.max(parseFloat(stockMarginEl.value) || 0, 0);
-            return Math.max(userMargin, maxToolRadiusInUse());
+            const raw = parseFloat(stockMarginEl.value);
+            const margin = isFinite(raw) ? raw : 0;
+            if (margin >= 0) return margin;
+
+            const fp = stockFootprint();
+            if (!fp) return margin;
+            const shortest = Math.min(fp.maxX - fp.minX, fp.maxY - fp.minY);
+            const floor = -0.5 * shortest + Math.max(0.01 * shortest, 1e-3);
+            return Math.max(margin, floor);
         }
 
         function rebuildStock() {
@@ -1794,7 +1795,7 @@
             const ny = Math.max(1, Math.min(1600, Math.round(sizeY / target)));
 
             stock = {
-                nx, ny, minX, minY, margin,
+                nx, ny, minX, minY,
                 cellX: sizeX / nx,
                 cellY: sizeY / ny,
                 top, bottom,
