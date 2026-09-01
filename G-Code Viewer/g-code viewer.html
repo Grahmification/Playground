@@ -238,6 +238,8 @@
             <select id="color-mode">
                 <option value="type">Motion Type (G0/G1/G2/G3)</option>
                 <option value="feedrate">Feed Rate Heatmap</option>
+                <option value="tool">Tool</option>
+                <option value="op">Operation</option>
             </select>
         </div>
 
@@ -291,6 +293,7 @@
                 <label for="sim-progress">Progress</label>
                 <input type="range" id="sim-progress" min="0" max="100" value="0" step="0.1">
             </div>
+            <div class="stats-row"><span>Active Tool:</span> <span id="sim-tool" class="stats-value">&mdash;</span></div>
             <div class="stats-row"><span>Current Feed:</span> <span id="sim-feed" class="stats-value">0 mm/min</span></div>
             <div class="stats-row"><span>Tool Pos:</span> <span id="sim-pos" class="stats-value">X0 Y0 Z0</span></div>
         </div>
@@ -303,6 +306,20 @@
                 <span>Show stock &amp; simulate cutting</span>
             </label>
             <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter above to remove material.</div>
+            <label class="check-row">
+                <input type="checkbox" id="use-file-tools" disabled>
+                <span>Use tool geometry from G-code file</span>
+            </label>
+            <div id="file-tools-hint" class="hint hint-muted">Open a file whose header lists its tools.</div>
+            <div class="control-group">
+                <label for="stock-color-mode">Stock Color</label>
+                <select id="stock-color-mode">
+                    <option value="off" selected>Uniform</option>
+                    <option value="tool">By Tool</option>
+                    <option value="op">By Operation</option>
+                </select>
+            </div>
+            <div id="tool-legend"></div>
             <div class="control-group">
                 <label for="stock-margin">Stock Margin (mm)</label>
                 <input type="number" id="stock-margin" value="5" min="0" step="1">
@@ -409,23 +426,51 @@
         let currentTool = null;
         const DEFAULT_RAPID_FEED = 5000;
 
+        // --- Per-file tool and operation tables ---
+        // `fileTools` holds the geometry declared in the header comment block, keyed by
+        // T number. `operations` is the machining sequence: a new entry starts at every
+        // N-word comment and at every tool change, so a file with neither still gets one.
+        // `cutIds` in the stock stores operation index + 1, and the by-tool view is
+        // derived from it, which is why switching colour mode never needs a re-cut.
+        let fileTools = new Map();
+        let operations = [];
+        let toolColorIndex = new Map();   // T number -> palette slot, in order of first cut
+        const TOOL_COLOR_DEFAULT = 0xffa500;
+
+        // Categorical palette, cycled. Chosen to stay legible against both the dark
+        // background and the tan of uncut stock.
+        const PALETTE = [
+            0x4e9de6, 0xe6704e, 0x5fbf6a, 0xc86fd0,
+            0xe0b93c, 0x4ec9b0, 0xe05f8a, 0x8f7ae0,
+            0x9ec44e, 0xd99a4e, 0x5ac8e0, 0xb0566a
+        ];
+
         // --- Stock (material removal) state ---
         // The stock is modelled as a Z-height map: one height sample per grid vertex.
         // Cutting only ever lowers a height, so the surface is rebuilt from scratch
         // whenever the simulation is scrubbed backwards.
+        const STOCK_BASE_COLOR = 0xb8ac95;
+
+        // Colour comes entirely from the vertex attribute, so the material tint is white
+        // and uncut samples are written as STOCK_BASE_COLOR. `vertexColors` stays on for
+        // the life of the material: toggling it would change a shader define and need an
+        // explicit `needsUpdate`. three.js here is r128, which predates ColorManagement,
+        // so a hex in the attribute and the same hex in `material.color` match exactly --
+        // do not add a convertSRGBToLinear() call.
         const stockMaterial = new THREE.MeshStandardMaterial({
-            color: 0xb8ac95,
+            color: 0xffffff,
             roughness: 0.85,
             metalness: 0.05,
-            flatShading: true
+            flatShading: true,
+            vertexColors: true
         });
 
-        let stock = null;          // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, geometry, skirt }
+        let stock = null;          // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, cutIds, geometry, skirt, topCount, total }
         let stockMesh = null;
         let stockGeomDirty = false;
+        let stockColorDirty = false;
         let carvedDistance = 0;    // how far along the path the stock has been carved
         let carveSegIndex = 0;     // resume point into parsedSegments for carving
-        let firstCutSegIndex = 0;  // rapids before the first cutting move are not carved
         let pendingCarve = null;   // coalesces carve requests to one per animation frame
 
         const stockEnabledEl = document.getElementById('stock-enabled');
@@ -433,6 +478,8 @@
         const stockTopEl = document.getElementById('stock-top');
         const stockBottomEl = document.getElementById('stock-bottom');
         const stockResEl = document.getElementById('stock-res');
+        const useFileToolsEl = document.getElementById('use-file-tools');
+        const stockColorModeEl = document.getElementById('stock-color-mode');
 
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
@@ -459,9 +506,10 @@
                 pendingCarve = null;
                 carveTo(target);
             }
-            if (stockGeomDirty) {
+            if (stockGeomDirty || stockColorDirty) {
+                refreshStockGeometry(stockGeomDirty, stockColorDirty);
                 stockGeomDirty = false;
-                refreshStockGeometry();
+                stockColorDirty = false;
             }
 
             controls.update();
@@ -475,17 +523,25 @@
             updateLegend();
         });
 
-        // Every tool field changes the shape of the cut, so they all run this.
+        // Every tool field changes the shape of the cut, so they all run this. So does
+        // switching the tool source, which is why the file-tools checkbox shares it.
         function onToolChanged() {
             currentTool = readToolInputs();
             updateToolFieldVisibility();
-            updateToolGeometry();
+            updateManualToolFieldState();
+            updateToolGeometry(activeToolAt(currentDistance));
             updateStockHint();
 
-            // The cut depends on the tool, so re-cut the stock from scratch.
+            // The cut depends on the tool, so re-cut the stock from scratch. A bigger
+            // tool also needs a wider footprint than the one the grid was built for,
+            // and that can only come from a full rebuild.
             if (stock) {
-                resetStockHeights();
-                requestCarve(currentDistance);
+                if (Math.abs(stock.margin - effectiveStockMargin()) > 1e-9) {
+                    rebuildStock();
+                } else {
+                    resetStockHeights();
+                    requestCarve(currentDistance);
+                }
             }
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(currentDistance);
@@ -496,6 +552,22 @@
             document.getElementById(id).addEventListener('input', onToolChanged);
         });
         document.getElementById('tool-type').addEventListener('change', onToolChanged);
+
+        // Switching tool source changes every cut, so it needs the full re-carve that
+        // onToolChanged performs -- not just a re-render.
+        useFileToolsEl.addEventListener('change', () => {
+            onToolChanged();
+            updateToolLegend();
+        });
+
+        // Colouring is a pure view over `cutIds`, which is accumulated regardless of the
+        // selected mode, so this repaints without touching the height map.
+        stockColorModeEl.addEventListener('change', () => {
+            stockColorDirty = true;
+            updateToolLegend();
+            if (parsedSegments.length > 0) updateToolPositionByDistance(currentDistance);
+            else applyToolMeshTint(null);
+        });
 
         // --- Stock controls ---
         stockEnabledEl.addEventListener('change', rebuildStock);
@@ -520,8 +592,21 @@
             const reader = new FileReader();
             reader.onload = function(evt) {
                 parseGCode(evt.target.result);
+
+                // The tool source must settle before the first carve, or the initial cut
+                // runs against the wrong geometry and pays a full re-cut to correct itself.
+                const hasFileTools = fileTools.size > 0;
+                useFileToolsEl.disabled = !hasFileTools;
+                useFileToolsEl.checked = hasFileTools;
+                document.getElementById('file-tools-hint').innerText = hasFileTools
+                    ? `${fileTools.size} tool${fileTools.size === 1 ? '' : 's'} read from the file header.`
+                    : 'This file has no tool geometry in its header.';
+                updateManualToolFieldState();
+                currentTool = readToolInputs();
+
                 renderToolpath();
                 updateLegend();
+                updateToolLegend();
                 fitCameraToBounds();
                 resetSimulation();
                 applySuggestedStockExtents();
@@ -562,37 +647,130 @@
             return isNaN(val) ? fallback : val;
         }
 
-        function readToolInputs() {
-            const diameter = numberFrom('tool-diameter', NaN);
-            if (isNaN(diameter) || diameter <= 0) return null;
+        // --- Tool type families ---------------------------------------------------
+        // Lifted from tool-library-viewer.html, which reads the same geometry out of
+        // HSMWorks .hsmlib files. Order matters: "spot drill" must be caught before
+        // "drill", and "bull nose end mill" before the generic "mill".
+        const TYPE_PATTERNS = [
+            [/spot/, 'spot'],
+            [/counter\s*sink|countersink/, 'countersink'],
+            [/chamfer|taper|dove/, 'chamfer'],
+            [/ball/, 'ball'],
+            [/bull|radius/, 'bull'],
+            [/drill/, 'drill'],
+            [/tap\b|tapping/, 'tap'],
+            [/thread/, 'thread'],
+            [/ream/, 'reamer'],
+            [/bor(e|ing)/, 'boring'],
+            [/probe/, 'probe'],
+            [/mill|counter\s*bore/, 'flat']
+        ];
+
+        function toolFamily(type) {
+            const s = String(type || '').toLowerCase();
+            for (const [re, family] of TYPE_PATTERNS) {
+                if (re.test(s)) return family;
+            }
+            return 'other';
+        }
+
+        const CONE_FAMILIES = { chamfer: 1, spot: 1, drill: 1, countersink: 1 };
+
+        // The posted TAPER= value reuses one word for two different conventions, and the
+        // example files prove both. A drill's 118 and a spot drill's 90 are *included*
+        // tip angles (a 90 deg spot drill read as a half angle would have a zero-height
+        // tip). A chamfer mill's 45 is measured *from the axis*: it makes the cone
+        // exactly as tall as the tool radius, which matches its 3.175 flute length.
+        function coneHalfAngle(family, taperAngle) {
+            const included = family !== 'chamfer';
+            const fallback = family === 'chamfer' ? 45 : (family === 'drill' ? 118 : 90);
+            const raw = (isFinite(taperAngle) && taperAngle > 0) ? taperAngle : fallback;
+            return included ? raw / 2 : raw;
+        }
+
+        // The single construction path for a carve-ready tool, shared by the sidebar
+        // inputs and by the file header. `flatRadius` is the radius of the tool's flat
+        // bottom, which unifies all four profiles: the full radius for a flat end mill,
+        // zero for a ball nose, radius - cornerRadius for a bull nose, the tip flat for
+        // a cone.
+        //
+        // Profile choice keys off the numbers before the family, because posts write
+        // CR = radius for a ball nose and CR = corner for a bull nose. Families with no
+        // cone and no corner (tap, reamer, boring, thread) fall through to a plain
+        // cylinder, which is the right first approximation for all of them.
+        function buildTool(spec) {
+            const diameter = spec.diameter;
+            if (!isFinite(diameter) || diameter <= 0) return null;
 
             const radius = diameter / 2;
-            const type = document.getElementById('tool-type').value;
+            const cornerRadius = isFinite(spec.cornerRadius) ? clamp(spec.cornerRadius, 0, radius) : 0;
+            const family = spec.family || 'flat';
+            const isCone = !!CONE_FAMILIES[family];
+
             const tool = {
-                type,
+                family,
                 diameter,
                 radius,
                 r2: radius * radius,
-                isCone: type === 'chamfer',
+                isCone,
                 cornerRadius: 0,
-                invTanWall: 1
+                invTanWall: 1,
+                toolNum: spec.toolNum != null ? spec.toolNum : null
             };
 
-            if (type === 'chamfer') {
-                // Wall angle is measured from the tool axis, so it is the cone's half
-                // angle: 45 deg gives a 45 deg chamfer. Smaller means a sharper, taller cone.
-                const wall = clamp(numberFrom('tool-wall-angle', 45), 1, 89);
-                tool.invTanWall = 1 / Math.tan(wall * Math.PI / 180);
-                tool.flatRadius = clamp(numberFrom('tool-tip-diameter', 0) / 2, 0, radius * 0.999);
+            if (isCone) {
+                // `halfAngleDeg` is the already-resolved angle from the tool axis (what
+                // the sidebar's Wall Angle field means); `taperDeg` is the raw posted
+                // value that still needs the included-vs-from-axis rule applied.
+                const half = clamp(
+                    isFinite(spec.halfAngleDeg) ? spec.halfAngleDeg : coneHalfAngle(family, spec.taperDeg),
+                    1, 89
+                );
+                tool.invTanWall = 1 / Math.tan(half * Math.PI / 180);
+                tool.halfAngle = half;
+                tool.flatRadius = clamp(isFinite(spec.tipRadius) ? spec.tipRadius : 0, 0, radius * 0.999);
             } else {
-                if (type === 'ball') tool.cornerRadius = radius;
-                else if (type === 'bull') tool.cornerRadius = clamp(numberFrom('tool-corner-radius', 0), 0, radius);
+                if (cornerRadius >= radius - 1e-6) tool.cornerRadius = radius;      // ball
+                else tool.cornerRadius = cornerRadius;                              // bull, or 0 = flat
                 tool.flatRadius = radius - tool.cornerRadius;
             }
 
             tool.flatSq = tool.flatRadius * tool.flatRadius;
             tool.cr2 = tool.cornerRadius * tool.cornerRadius;
             return tool;
+        }
+
+        // The sidebar's four tool types map onto the same families the header strings do.
+        const MANUAL_FAMILY = { flat: 'flat', ball: 'ball', bull: 'bull', chamfer: 'chamfer' };
+
+        function readToolInputs() {
+            const diameter = numberFrom('tool-diameter', NaN);
+            if (isNaN(diameter) || diameter <= 0) return null;
+
+            const type = document.getElementById('tool-type').value;
+            const radius = diameter / 2;
+            const spec = { diameter, family: MANUAL_FAMILY[type] || 'flat' };
+
+            if (type === 'chamfer') {
+                // Wall angle is measured from the tool axis, so it is already the cone's
+                // half angle: 45 deg gives a 45 deg chamfer. Smaller means sharper.
+                spec.halfAngleDeg = clamp(numberFrom('tool-wall-angle', 45), 1, 89);
+                spec.tipRadius = clamp(numberFrom('tool-tip-diameter', 0) / 2, 0, radius * 0.999);
+            } else if (type === 'ball') {
+                spec.cornerRadius = radius;
+            } else if (type === 'bull') {
+                spec.cornerRadius = clamp(numberFrom('tool-corner-radius', 0), 0, radius);
+            }
+
+            return buildTool(spec);
+        }
+
+        // While the file supplies the geometry, the manual inputs are inert. Greying them
+        // out is the only signal that typing in them will do nothing.
+        function updateManualToolFieldState() {
+            const disabled = useFileToolsEl.checked;
+            ['tool-diameter', 'tool-type', 'tool-corner-radius', 'tool-wall-angle', 'tool-tip-diameter']
+                .forEach(id => { document.getElementById(id).disabled = disabled; });
         }
 
         // Height of the tool's cutting surface above its tip, at radial distance d from
@@ -612,14 +790,37 @@
             document.getElementById('row-tip-diameter').style.display = type === 'chamfer' ? 'flex' : 'none';
         }
 
+        // --- Tool resolution ---
+        // The tool that cuts a given segment. In file mode a T number missing from the
+        // header falls back to the sidebar inputs, and to nothing at all if those are
+        // empty too -- that segment then simply removes no material.
+        function toolForSegment(seg) {
+            if (!seg) return currentTool;
+            if (useFileToolsEl.checked && seg.toolNum != null) {
+                return fileTools.get(seg.toolNum) || currentTool;
+            }
+            return currentTool;
+        }
+
+        function activeToolAt(dist) {
+            if (parsedSegments.length === 0) return currentTool;
+            return toolForSegment(getCurrentSegment(dist));
+        }
+
         // --- Tool Mesh Builder ---
-        function updateToolGeometry() {
+        // Takes the tool explicitly so the displayed cutter can follow a tool change as
+        // the simulation scrubs. Null is a real case -- this runs at script init before
+        // any file is loaded -- so the sphere fallback has to survive.
+        let lastDrawnTool = undefined;
+
+        function updateToolGeometry(tool) {
+            if (tool === undefined) tool = currentTool;
+            lastDrawnTool = tool;
             toolMesh.geometry.dispose();
 
-            if (currentTool) {
+            if (tool) {
                 // Lathe the same profile the simulation carves with, so the displayed
                 // tool is always the tool being simulated.
-                const tool = currentTool;
                 const pts = [new THREE.Vector2(0, 0)];
 
                 if (tool.flatRadius > 0) pts.push(new THREE.Vector2(tool.flatRadius, 0));
@@ -659,20 +860,65 @@
             }
         }
 
+        // While a per-tool colour mode is on, the cutter wears its own legend swatch so
+        // it can be matched to the surfaces it leaves behind. Otherwise it is orange.
+        function applyToolMeshTint(tool) {
+            const mode = stockColorModeEl.value;
+            if (mode !== 'off' && tool && tool.toolNum != null && toolColorIndex.has(tool.toolNum)) {
+                toolMaterial.color.setHex(PALETTE[toolColorIndex.get(tool.toolNum) % PALETTE.length]);
+            } else {
+                toolMaterial.color.setHex(TOOL_COLOR_DEFAULT);
+            }
+        }
+
+        // --- Colour lookup -----------------------------------------------------------
+        // `cutIds` stores operation index + 1. The by-tool view is derived rather than
+        // stored, so switching mode is a repaint and never a re-cut.
+        // A surface with no tool behind it -- an operation that never committed a T
+        // number -- gets neutral grey rather than borrowing slot 0, so it cannot be
+        // mistaken for the first cutting tool.
+        const UNASSIGNED_COLOR = 0x7c7c7c;
+
+        function colorForCutId(id, mode) {
+            if (id === 0) return STOCK_BASE_COLOR;
+            const op = operations[id - 1];
+            if (mode === 'tool') {
+                const slot = op && op.toolNum != null ? toolColorIndex.get(op.toolNum) : undefined;
+                return slot === undefined ? UNASSIGNED_COLOR : PALETTE[slot % PALETTE.length];
+            }
+            return PALETTE[(id - 1) % PALETTE.length];
+        }
+
         // --- Stock Simulation ---
         function updateStockHint() {
-            const show = stockEnabledEl.checked && !currentTool;
+            // In file mode the sidebar diameter is irrelevant, so nagging for one is a lie.
+            const needsManualTool = !useFileToolsEl.checked || fileTools.size === 0;
+            const show = stockEnabledEl.checked && needsManualTool && !currentTool;
             document.getElementById('stock-hint').style.display = show ? 'block' : 'none';
         }
 
         // Suggested stock extents. The top is the shallowest depth a cutting move
         // actually reaches: each feed move contributes the lowest Z it gets to (so a
         // plunge counts where it lands, not where it starts from above the material).
+        //
+        // Pure vertical feed moves are excluded, because a lead-in plunge descends
+        // through free air and lands wherever that operation happens to start -- on a
+        // multi-tool file the deepest-starting tool would otherwise set the stock top and
+        // invent a layer of material that was never there. Lateral moves are the ones
+        // that can only happen at or below the real surface. If a program is nothing but
+        // plunges, fall back to counting them all.
         function suggestStockExtents() {
             let top = -Infinity;
+            let topAnyMove = -Infinity;
             parsedSegments.forEach(seg => {
-                if (seg.motion !== 'G0') top = Math.max(top, Math.min(seg.start[2], seg.end[2]));
+                if (seg.motion === 'G0') return;
+                const low = Math.min(seg.start[2], seg.end[2]);
+                topAnyMove = Math.max(topAnyMove, low);
+                const isVertical = Math.abs(seg.end[0] - seg.start[0]) < 1e-9
+                    && Math.abs(seg.end[1] - seg.start[1]) < 1e-9;
+                if (!isVertical) top = Math.max(top, low);
             });
+            if (!isFinite(top)) top = topAnyMove;
             if (!isFinite(top)) top = bounds.maxZ;
 
             let bottom = isFinite(bounds.minZ) ? bounds.minZ : top - 10;
@@ -700,6 +946,26 @@
             document.getElementById('stock-removed').innerText = '0.0 %';
         }
 
+        // The largest radius that can reach the stock, across whichever tool source is
+        // active. Used to keep the stock footprint wider than the tool sweep.
+        function maxToolRadiusInUse() {
+            let r = currentTool ? currentTool.radius : 0;
+            if (useFileToolsEl.checked) {
+                fileTools.forEach(tool => { if (tool.radius > r) r = tool.radius; });
+            }
+            return r;
+        }
+
+        // `bounds` is the tool *axis* extent, so a tool whose radius exceeds the margin
+        // sweeps past the stock edge. The boundary column would then be cut to full
+        // depth, and since that column is also the height source for the skirt, the whole
+        // outer wall drops with it and the stock looks like its side was machined off.
+        // Grow the footprint instead, without touching the number the user typed.
+        function effectiveStockMargin() {
+            const userMargin = Math.max(parseFloat(stockMarginEl.value) || 0, 0);
+            return Math.max(userMargin, maxToolRadiusInUse());
+        }
+
         function rebuildStock() {
             disposeStock();
             updateStockHint();
@@ -716,7 +982,7 @@
             if (bottom > top) { const tmp = top; top = bottom; bottom = tmp; }
             if (top - bottom < 1e-6) bottom = top - 1;
 
-            const margin = Math.max(parseFloat(stockMarginEl.value) || 0, 0);
+            const margin = effectiveStockMargin();
             const minX = bounds.minX - margin;
             const minY = bounds.minY - margin;
             const sizeX = Math.max((bounds.maxX - bounds.minX) + 2 * margin, 1e-3);
@@ -729,11 +995,15 @@
             const ny = Math.max(1, Math.min(600, Math.round(sizeY / target)));
 
             stock = {
-                nx, ny, minX, minY,
+                nx, ny, minX, minY, margin,
                 cellX: sizeX / nx,
                 cellY: sizeY / ny,
                 top, bottom,
                 heights: new Float32Array((nx + 1) * (ny + 1)),
+                // Strict shadow of `heights`: operation index + 1, 0 for uncut. Cleared
+                // in lockstep by resetStockHeights(). Uint16 because operation counts can
+                // exceed 255.
+                cutIds: new Uint16Array((nx + 1) * (ny + 1)),
                 skirt: null,
                 geometry: null
             };
@@ -842,12 +1112,31 @@
             const normals = new Float32Array(total * 3);
             for (let i = 0; i < total; i++) normals[i * 3 + 2] = 1;
             geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+
+            // Normalized bytes rather than floats: a quarter the upload, and `total` can
+            // reach ~366k vertices at High resolution. Every vertex starts at the uncut
+            // stock colour, so an untouched stock renders exactly as it did before
+            // vertex colouring existed.
+            const colors = new Uint8Array(total * 3);
+            const baseR = (STOCK_BASE_COLOR >> 16) & 0xff;
+            const baseG = (STOCK_BASE_COLOR >> 8) & 0xff;
+            const baseB = STOCK_BASE_COLOR & 0xff;
+            for (let i = 0; i < total; i++) {
+                colors[i * 3] = baseR;
+                colors[i * 3 + 1] = baseG;
+                colors[i * 3 + 2] = baseB;
+            }
+            const colorAttr = new THREE.BufferAttribute(colors, 3, true);
+            colorAttr.setUsage(THREE.DynamicDrawUsage);
+            geometry.setAttribute('color', colorAttr);
+
             geometry.setIndex(indices);
             geometry.computeBoundingSphere();
 
             stock.geometry = geometry;
             stock.skirt = skirt;
             stock.topCount = topCount;
+            stock.total = total;
 
             stockMesh = new THREE.Mesh(geometry, stockMaterial);
             scene.add(stockMesh);
@@ -856,32 +1145,87 @@
         function resetStockHeights() {
             if (!stock) return;
             stock.heights.fill(stock.top);
+            // cutIds is a shadow of heights, not an accumulator. This is also the
+            // backward-scrub path, so missing it would leave uncut stock fully coloured.
+            stock.cutIds.fill(0);
             carvedDistance = 0;
             carveSegIndex = 0;
             stockGeomDirty = true;
+            // In Uniform mode the colour buffer is already all base colour and nothing
+            // has written over it, so a repaint would be pure cost. Backward scrubbing
+            // lands here once per frame.
+            if (stockColorModeEl.value !== 'off') stockColorDirty = true;
         }
 
-        // Pushes the current height map into the mesh's vertex positions.
-        function refreshStockGeometry() {
+        // Pushes the current height map into the mesh's vertex positions, and the cut-id
+        // map into its vertex colours. The two are uploaded independently: heights change
+        // on every carve, colours only when the cut set or the colour mode changes, and
+        // re-uploading a megabyte of colour every frame for nothing is the whole reason
+        // the flags are separate.
+        function refreshStockGeometry(doPositions, doColors) {
             if (!stock) return;
             const attr = stock.geometry.getAttribute('position');
             const pos = attr.array;
             const heights = stock.heights;
-
-            for (let i = 0; i < stock.topCount; i++) {
-                pos[i * 3 + 2] = heights[i];
-            }
             const skirt = stock.skirt;
-            for (let k = 0; k < skirt.length; k += 2) {
-                pos[skirt[k] * 3 + 2] = heights[skirt[k + 1]];
-            }
-            attr.needsUpdate = true;
 
-            let removed = 0;
-            const span = stock.top - stock.bottom;
-            for (let i = 0; i < heights.length; i++) removed += stock.top - heights[i];
-            const pct = (removed / (heights.length * span)) * 100;
-            document.getElementById('stock-removed').innerText = `${pct.toFixed(1)} %`;
+            if (doPositions) {
+                for (let i = 0; i < stock.topCount; i++) {
+                    pos[i * 3 + 2] = heights[i];
+                }
+                for (let k = 0; k < skirt.length; k += 2) {
+                    pos[skirt[k] * 3 + 2] = heights[skirt[k + 1]];
+                }
+                attr.needsUpdate = true;
+            }
+
+            if (doColors) {
+                const cattr = stock.geometry.getAttribute('color');
+                const col = cattr.array;
+                const cutIds = stock.cutIds;
+                const mode = stockColorModeEl.value;
+
+                // Cache one RGB triple per distinct id so the palette lookup runs a
+                // handful of times rather than once per vertex.
+                const cache = new Map();
+                function rgb(id) {
+                    let c = cache.get(id);
+                    if (c === undefined) {
+                        const hex = mode === 'off' ? STOCK_BASE_COLOR : colorForCutId(id, mode);
+                        c = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+                        cache.set(id, c);
+                    }
+                    return c;
+                }
+
+                for (let i = 0; i < stock.topCount; i++) {
+                    const c = rgb(cutIds[i]);
+                    col[i * 3] = c[0];
+                    col[i * 3 + 1] = c[1];
+                    col[i * 3 + 2] = c[2];
+                }
+                // Both vertices of each wall pair take the sample's colour, so a cut that
+                // reaches the edge shows as a solid stripe rather than a vertical fade.
+                for (let k = 0; k < skirt.length; k += 2) {
+                    const c = rgb(cutIds[skirt[k + 1]]);
+                    const top = skirt[k] * 3;
+                    const bot = top + 3;   // the wall's lower vertex is always the next one
+                    col[top] = col[bot] = c[0];
+                    col[top + 1] = col[bot + 1] = c[1];
+                    col[top + 2] = col[bot + 2] = c[2];
+                }
+                cattr.needsUpdate = true;
+            }
+
+            // Only the height map moves the needle here, so a colour-only refresh skips
+            // this full scan and its DOM write.
+            if (doPositions) {
+                let removed = 0;
+                const span = stock.top - stock.bottom;
+                for (let i = 0; i < heights.length; i++) removed += stock.top - heights[i];
+                const pct = (removed / (heights.length * span)) * 100;
+                document.getElementById('stock-removed').innerText = `${pct.toFixed(1)} %`;
+            }
         }
 
         // Removes material under the swept tool travelling from (x0,y0) to (x1,y1) with
@@ -890,8 +1234,7 @@
         // approach to the swept axis: the tool is rotationally symmetric and its profile
         // rises monotonically outward, so the closest approach is where the tool reaches
         // lowest over the sweep. Exact for a constant-Z move; carveSweep slices the rest.
-        function carveCapsule(x0, y0, x1, y1, z) {
-            const tool = currentTool;
+        function carveCapsule(tool, cutId, x0, y0, x1, y1, z) {
             const r = tool.radius;
 
             // toolHeightAt(0) is 0 for every profile, so the tip is the tool's lowest
@@ -912,6 +1255,7 @@
             const stockBottom = stock.bottom;
             const nxv = stock.nx + 1;
             const heights = stock.heights;
+            const cutIds = stock.cutIds;
             let changed = false;
 
             for (let gy = gy0; gy <= gy1; gy++) {
@@ -935,6 +1279,7 @@
                     const hi = rowBase + gx;
                     if (heights[hi] > target) {
                         heights[hi] = target;
+                        cutIds[hi] = cutId;
                         changed = true;
                     }
                 }
@@ -945,9 +1290,9 @@
         // A capsule covers the full XY sweep of a move exactly, however long it is, so
         // slicing is only needed to follow a changing Z (ramps, plunges, helical arcs).
         // One slice per cell-sized drop keeps the Z error at the model's resolution.
-        function carveSweep(ax, ay, az, bx, by, bz) {
+        function carveSweep(tool, cutId, ax, ay, az, bx, by, bz) {
             const zTol = Math.min(stock.cellX, stock.cellY);
-            if (Math.abs(az - bz) <= zTol) return carveCapsule(ax, ay, bx, by, Math.min(az, bz));
+            if (Math.abs(az - bz) <= zTol) return carveCapsule(tool, cutId, ax, ay, bx, by, Math.min(az, bz));
 
             const slices = Math.min(4000, Math.max(1, Math.ceil(Math.abs(bz - az) / zTol)));
             let changed = false;
@@ -958,6 +1303,7 @@
                 const z0 = az + (bz - az) * t0;
                 const z1 = az + (bz - az) * t1;
                 if (carveCapsule(
+                    tool, cutId,
                     ax + (bx - ax) * t0, ay + (by - ay) * t0,
                     ax + (bx - ax) * t1, ay + (by - ay) * t1,
                     Math.min(z0, z1)
@@ -971,7 +1317,9 @@
         }
 
         function carveTo(dist) {
-            if (!stock || !currentTool) return;
+            // currentTool may legitimately be null in file-tool mode; the per-segment
+            // lookup below decides whether anything can cut.
+            if (!stock) return;
             if (dist < carvedDistance - 1e-9) resetStockHeights();
             if (dist <= carvedDistance) return;
 
@@ -983,14 +1331,17 @@
                 const segEnd = seg.startDist + seg.length;
                 const a = Math.max(carvedDistance, seg.startDist);
                 const b = Math.min(dist, segEnd);
+                const tool = seg.carve ? toolForSegment(seg) : null;
 
-                if (b > a && i >= firstCutSegIndex) {
+                if (b > a && tool) {
                     const t0 = (a - seg.startDist) / seg.length;
                     const t1 = (b - seg.startDist) / seg.length;
                     const dxs = seg.end[0] - seg.start[0];
                     const dys = seg.end[1] - seg.start[1];
                     const dzs = seg.end[2] - seg.start[2];
+                    const cutId = seg.opIndex != null ? seg.opIndex + 1 : 1;
                     if (carveSweep(
+                        tool, cutId,
                         seg.start[0] + dxs * t0, seg.start[1] + dys * t0, seg.start[2] + dzs * t0,
                         seg.start[0] + dxs * t1, seg.start[1] + dys * t1, seg.start[2] + dzs * t1
                     )) changed = true;
@@ -1001,12 +1352,67 @@
             }
 
             carvedDistance = dist;
-            if (changed) stockGeomDirty = true;
+            if (changed) {
+                stockGeomDirty = true;
+                // Only worth re-uploading the colour buffer if it is actually being
+                // looked at. In Uniform mode every vertex already holds the base colour,
+                // so playback costs exactly what it did before colouring existed.
+                if (stockColorModeEl.value !== 'off') stockColorDirty = true;
+            }
         }
 
         // --- G-Code Parser ---
         function cleanLine(line) {
             return line.replace(/\(.*?\)/g, '').replace(/;.*/, '').trim().toUpperCase();
+        }
+
+        // CAM posts declare each tool's geometry in a comment block above the program:
+        //
+        //   (T4  D=12.7 CR=0. - ZMIN=-13.5 - flat end mill)
+        //   (T11  D=4. CR=0. TAPER=90deg - ZMIN=-1.5 - spot drill)
+        //
+        // This has to run on the raw lines: cleanLine() strips parenthesised comments
+        // before the parser ever sees them. Requiring `D=` is what keeps banner comments
+        // like "(TOOL CHANGE)" out. Trailing-dot numbers ("CR=0.") and the glued unit
+        // ("90deg") both come out of parseFloat unaided.
+        const TOOL_HEADER_RE =
+            /^\s*\(\s*T(\d+)\s+D=(-?[\d.]+)\s+CR=(-?[\d.]+)(?:\s+TAPER=(-?[\d.]+)\s*deg)?\s*-\s*ZMIN=(-?[\d.]+)\s*-\s*([^)]*)\)/i;
+
+        // An operation name rides on its N word: "N10(Facing - 0.5 EM)". Same story --
+        // read it off the raw line, before the comment is stripped.
+        const OP_COMMENT_RE = /^\s*N\d+\s*\(([^)]*)\)/i;
+
+        function parseToolTable(lines) {
+            const table = new Map();
+            lines.forEach(raw => {
+                const m = TOOL_HEADER_RE.exec(raw);
+                if (!m) return;
+
+                const number = parseInt(m[1], 10);
+                const typeText = m[6].trim();
+                const family = toolFamily(typeText);
+                const tool = buildTool({
+                    diameter: parseFloat(m[2]),
+                    cornerRadius: parseFloat(m[3]),
+                    taperDeg: m[4] === undefined ? NaN : parseFloat(m[4]),
+                    family,
+                    toolNum: number
+                });
+                if (!tool) return;
+
+                tool.zmin = parseFloat(m[5]);
+                tool.typeText = typeText;
+                table.set(number, tool);
+            });
+            return table;
+        }
+
+        function toolDescription(tool) {
+            if (!tool) return '—';
+            const num = tool.toolNum != null ? `T${tool.toolNum} · ` : '';
+            const dia = `Ø${+tool.diameter.toFixed(3)}`;
+            const kind = tool.typeText || tool.family;
+            return `${num}${dia}${kind ? ' ' + kind : ''}`;
         }
 
         // G-code never states where the tool sits before the first move. Assuming the
@@ -1062,9 +1468,16 @@
             minFeed = Infinity;
             maxFeed = -Infinity;
             totalPathLength = 0;
+            operations = [];
+            toolColorIndex = new Map();
 
             const lines = text.split('\n');
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
+
+            // Both pre-passes read raw lines, so they belong here, before anything calls
+            // cleanLine(). The tool table also has to exist before the synthetic approach
+            // segment below, which records the tool it descends with.
+            fileTools = parseToolTable(lines);
 
             // The modal position starts *at* the first point, not above it: a program
             // that never commands Z must still run at its own Z, not at the raised one.
@@ -1074,6 +1487,55 @@
             let relativeMode = false;
             let currentMotion = 'G0';
             let currentFeed = 0;
+
+            // --- Tool change and operation state ---
+            // Gating the change on M6 matters because some posts pre-stage the next tool
+            // with a bare T word mid-cut. But plenty of hand-written and hobby files never
+            // emit M6 at all, and there the T word *is* the change -- so settle which
+            // convention this file uses up front.
+            //
+            // The scan runs on cleaned lines, not raw ones: "N90(M6 Tap Drill Blind)" is a
+            // comment, and a raw scan would take it for a tool change.
+            const fileHasM6 = lines.some(raw => /(?:^|\s)M0?6(?:\s|$)/.test(cleanLine(raw)));
+            let activeTool = null;      // committed T number
+            let pendingTool = null;     // seen a T word, waiting for M6
+            let currentOp = -1;
+
+            // An operation starts at an N-word comment, at a tool change, or at the first
+            // move of a file that has neither -- so there is always at least one, and
+            // every emitted segment belongs to it.
+            //
+            // Consecutive boundaries with no motion between them (an N comment on the
+            // line above a tool change, or two N comments in a row) rewrite the pending
+            // entry instead of stacking up empty ones that would each claim a colour.
+            function startOperation(label) {
+                if (currentOp >= 0 && operations[currentOp].firstSegIndex === parsedSegments.length) {
+                    operations[currentOp].label = label;
+                    operations[currentOp].toolNum = activeTool;
+                    return;
+                }
+                operations.push({ label: label, toolNum: activeTool, firstSegIndex: parsedSegments.length });
+                currentOp = operations.length - 1;
+            }
+
+            function commitTool(num) {
+                if (num == null || activeTool === num) return;
+                activeTool = num;
+                pendingTool = null;
+                // A tool change begins a new operation unless the N comment on the line
+                // above already opened an empty one, in which case just adopt the tool.
+                if (currentOp >= 0 && operations[currentOp].firstSegIndex === parsedSegments.length) {
+                    operations[currentOp].toolNum = activeTool;
+                } else {
+                    startOperation(`T${activeTool}`);
+                }
+            }
+
+            // --- Canned drilling cycle state (G73/G81/G82/G83, cancelled by G80) ---
+            let cannedMode = null;
+            let cannedZ = 0, cannedR = 0, cannedQ = 0;
+            let returnMode = 'G98';
+            let initialZ = 0;
 
             bounds = {
                 minX: Infinity, maxX: -Infinity,
@@ -1090,18 +1552,101 @@
                 bounds.maxZ = Math.max(bounds.maxZ, z);
             }
 
+            // Emits one segment and advances the running path length. Zero-length moves
+            // are dropped. `carve` is filled in by the post-pass once the whole segment
+            // list exists.
+            function pushSegment(start, end, motion, feed) {
+                const segDist = Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]);
+                if (segDist <= 0) return;
+                // A file with no N comments and no tool change still needs somewhere to
+                // put its cuts, or every carved sample would be stamped with a cut id
+                // that has no operation behind it.
+                if (currentOp < 0) startOperation(activeTool != null ? `T${activeTool}` : 'Program');
+                parsedSegments.push({
+                    start,
+                    end,
+                    motion,
+                    feedrate: feed,
+                    length: segDist,
+                    startDist: totalPathLength,
+                    toolNum: activeTool,
+                    opIndex: currentOp < 0 ? null : currentOp,
+                    carve: false
+                });
+                totalPathLength += segDist;
+            }
+
+            // One hole of a canned drilling cycle, expanded into the moves a machine
+            // actually makes: position over the hole, rapid to the R plane, feed to
+            // depth, retract. G83 pecks by Q with a full retract to R between pecks;
+            // G73 breaks the chip with a short back-off instead. Without this the axis
+            // words on a G81 line read as ordinary modal moves and drag a trench between
+            // the hole positions.
+            function emitDrillCycle(hx, hy) {
+                const feed = currentFeed;
+                if (feed > 0) {
+                    minFeed = Math.min(minFeed, feed);
+                    maxFeed = Math.max(maxFeed, feed);
+                }
+
+                // Position over the hole at whatever height we are already at, then drop
+                // to the retract plane.
+                let cur = [currentPos.x, currentPos.y, currentPos.z];
+                const over = [hx, hy, currentPos.z];
+                pushSegment(cur, over, 'G0', 0);
+                cur = over;
+
+                const atR = [hx, hy, cannedR];
+                pushSegment(cur, atR, 'G0', 0);
+                cur = atR;
+
+                const depth = cannedR - cannedZ;
+                const pecks = (cannedMode === 'G83' || cannedMode === 'G73') && cannedQ > 0 && depth > 0
+                    ? Math.ceil(depth / cannedQ)
+                    : 1;
+                const chipBreak = Math.min(Math.max(depth * 0.02, 0.1), 1);
+
+                for (let p = 1; p <= pecks; p++) {
+                    const z = pecks === 1 ? cannedZ : Math.max(cannedZ, cannedR - cannedQ * p);
+                    const down = [hx, hy, z];
+                    pushSegment(cur, down, 'G1', feed);
+                    cur = down;
+                    updateBounds(hx, hy, z);
+
+                    if (p < pecks) {
+                        const backTo = cannedMode === 'G83' ? cannedR : Math.min(cannedR, z + chipBreak);
+                        const up = [hx, hy, backTo];
+                        pushSegment(cur, up, 'G0', 0);
+                        cur = up;
+                    }
+                }
+
+                const retractZ = returnMode === 'G98' ? Math.max(initialZ, cannedR) : cannedR;
+                const out = [hx, hy, retractZ];
+                pushSegment(cur, out, 'G0', 0);
+
+                updateBounds(hx, hy, cannedR);
+                currentPos = { x: hx, y: hy, z: retractZ };
+            }
+
             // Prepend the straight-down approach to the first point.
             if (startPoint.clearance > 0) {
                 const above = [startPoint.x, startPoint.y, startPoint.z + startPoint.clearance];
                 const firstPoint = [startPoint.x, startPoint.y, startPoint.z];
 
+                // Explicit fields rather than relying on undefined being falsy: an unset
+                // toolNum here would make the tool mesh flip between this segment and the
+                // next one on every frame of the opening descent.
                 parsedSegments.push({
                     start: above,
                     end: firstPoint,
                     motion: 'G0',
                     feedrate: 0,
                     length: startPoint.clearance,
-                    startDist: 0
+                    startDist: 0,
+                    toolNum: null,
+                    opIndex: null,
+                    carve: false
                 });
                 totalPathLength = startPoint.clearance;
 
@@ -1112,6 +1657,10 @@
             }
 
             lines.forEach(raw => {
+                // Operation names live in the comment, so this must come before the strip.
+                const opMatch = OP_COMMENT_RE.exec(raw);
+                if (opMatch) startOperation(opMatch[1].trim());
+
                 const line = cleanLine(raw);
                 if (!line) return;
 
@@ -1119,18 +1668,37 @@
                 let target = { ...currentPos };
                 let arcIJ = { i: 0, j: 0 };
                 let hasMove = false;
+                let hasZ = false;
+                let hasR = false, rWord = 0, qWord = NaN;
+                let lineTool = null, lineM6 = false;
+                let cycleInvokedHere = false;
 
                 tokens.forEach(token => {
                     const cmd = token[0];
                     const val = parseFloat(token.substring(1));
+                    if (isNaN(val)) return;
 
                     if (cmd === 'G') {
-                        if (val === 0) currentMotion = 'G0';
-                        else if (val === 1) currentMotion = 'G1';
-                        else if (val === 2) currentMotion = 'G2';
-                        else if (val === 3) currentMotion = 'G3';
+                        // G0-G3 share modal group 1 with the drilling cycles, so any of
+                        // them cancels an active cycle. Posts that skip G80 and just
+                        // rapid away rely on this; without it the retract move would be
+                        // read as another hole at the previous depth.
+                        if (val >= 0 && val <= 3 && Number.isInteger(val)) {
+                            currentMotion = 'G' + val;
+                            cannedMode = null;
+                        }
                         else if (val === 90) relativeMode = false;
                         else if (val === 91) relativeMode = true;
+                        else if (val === 98) returnMode = 'G98';
+                        else if (val === 99) returnMode = 'G99';
+                        else if (val === 80) cannedMode = null;
+                        else if (val === 73 || val === 81 || val === 82 || val === 83) {
+                            // The return plane for G98 is wherever Z was when the cycle
+                            // was invoked, so latch it before any of this line's motion.
+                            if (cannedMode === null) initialZ = currentPos.z;
+                            cannedMode = 'G' + val;
+                            cycleInvokedHere = true;
+                        }
                     } else if (cmd === 'F') {
                         currentFeed = val;
                     } else if (cmd === 'X') {
@@ -1142,9 +1710,40 @@
                     } else if (cmd === 'Z') {
                         target.z = relativeMode ? currentPos.z + val : val;
                         hasMove = true;
+                        hasZ = true;
                     } else if (cmd === 'I') arcIJ.i = val;
                     else if (cmd === 'J') arcIJ.j = val;
+                    else if (cmd === 'R') { rWord = val; hasR = true; }
+                    else if (cmd === 'Q') qWord = Math.abs(val);
+                    else if (cmd === 'T') lineTool = val;
+                    else if (cmd === 'M' && val === 6) lineM6 = true;
                 });
+
+                // Resolved at end of line rather than inside the token loop, so the
+                // machine-standard "M6 T4" ordering works as well as the posted
+                // "T4 G43 H4 M6".
+                if (!fileHasM6) {
+                    if (lineTool != null) commitTool(lineTool);
+                } else if (lineM6) {
+                    commitTool(lineTool != null ? lineTool : pendingTool);
+                } else if (lineTool != null) {
+                    pendingTool = lineTool;
+                }
+
+                // --- Canned drilling cycle ---
+                // Handled ahead of the ordinary emitter and returned from, so the cycle's
+                // own axis words never reach it as a plain G0/G1 move.
+                if (cannedMode) {
+                    if (hasR) cannedR = relativeMode ? currentPos.z + rWord : rWord;
+                    if (hasZ) cannedZ = target.z;
+                    if (isFinite(qWord) && qWord > 0) cannedQ = qWord;
+
+                    // Any axis word in a cycle block drills a hole, and so does the
+                    // invoking block itself. A modal-only line (just a new F, say) does
+                    // not, and G80 has already cleared cannedMode by this point.
+                    if (hasMove || cycleInvokedHere) emitDrillCycle(target.x, target.y);
+                    return;
+                }
 
                 if (hasMove || currentMotion === 'G2' || currentMotion === 'G3') {
                     const start = [currentPos.x, currentPos.y, currentPos.z];
@@ -1156,23 +1755,7 @@
 
                     if (currentMotion === 'G0' || currentMotion === 'G1') {
                         const targetPos = [target.x, target.y, target.z];
-                        const segDist = Math.hypot(
-                            targetPos[0] - start[0],
-                            targetPos[1] - start[1],
-                            targetPos[2] - start[2]
-                        );
-
-                        if (segDist > 0) {
-                            parsedSegments.push({
-                                start,
-                                end: targetPos,
-                                motion: currentMotion,
-                                feedrate: currentFeed,
-                                length: segDist,
-                                startDist: totalPathLength
-                            });
-                            totalPathLength += segDist;
-                        }
+                        pushSegment(start, targetPos, currentMotion, currentFeed);
 
                         updateBounds(start[0], start[1], start[2]);
                         updateBounds(targetPos[0], targetPos[1], targetPos[2]);
@@ -1201,23 +1784,7 @@
                                 interpolatedZ
                             ];
 
-                            const segDist = Math.hypot(
-                                nextPt[0] - prevPt[0],
-                                nextPt[1] - prevPt[1],
-                                nextPt[2] - prevPt[2]
-                            );
-
-                            if (segDist > 0) {
-                                parsedSegments.push({
-                                    start: prevPt,
-                                    end: nextPt,
-                                    motion: currentMotion,
-                                    feedrate: currentFeed,
-                                    length: segDist,
-                                    startDist: totalPathLength
-                                });
-                                totalPathLength += segDist;
-                            }
+                            pushSegment(prevPt, nextPt, currentMotion, currentFeed);
 
                             updateBounds(nextPt[0], nextPt[1], nextPt[2]);
                             prevPt = nextPt;
@@ -1228,12 +1795,48 @@
                 }
             });
 
-            updateToolGeometry();
+            // --- Post-pass -------------------------------------------------------
+            // Runs on the finished segment list rather than inline, because the arc
+            // branch above emits 16 segments per line and threading state through it is
+            // where a bug would hide.
+            //
+            // `carve` is the safety net for the approach: the Z a program sits at before
+            // its first Z command is guesswork, so preamble rapids must not gouge the
+            // stock. Applied per tool block rather than once per file, since every tool
+            // change starts a fresh preamble.
+            // The prepended approach descends to the first commanded point, which the
+            // first tool is about to cut -- so it belongs to that tool. Without this it
+            // would keep toolNum null and the viewer would show the no-tool placeholder
+            // for the length of the descent, then snap to the real cutter.
+            if (parsedSegments.length > 1 && parsedSegments[0].toolNum == null) {
+                const firstTool = parsedSegments.find(seg => seg.toolNum != null);
+                if (firstTool) parsedSegments[0].toolNum = firstTool.toolNum;
+            }
 
-            // Safety net for the approach: the Z the program is at before its first Z
-            // command is still guesswork, so don't let preamble rapids gouge the stock.
-            firstCutSegIndex = parsedSegments.findIndex(seg => seg.motion !== 'G0');
-            if (firstCutSegIndex < 0) firstCutSegIndex = parsedSegments.length;
+            let seenCut = false;
+            let blockTool = parsedSegments.length > 0 ? parsedSegments[0].toolNum : null;
+            parsedSegments.forEach(seg => {
+                if (seg.toolNum !== blockTool) {
+                    blockTool = seg.toolNum;
+                    seenCut = false;
+                }
+                if (seg.motion !== 'G0') seenCut = true;
+                seg.carve = seenCut;
+            });
+
+            // Palette slots go to tools in the order they first cut, so the legend reads
+            // in machining order and a tool that never removes material never claims a
+            // colour that appears nowhere on the model.
+            parsedSegments.forEach(seg => {
+                if (!seg.carve || seg.toolNum == null) return;
+                if (!toolColorIndex.has(seg.toolNum)) toolColorIndex.set(seg.toolNum, toolColorIndex.size);
+            });
+
+            // The tool mesh is deliberately NOT built here: which tool applies depends on
+            // the file-tools checkbox, which the load handler settles only after this
+            // returns. Invalidating instead forces the first updateToolPositionByDistance
+            // to build it, by which time the source is known.
+            lastDrawnTool = undefined;
 
             document.getElementById('feed-min').innerText = minFeed === Infinity ? '0 mm/min' : `${minFeed} mm/min`;
             document.getElementById('feed-max').innerText = maxFeed === -Infinity ? '0 mm/min' : `${maxFeed} mm/min`;
@@ -1291,6 +1894,13 @@
             const posY = seg.start[1] + t * (seg.end[1] - seg.start[1]);
             const posZ = seg.start[2] + t * (seg.end[2] - seg.start[2]);
 
+            // Swap the displayed cutter when the program changes tool. Compared by
+            // identity, so this rebuilds the lathe once per tool change rather than
+            // once per frame.
+            const segTool = toolForSegment(seg);
+            if (segTool !== lastDrawnTool) updateToolGeometry(segTool);
+            applyToolMeshTint(segTool);
+
             toolMesh.position.set(posX, posY, posZ);
             toolMesh.visible = true;
 
@@ -1302,6 +1912,7 @@
 
             const activeFeed = seg.motion === 'G0' ? 'RAPID' : `${seg.feedrate} mm/min`;
             document.getElementById('sim-feed').innerText = activeFeed;
+            document.getElementById('sim-tool').innerText = segTool ? toolDescription(segTool) : '—';
             document.getElementById('sim-pos').innerText = `X${posX.toFixed(1)} Y${posY.toFixed(1)} Z${posZ.toFixed(1)}`;
         }
 
@@ -1312,6 +1923,11 @@
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(0);
             } else {
+                // Nothing to follow, but the sphere fallback is sized from `bounds`, so
+                // it still needs rebuilding after a load.
+                updateToolGeometry(currentTool);
+                applyToolMeshTint(null);
+                document.getElementById('sim-tool').innerText = '—';
                 toolMesh.visible = false;
             }
         }
@@ -1345,7 +1961,12 @@
                 createLineMesh(linearPositions, 0x0088ff);  // Blue
                 createLineMesh(arcPositions, 0x00ff88);     // Green
             } 
-            else if (colorMode === 'feedrate') {
+            else {
+                // Every remaining mode is per-segment vertex colour; only the lookup
+                // differs. The feed-rate heatmap greys its rapids, but the tool and
+                // operation modes colour them like any other move -- the point there is
+                // to see which tool owns a stretch of the program, and its rapids belong
+                // to it as much as its cuts do.
                 const positions = [];
                 const colors = [];
                 const c = new THREE.Color();
@@ -1357,12 +1978,17 @@
                 parsedSegments.forEach(seg => {
                     positions.push(...seg.start, ...seg.end);
 
-                    if (seg.motion === 'G0') {
+                    if (colorMode === 'feedrate') {
+                        if (seg.motion === 'G0') {
+                            c.setHex(0x555555);
+                        } else {
+                            const t = Math.min(Math.max((seg.feedrate - validMinFeed) / feedRange, 0), 1);
+                            c.setHSL((1 - t) * 0.666, 1.0, 0.5);
+                        }
+                    } else if (seg.opIndex == null) {
                         c.setHex(0x555555);
                     } else {
-                        const t = Math.min(Math.max((seg.feedrate - validMinFeed) / feedRange, 0), 1);
-                        const hue = (1 - t) * 0.666;
-                        c.setHSL(hue, 1.0, 0.5);
+                        c.setHex(colorForCutId(seg.opIndex + 1, colorMode));
                     }
 
                     colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
@@ -1387,11 +2013,65 @@
             toolpathGroup.add(lineSegments);
         }
 
+        // The swatch list for a per-tool or per-operation palette. Shared by the toolpath
+        // legend and the stock legend so the two can never drift apart.
+        function renderPaletteLegend(mode) {
+            const hex = n => '#' + n.toString(16).padStart(6, '0');
+            // Operation labels come straight out of a file comment, so they cannot go
+            // into innerHTML unescaped.
+            const esc = s => String(s).replace(/[&<>"]/g, ch =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+            const rows = [];
+
+            if (mode === 'tool') {
+                toolColorIndex.forEach((slot, num) => {
+                    const tool = fileTools.get(num);
+                    rows.push([PALETTE[slot % PALETTE.length], tool ? toolDescription(tool) : `T${num}`]);
+                });
+                // Anything the stock draws must be accounted for here, or an unexplained
+                // colour on the model looks like a bug. That means the grey used for
+                // surfaces cut before any tool was named...
+                if (operations.some(op => op.toolNum == null)) {
+                    rows.push([UNASSIGNED_COLOR, 'No tool specified']);
+                }
+                // ...and a line for any declared tool that never cuts, so its absence
+                // from the model is stated rather than mysterious.
+                fileTools.forEach((tool, num) => {
+                    if (!toolColorIndex.has(num)) rows.push([null, `${toolDescription(tool)} (no cutting moves)`]);
+                });
+                if (rows.length === 0) return '<div class="legend"><div class="legend-item"><span>No tool changes in this file.</span></div></div>';
+            } else {
+                if (operations.length === 0) return '<div class="legend"><div class="legend-item"><span>No operations found.</span></div></div>';
+                operations.forEach((op, i) => {
+                    rows.push([PALETTE[i % PALETTE.length], op.label || `Operation ${i + 1}`]);
+                });
+            }
+
+            const items = rows.map(([color, label]) => `
+                        <div class="legend-item">
+                            <div class="color-box" style="background-color: ${color === null ? 'transparent' : hex(color)}; ${color === null ? 'border: 1px dashed #666;' : ''}"></div>
+                            <span>${esc(label)}</span>
+                        </div>`).join('');
+            return `<div class="legend">${items}\n                    </div>`;
+        }
+
+        // The stock's own legend. It lives in the Stock panel rather than inside
+        // #legend-container, because updateLegend() rewrites that element wholesale and
+        // would wipe this on every toolpath colour-mode change.
+        function updateToolLegend() {
+            const el = document.getElementById('tool-legend');
+            const mode = stockColorModeEl.value;
+            el.innerHTML = mode === 'off' ? '' : renderPaletteLegend(mode);
+        }
+
         function updateLegend() {
             const container = document.getElementById('legend-container');
             const colorMode = document.getElementById('color-mode').value;
 
-            if (colorMode === 'type') {
+            if (colorMode === 'tool' || colorMode === 'op') {
+                container.innerHTML = renderPaletteLegend(colorMode);
+            }
+            else if (colorMode === 'type') {
                 container.innerHTML = `
                     <div class="legend">
                         <div class="legend-item">
@@ -1450,8 +2130,10 @@
         }
 
         // Initialize Legend, and the tool state (which hides the fields the default
-        // flat end mill doesn't use).
+        // flat end mill doesn't use). This runs with no file loaded and no tool, so
+        // everything downstream has to tolerate a null tool and an empty tool table.
         updateLegend();
+        updateToolLegend();
         onToolChanged();
     </script>
 </body>
