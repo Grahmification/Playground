@@ -32,11 +32,46 @@
             overflow-y: auto;
         }
 
+        /* The rule and the padding under it belong to the row rather than the heading, so
+           the collapse button sits above the line with it instead of beside it. */
+        .sidebar-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #3c3c3c;
+            padding-bottom: 8px;
+        }
+
         h1 {
             font-size: 1.2rem;
             color: #ffffff;
-            border-bottom: 1px solid #3c3c3c;
-            padding-bottom: 8px;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        /* Only ever shown by the narrow-width rules at the end of the sheet. Sized for a
+           fingertip rather than matching the 18px .panel-toggle glyphs. */
+        .sidebar-toggle {
+            display: none;
+            flex: 0 0 auto;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            margin-left: auto;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .sidebar-toggle:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
         }
 
         .control-group {
@@ -697,6 +732,43 @@
             color: #fff;
             font-weight: 500;
         }
+
+        /* Narrow widths. A 320px sidebar is most of a phone screen, so it folds down to a
+           strip holding nothing but the button that brings it back. It stays in flow rather
+           than sliding over the view: #viewport is its flex sibling and simply takes the
+           width back, which an overlay would not give it. */
+        @media (max-width: 700px) {
+            .sidebar-toggle {
+                display: flex;
+            }
+
+            #sidebar {
+                flex: 0 0 auto;
+                width: min(320px, 80vw);
+            }
+
+            /* 8px padding either side of the 32px button, plus the 1px border the global
+               border-box sizing counts in here. */
+            body.sidebar-collapsed #sidebar {
+                width: 49px;
+                padding: 8px;
+                gap: 0;
+                overflow: hidden;
+            }
+
+            body.sidebar-collapsed #sidebar > *:not(.sidebar-head) {
+                display: none;
+            }
+
+            body.sidebar-collapsed .sidebar-head {
+                border-bottom: none;
+                padding-bottom: 0;
+            }
+
+            body.sidebar-collapsed .sidebar-head h1 {
+                display: none;
+            }
+        }
     </style>
     <!-- Three.js and OrbitControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -705,7 +777,11 @@
 <body>
 
     <div id="sidebar">
-        <h1>G-Code Visualizer</h1>
+        <div class="sidebar-head">
+            <h1>G-Code Visualizer</h1>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button"
+                    title="Hide sidebar" aria-expanded="true" aria-controls="sidebar">&#9664;</button>
+        </div>
         
         <div class="file-input-wrapper">
             <label for="gcode-file" class="btn">Open G-Code File</label>
@@ -1475,10 +1551,26 @@
 
         container.addEventListener('pointerleave', () => setViewCubeHover(null));
 
-        window.addEventListener('resize', () => {
+        // Also called when the sidebar folds, which changes the view's width without the
+        // window resizing. The zero guard is for a collapsed or not-yet-laid-out container,
+        // where the aspect ratio would come out NaN and take the projection with it.
+        function resizeViewport() {
+            if (container.clientWidth === 0 || container.clientHeight === 0) return;
             camera.aspect = container.clientWidth / container.clientHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        window.addEventListener('resize', resizeViewport);
+
+        const sidebarToggleEl = document.getElementById('sidebar-toggle');
+
+        sidebarToggleEl.addEventListener('click', () => {
+            const collapsed = document.body.classList.toggle('sidebar-collapsed');
+            sidebarToggleEl.setAttribute('aria-expanded', String(!collapsed));
+            sidebarToggleEl.innerHTML = collapsed ? '&#9654;' : '&#9664;';
+            sidebarToggleEl.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+            resizeViewport();
         });
 
         // Main Animation Loop
