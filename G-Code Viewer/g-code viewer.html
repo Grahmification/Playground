@@ -701,8 +701,15 @@
         // chords and a drill cycle into a plunge and its pecks, and the highlight has to
         // cover all of them. One instance per segment keeps that to a single draw call.
         const ACTIVE_SEG_GEOMETRY = new THREE.CylinderGeometry(1, 1, 1, 8);
+
+        // Yellow for anything that cuts, red while the move is a rapid -- the same red the
+        // toolpath draws G0 lines in, so "red means the tool is travelling, not cutting"
+        // reads the same wherever it appears.
+        const ACTIVE_SEG_COLOR = 0xffe000;
+        const ACTIVE_SEG_RAPID_COLOR = 0xff2a2a;
+
         const ACTIVE_SEG_MATERIAL = new THREE.MeshBasicMaterial({
-            color: 0xffe000, depthTest: false, depthWrite: false
+            color: ACTIVE_SEG_COLOR, depthTest: false, depthWrite: false
         });
         const ACTIVE_SEG_MIN_CAPACITY = 64;
         let activeSegmentMesh = null;
@@ -1026,6 +1033,12 @@
             }
 
             activeMoveRange = range;
+
+            // Taken from the segment under the simulation rather than the move as a whole,
+            // because a canned drill cycle is one move built from both: it reads red while
+            // positioning and yellow once it is feeding into the hole.
+            ACTIVE_SEG_MATERIAL.color.setHex(
+                seg.motion === 'G0' ? ACTIVE_SEG_RAPID_COLOR : ACTIVE_SEG_COLOR);
 
             const first = parsedSegments[range.first];
             const last = parsedSegments[range.last];
