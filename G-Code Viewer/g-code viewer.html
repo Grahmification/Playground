@@ -210,24 +210,36 @@
             min-height: 0;
         }
 
-        /* Live simulation readout, floated over the top-right of the 3D view. Transparent
-           to the mouse so it never steals an orbit drag that starts on it. */
-        #readout {
+        /* The stack of panels floated over the top-right of the 3D view. A flow column
+           rather than each panel positioning itself, so a panel that grows -- a long tool
+           description wrapping, say -- pushes the next one down instead of sliding under
+           it. Transparent to the mouse so it never steals an orbit drag that starts on it. */
+        #overlay-stack {
             position: absolute;
             top: 12px;
             right: 12px;
             z-index: 5;
-            display: grid;
-            grid-template-columns: auto auto;
-            column-gap: 16px;
-            row-gap: 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            pointer-events: none;
+        }
+
+        .overlay-panel {
             padding: 10px 12px;
             background-color: rgba(30, 30, 30, 0.78);
             border: 1px solid #3c3c3c;
             border-radius: 4px;
             font-size: 0.8rem;
             color: #aaaaaa;
-            pointer-events: none;
+        }
+
+        #readout {
+            display: grid;
+            grid-template-columns: auto auto;
+            column-gap: 16px;
+            row-gap: 4px;
         }
 
         /* The rows are grouping only -- the spans themselves are the grid items, so the
@@ -242,6 +254,27 @@
             text-align: right;
             max-width: 260px;
             overflow-wrap: anywhere;
+        }
+
+        /* The line of the program being executed, verbatim. Left-aligned and monospaced
+           because it is source text, not a measurement. */
+        #gcode-line {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            max-width: 380px;
+            font-family: monospace;
+        }
+
+        #gcode-line-number {
+            flex: 0 0 auto;
+            color: #808080;
+        }
+
+        #gcode-line-text {
+            color: #e0e0e0;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
         }
 
         /* HSMWorks-style playback scrubber pinned under the 3D view. */
@@ -504,10 +537,16 @@
 
     <div id="viewport">
         <div id="canvas-container"></div>
-        <div id="readout">
-            <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
-            <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
-            <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
+        <div id="overlay-stack">
+            <div id="readout" class="overlay-panel">
+                <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
+                <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
+                <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X0 Y0 Z0</span></div>
+            </div>
+            <div id="gcode-line" class="overlay-panel">
+                <span id="gcode-line-number"></span>
+                <span id="gcode-line-text">&mdash;</span>
+            </div>
         </div>
         <div id="loading">Parsing G-code...</div>
         <div id="timeline-bar">
@@ -651,6 +690,10 @@
         // that emitted nothing leaves a hole.
         let moveRanges = [];
         let maxMoveSegments = 0;
+        // moveIndex -> { number, text }: the line of the file that commanded the move, as
+        // written. Parallel to moveRanges, so the overlay can show the source of whatever
+        // the simulation is executing.
+        let moveSources = [];
 
         let totalPathLength = 0;
         let isSimulating = false;
@@ -2153,6 +2196,7 @@
             toolColorIndex = new Map();
             moveRanges = [];
             maxMoveSegments = 0;
+            moveSources = [];
 
             const lines = text.split('\n');
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
@@ -2239,9 +2283,16 @@
             // produce many segments -- an arc's chords, a drill cycle's plunge and pecks --
             // and the highlight needs to be able to put them back together, so every
             // segment carries the index of the move that produced it.
+            // The line of the file being processed, tracked so a move can record where it
+            // came from. emitDrillCycle() is declared outside the line loop and so cannot
+            // close over the loop's own variable.
             let currentMove = -1;
+            let currentLineNumber = 0;
+            let currentLineText = '';
+
             function beginMove() {
                 currentMove++;
+                moveSources[currentMove] = { number: currentLineNumber, text: currentLineText };
             }
 
             // Emits one segment and advances the running path length. Zero-length moves
@@ -2332,6 +2383,10 @@
                 // Explicit fields rather than relying on undefined being falsy: an unset
                 // toolNum here would make the tool mesh flip between this segment and the
                 // next one on every frame of the opening descent.
+                // This descent is the viewer's own invention, so it names itself rather
+                // than pointing at a line of the file that does not command it.
+                currentLineNumber = 0;
+                currentLineText = '(approach to first point)';
                 beginMove();
                 parsedSegments.push({
                     start: above,
@@ -2353,13 +2408,18 @@
                 updateBounds(firstPoint[0], firstPoint[1], firstPoint[2]);
             }
 
-            lines.forEach(raw => {
+            lines.forEach((raw, index) => {
                 // Operation names live in the comment, so this must come before the strip.
                 const opMatch = OP_COMMENT_RE.exec(raw);
                 if (opMatch) startOperation(opMatch[1].trim());
 
                 const line = cleanLine(raw);
                 if (!line) return;
+
+                // Recorded raw rather than cleaned: the overlay shows the program as
+                // written, comments and original casing included.
+                currentLineNumber = index + 1;
+                currentLineText = raw.trim();
 
                 const tokens = line.split(/\s+/);
                 let target = { ...currentPos };
@@ -2639,6 +2699,17 @@
             return parsedSegments[lo];
         }
 
+        // The overlay showing the line of the program being executed. `source` is absent
+        // for a move the file did not command -- only the synthetic approach, which names
+        // itself and carries line 0, so the number is dropped rather than shown as "N0".
+        const gcodeLineNumberEl = document.getElementById('gcode-line-number');
+        const gcodeLineTextEl = document.getElementById('gcode-line-text');
+
+        function showGCodeLine(source) {
+            gcodeLineNumberEl.innerText = source && source.number > 0 ? String(source.number) : '';
+            gcodeLineTextEl.innerText = source ? source.text : '—';
+        }
+
         function updateToolPositionByDistance(dist) {
             if (parsedSegments.length === 0) return;
 
@@ -2669,6 +2740,8 @@
             const pct = (dist / totalPathLength) * 100;
             showProgressPct(pct);
 
+            showGCodeLine(moveSources[seg.moveIndex]);
+
             const activeFeed = seg.motion === 'G0' ? 'RAPID' : `${seg.feedrate} mm/min`;
             document.getElementById('sim-feed').innerText = activeFeed;
             document.getElementById('sim-tool').innerText = segTool ? toolDescription(segTool) : '—';
@@ -2687,6 +2760,7 @@
                 updateToolGeometry(currentTool);
                 applyToolMeshTint(null);
                 showProgressPct(0);
+                showGCodeLine(null);
                 document.getElementById('sim-tool').innerText = '—';
                 toolMesh.visible = false;
                 refreshToolpathVisibility();
