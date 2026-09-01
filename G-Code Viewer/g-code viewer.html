@@ -397,6 +397,71 @@
                 <button id="btn-reset" class="btn btn-secondary">Reset</button>
             </div>
             <div class="control-group">
+                <label for="sim-speed">Simulation Speed</label>
+                <select id="sim-speed">
+                    <option value="0.5">0.5x Speed</option>
+                    <option value="1" selected>1x Real-time</option>
+                    <option value="5">5x Speed</option>
+                    <option value="10">10x Speed</option>
+                    <option value="50">50x Speed</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Stock Simulation -->
+        <div class="panel">
+            <div class="panel-title">Stock Simulation</div>
+            <label class="check-row">
+                <input type="checkbox" id="stock-enabled">
+                <span>Show stock &amp; simulate cutting</span>
+            </label>
+            <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter under Manual Tool below to remove material.</div>
+            <label class="check-row">
+                <input type="checkbox" id="use-file-tools" disabled>
+                <span>Use tool geometry from G-code file</span>
+            </label>
+            <div id="file-tools-hint" class="hint hint-muted">Open a file whose header lists its tools.</div>
+            <div class="control-group">
+                <label for="stock-res">Stock Resolution</label>
+                <select id="stock-res">
+                    <option value="220">Low (fastest)</option>
+                    <option value="360">High</option>
+                    <option value="500" selected>Very High</option>
+                    <option value="1200">Ultra (slowest)</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="stock-color-mode">Stock Color</label>
+                <select id="stock-color-mode">
+                    <option value="off">Uniform</option>
+                    <option value="tool">By Tool</option>
+                    <option value="op" selected>By Operation</option>
+                </select>
+            </div>
+            <div id="tool-legend"></div>
+            <div class="control-group">
+                <label for="stock-margin">Stock Margin (mm)</label>
+                <input type="number" id="stock-margin" value="5" min="0" step="1">
+            </div>
+            <div class="btn-row">
+                <div class="control-group">
+                    <label for="stock-top">Stock Top Z</label>
+                    <input type="number" id="stock-top" step="0.1">
+                </div>
+                <div class="control-group">
+                    <label for="stock-bottom">Stock Bottom Z</label>
+                    <input type="number" id="stock-bottom" step="0.1">
+                </div>
+            </div>
+            <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
+            <div class="stats-row"><span>Material Removed:</span> <span id="stock-removed" class="stats-value">0.0 %</span></div>
+        </div>
+
+        <!-- Manual Tool. Only in play when the file has no tool table, or when the
+             "use tool geometry from G-code file" box above is cleared. -->
+        <div class="panel">
+            <div class="panel-title">Manual Tool</div>
+            <div class="control-group">
                 <label for="tool-diameter">Tool Diameter (mm) [Optional]</label>
                 <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1">
             </div>
@@ -423,65 +488,6 @@
                 <input type="number" id="tool-tip-diameter" value="0" min="0" step="0.1">
                 <div class="hint hint-muted">0 for a sharp V-bit.</div>
             </div>
-            <div class="control-group">
-                <label for="sim-speed">Simulation Speed</label>
-                <select id="sim-speed">
-                    <option value="0.5">0.5x Speed</option>
-                    <option value="1" selected>1x Real-time</option>
-                    <option value="5">5x Speed</option>
-                    <option value="10">10x Speed</option>
-                    <option value="50">50x Speed</option>
-                </select>
-            </div>
-        </div>
-
-        <!-- Stock Simulation -->
-        <div class="panel">
-            <div class="panel-title">Stock Simulation</div>
-            <label class="check-row">
-                <input type="checkbox" id="stock-enabled">
-                <span>Show stock &amp; simulate cutting</span>
-            </label>
-            <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter above to remove material.</div>
-            <label class="check-row">
-                <input type="checkbox" id="use-file-tools" disabled>
-                <span>Use tool geometry from G-code file</span>
-            </label>
-            <div id="file-tools-hint" class="hint hint-muted">Open a file whose header lists its tools.</div>
-            <div class="control-group">
-                <label for="stock-color-mode">Stock Color</label>
-                <select id="stock-color-mode">
-                    <option value="off" selected>Uniform</option>
-                    <option value="tool">By Tool</option>
-                    <option value="op">By Operation</option>
-                </select>
-            </div>
-            <div id="tool-legend"></div>
-            <div class="control-group">
-                <label for="stock-margin">Stock Margin (mm)</label>
-                <input type="number" id="stock-margin" value="5" min="0" step="1">
-            </div>
-            <div class="btn-row">
-                <div class="control-group">
-                    <label for="stock-top">Stock Top Z</label>
-                    <input type="number" id="stock-top" step="0.1">
-                </div>
-                <div class="control-group">
-                    <label for="stock-bottom">Stock Bottom Z</label>
-                    <input type="number" id="stock-bottom" step="0.1">
-                </div>
-            </div>
-            <div class="control-group">
-                <label for="stock-res">Stock Resolution</label>
-                <select id="stock-res">
-                    <option value="220">Low (fastest)</option>
-                    <option value="360" selected>High</option>
-                    <option value="500">Very High</option>
-                    <option value="1200">Ultra (slowest)</option>
-                </select>
-            </div>
-            <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
-            <div class="stats-row"><span>Material Removed:</span> <span id="stock-removed" class="stats-value">0.0 %</span></div>
         </div>
 
         <div class="panel">
@@ -1420,7 +1426,7 @@
             // The cap is a backstop against a malformed value in the select, not a working
             // limit: `target` is set from the longest side, so neither axis can exceed
             // `cells` on its own. It has to stay at or above the largest option.
-            const cells = parseInt(stockResEl.value, 10) || 360;
+            const cells = parseInt(stockResEl.value, 10) || 500;
             const target = Math.max(sizeX, sizeY) / cells;
             const nx = Math.max(1, Math.min(1600, Math.round(sizeX / target)));
             const ny = Math.max(1, Math.min(1600, Math.round(sizeY / target)));
