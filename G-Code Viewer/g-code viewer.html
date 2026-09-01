@@ -400,18 +400,25 @@
         let toolpathGroup = new THREE.Group();
         scene.add(toolpathGroup);
 
-        // A single two-point line reused for "only the segment being cut". Its endpoints
-        // are rewritten in place every frame, so its bounding sphere is always stale --
-        // hence no frustum culling.
-        const activeSegmentGeometry = new THREE.BufferGeometry();
-        activeSegmentGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-        const activeSegmentLine = new THREE.Line(
-            activeSegmentGeometry,
-            new THREE.LineBasicMaterial({ color: 0xffffff })
+        // The highlight for the segment currently being cut. WebGL ignores
+        // LineBasicMaterial.linewidth on nearly every platform, so "bold" has to be real
+        // geometry: a unit cylinder along +Y, stretched and rotated onto the segment.
+        // depthTest off is what lets it read through the tool and the stock; it is the
+        // only object in the scene that does that, and depthWrite is off so it cannot
+        // occlude anything drawn after it. It is repositioned every frame, so its
+        // bounding sphere is always stale -- hence no frustum culling.
+        const activeSegmentMesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(1, 1, 1, 8),
+            new THREE.MeshBasicMaterial({ color: 0xffe000, depthTest: false, depthWrite: false })
         );
-        activeSegmentLine.frustumCulled = false;
-        activeSegmentLine.visible = false;
-        scene.add(activeSegmentLine);
+        activeSegmentMesh.renderOrder = 999;
+        activeSegmentMesh.frustumCulled = false;
+        activeSegmentMesh.visible = false;
+        scene.add(activeSegmentMesh);
+
+        // Scratch objects for the per-frame placement above, kept out of the hot path.
+        const ACTIVE_SEG_UP = new THREE.Vector3(0, 1, 0);
+        const activeSegDir = new THREE.Vector3();
 
         // --- Tool Mesh setup ---
         const toolMaterial = new THREE.MeshStandardMaterial({ 
@@ -542,7 +549,6 @@
         document.getElementById('color-mode').addEventListener('change', () => {
             renderToolpath();
             updateLegend();
-            refreshToolpathVisibility();
         });
 
         // Hiding the lines is purely a view toggle -- the segments stay parsed so the
@@ -550,9 +556,18 @@
         const showToolpathEl = document.getElementById('show-toolpath');
         const activeSegmentOnlyEl = document.getElementById('active-segment-only');
 
-        // Decides which of the two representations is on screen, and points the
-        // single-segment line at wherever the simulation currently is. Cheap enough to
-        // call from the per-frame position update.
+        // How thick the highlight is drawn. Scaled to the job so it stays legible on a
+        // 300 mm part without swamping a 5 mm one.
+        function activeSegmentRadius() {
+            const maxDim = Math.max(
+                bounds.maxX - bounds.minX,
+                bounds.maxY - bounds.minY,
+                bounds.maxZ - bounds.minZ);
+            return isFinite(maxDim) && maxDim > 0 ? maxDim * 0.004 : 0.2;
+        }
+
+        // Decides what is on screen and lays the highlight over wherever the simulation
+        // currently is. Cheap enough to call from the per-frame position update.
         function refreshToolpathVisibility() {
             const showLines = showToolpathEl.checked;
             const activeOnly = activeSegmentOnlyEl.checked;
@@ -560,21 +575,35 @@
             activeSegmentOnlyEl.disabled = !showLines;
             toolpathGroup.visible = showLines && !activeOnly;
 
-            const seg = showLines && activeOnly && parsedSegments.length > 0
+            // The highlight is part of the toolpath display, so it goes away with it --
+            // but it survives "active only", where it is the whole display.
+            const seg = showLines && parsedSegments.length > 0
                 ? getCurrentSegment(currentDistance)
                 : null;
             if (!seg) {
-                activeSegmentLine.visible = false;
+                activeSegmentMesh.visible = false;
                 return;
             }
 
-            const pos = activeSegmentLine.geometry.attributes.position;
-            pos.setXYZ(0, seg.start[0], seg.start[1], seg.start[2]);
-            pos.setXYZ(1, seg.end[0], seg.end[1], seg.end[2]);
-            pos.needsUpdate = true;
-            activeSegmentLine.material.color.setHex(
-                colorForSegment(seg, document.getElementById('color-mode').value));
-            activeSegmentLine.visible = true;
+            activeSegDir.set(
+                seg.end[0] - seg.start[0],
+                seg.end[1] - seg.start[1],
+                seg.end[2] - seg.start[2]);
+            const length = activeSegDir.length();
+            if (length <= 0) {
+                activeSegmentMesh.visible = false;
+                return;
+            }
+
+            const radius = activeSegmentRadius();
+            activeSegmentMesh.position.set(
+                (seg.start[0] + seg.end[0]) / 2,
+                (seg.start[1] + seg.end[1]) / 2,
+                (seg.start[2] + seg.end[2]) / 2);
+            activeSegmentMesh.quaternion.setFromUnitVectors(
+                ACTIVE_SEG_UP, activeSegDir.divideScalar(length));
+            activeSegmentMesh.scale.set(radius, length, radius);
+            activeSegmentMesh.visible = true;
         }
 
         showToolpathEl.addEventListener('change', refreshToolpathVisibility);
@@ -1993,30 +2022,6 @@
             }
         }
 
-        // The colour one segment takes under a given mode. Shared by the full toolpath
-        // render and the active-segment line so a segment never changes colour just
-        // because the rest of the path is hidden.
-        function colorForSegment(seg, colorMode) {
-            if (colorMode === 'type') {
-                if (seg.motion === 'G0') return 0xff2a2a;   // Red
-                if (seg.motion === 'G1') return 0x0088ff;   // Blue
-                return 0x00ff88;                            // Green: G2/G3
-            }
-            if (colorMode === 'feedrate') {
-                if (seg.motion === 'G0') return 0x555555;
-                const validMinFeed = minFeed === Infinity ? 0 : minFeed;
-                const validMaxFeed = maxFeed === -Infinity ? 1 : maxFeed;
-                const feedRange = Math.max(validMaxFeed - validMinFeed, 1);
-                const t = Math.min(Math.max((seg.feedrate - validMinFeed) / feedRange, 0), 1);
-                return new THREE.Color().setHSL((1 - t) * 0.666, 1.0, 0.5).getHex();
-            }
-            // Tool and operation modes colour rapids like any other move -- the point
-            // there is to see which tool owns a stretch of the program, and its rapids
-            // belong to it as much as its cuts do.
-            if (seg.opIndex == null) return 0x555555;
-            return colorForCutId(seg.opIndex + 1, colorMode);
-        }
-
         // --- Render Toolpath Mesh ---
         function renderToolpath() {
             while (toolpathGroup.children.length > 0) {
@@ -2031,27 +2036,51 @@
             const colorMode = document.getElementById('color-mode').value;
 
             if (colorMode === 'type') {
-                // Three flat colours, so one draw call per colour beats vertex colours.
-                const byColor = new Map();
+                const rapidPositions = [];
+                const linearPositions = [];
+                const arcPositions = [];
+
                 parsedSegments.forEach(seg => {
-                    const hex = colorForSegment(seg, colorMode);
-                    let positions = byColor.get(hex);
-                    if (!positions) byColor.set(hex, positions = []);
-                    positions.push(...seg.start, ...seg.end);
+                    const pts = [...seg.start, ...seg.end];
+                    if (seg.motion === 'G0') rapidPositions.push(...pts);
+                    else if (seg.motion === 'G1') linearPositions.push(...pts);
+                    else if (seg.motion === 'G2' || seg.motion === 'G3') arcPositions.push(...pts);
                 });
 
-                byColor.forEach((positions, hex) => createLineMesh(positions, hex));
+                createLineMesh(rapidPositions, 0xff2a2a);   // Red
+                createLineMesh(linearPositions, 0x0088ff);  // Blue
+                createLineMesh(arcPositions, 0x00ff88);     // Green
             }
             else {
-                // Every remaining mode varies per segment, so it goes into one buffer
-                // with vertex colours.
+                // Every remaining mode is per-segment vertex colour; only the lookup
+                // differs. The feed-rate heatmap greys its rapids, but the tool and
+                // operation modes colour them like any other move -- the point there is
+                // to see which tool owns a stretch of the program, and its rapids belong
+                // to it as much as its cuts do.
                 const positions = [];
                 const colors = [];
                 const c = new THREE.Color();
 
+                const validMinFeed = minFeed === Infinity ? 0 : minFeed;
+                const validMaxFeed = maxFeed === -Infinity ? 1 : maxFeed;
+                const feedRange = Math.max(validMaxFeed - validMinFeed, 1);
+
                 parsedSegments.forEach(seg => {
                     positions.push(...seg.start, ...seg.end);
-                    c.setHex(colorForSegment(seg, colorMode));
+
+                    if (colorMode === 'feedrate') {
+                        if (seg.motion === 'G0') {
+                            c.setHex(0x555555);
+                        } else {
+                            const t = Math.min(Math.max((seg.feedrate - validMinFeed) / feedRange, 0), 1);
+                            c.setHSL((1 - t) * 0.666, 1.0, 0.5);
+                        }
+                    } else if (seg.opIndex == null) {
+                        c.setHex(0x555555);
+                    } else {
+                        c.setHex(colorForCutId(seg.opIndex + 1, colorMode));
+                    }
+
                     colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
                 });
 
