@@ -251,20 +251,20 @@
             max-height: calc(100% - 24px);
         }
 
-        #stock-legend {
+        #legend-stack .overlay-panel {
             display: flex;
             flex-direction: column;
             max-width: 280px;
             overflow: hidden;
         }
 
-        /* An id setting `display` outranks the browser's own [hidden] rule, so hiding the
+        /* A rule setting `display` outranks the browser's own [hidden] rule, so hiding a
            panel has to be spelled out or it never goes away. */
-        #stock-legend[hidden] {
+        #legend-stack .overlay-panel[hidden] {
             display: none;
         }
 
-        #stock-legend-head {
+        .legend-head {
             flex: 0 0 auto;
             display: flex;
             align-items: center;
@@ -272,7 +272,7 @@
             color: #e0e0e0;
         }
 
-        #tool-legend {
+        .legend-body {
             flex: 1 1 auto;
             min-height: 0;
             margin-top: 8px;
@@ -285,13 +285,13 @@
 
         /* The legend blocks carry their own panel chrome, which would double up inside a
            panel that already has some. */
-        #tool-legend .legend {
+        .legend-body .legend {
             background-color: transparent;
             border: none;
             padding: 0;
         }
 
-        #tool-legend .legend + .legend {
+        .legend-body .legend + .legend {
             margin-top: 8px;
             padding-top: 8px;
             border-top: 1px solid #3c3c3c;
@@ -572,8 +572,6 @@
             </label>
         </div>
 
-        <div id="legend-container"></div>
-
         <!-- Simulation Controls -->
         <div class="panel">
             <div class="panel-title">Simulation Controls</div>
@@ -689,13 +687,21 @@
     <div id="viewport">
         <div id="canvas-container">
             <div id="legend-stack">
+                <div id="toolpath-legend" class="overlay-panel" hidden>
+                    <div class="legend-head">
+                        <span>Line Colors</span>
+                        <button id="toolpath-legend-toggle" class="panel-toggle" type="button"
+                                title="Show line colors" aria-expanded="false">&#9662;</button>
+                    </div>
+                    <div id="legend-container" class="legend-body" hidden></div>
+                </div>
                 <div id="stock-legend" class="overlay-panel" hidden>
-                    <div id="stock-legend-head">
+                    <div class="legend-head">
                         <span>Stock Colors</span>
                         <button id="stock-legend-toggle" class="panel-toggle" type="button"
                                 title="Show stock colors" aria-expanded="false">&#9662;</button>
                     </div>
-                    <div id="tool-legend" hidden></div>
+                    <div id="tool-legend" class="legend-body" hidden></div>
                 </div>
             </div>
             <div id="overlay-stack">
@@ -3223,11 +3229,9 @@
             return `<div class="legend">${items}\n                    </div>`;
         }
 
-        // The stock's own legend, inside the help popup beside the Stock Color label. It
-        // lives in the Stock panel rather than inside #legend-container, because
-        // updateLegend() rewrites that element wholesale and would wipe this on every
-        // toolpath colour-mode change. Behind a popup because a job with thirty operations
-        // produced thirty rows, and the sidebar became a wall of swatches.
+        // The stock's own legend, in its own overlay panel under the toolpath one. Separate
+        // from #legend-container because updateLegend() rewrites that element wholesale and
+        // would wipe this on every toolpath colour-mode change.
         // Collapsed by default: a job with thirty operations is thirty rows, which is a
         // wall of swatches to have standing over the model until it is asked for.
         let stockLegendExpanded = false;
@@ -3263,9 +3267,18 @@
             updateToolLegend();
         });
 
+        // Collapsed by default, like the stock legend beneath it: the key is worth having
+        // to hand, not worth standing over the model uninvited.
+        let toolpathLegendExpanded = false;
+
         function updateLegend() {
             const container = document.getElementById('legend-container');
+            const panel = document.getElementById('toolpath-legend');
             const colorMode = document.getElementById('color-mode').value;
+
+            // Nothing is drawn before a file is opened, so there is nothing to key.
+            panel.hidden = parsedSegments.length === 0;
+            container.hidden = !toolpathLegendExpanded || panel.hidden;
 
             if (colorMode === 'tool' || colorMode === 'op') {
                 container.innerHTML = renderPaletteLegend(colorMode);
@@ -3305,6 +3318,14 @@
                 `;
             }
         }
+
+        document.getElementById('toolpath-legend-toggle').addEventListener('click', (e) => {
+            toolpathLegendExpanded = !toolpathLegendExpanded;
+            e.currentTarget.setAttribute('aria-expanded', String(toolpathLegendExpanded));
+            e.currentTarget.innerHTML = toolpathLegendExpanded ? '&#9652;' : '&#9662;';
+            e.currentTarget.title = toolpathLegendExpanded ? 'Hide line colors' : 'Show line colors';
+            updateLegend();
+        });
 
         // Most programs cut into negative Z, so a grid left at Z0 sits between the camera
         // and the part and hides the very thing being watched. Drop it to the floor of
