@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D G-Code Toolpath Viewer & Material Removal Simulator</title>
+    <title>3D G-Code Toolpath Viewer & Simulator</title>
     <style>
         * {
             box-sizing: border-box;
@@ -21,19 +21,19 @@
         }
 
         #sidebar {
-            width: 330px;
+            width: 320px;
             background-color: #252526;
             border-right: 1px solid #3c3c3c;
             display: flex;
             flex-direction: column;
             padding: 16px;
-            gap: 12px;
+            gap: 14px;
             z-index: 10;
             overflow-y: auto;
         }
 
         h1 {
-            font-size: 1.15rem;
+            font-size: 1.2rem;
             color: #ffffff;
             border-bottom: 1px solid #3c3c3c;
             padding-bottom: 8px;
@@ -42,21 +42,12 @@
         .control-group {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-        }
-
-        .control-group label {
-            font-size: 0.8rem;
-            color: #aaaaaa;
-        }
-
-        .input-row {
-            display: flex;
             gap: 6px;
         }
 
-        .input-row input {
-            width: 33.33%;
+        .control-group label {
+            font-size: 0.85rem;
+            color: #aaaaaa;
         }
 
         select, input[type="range"], input[type="number"] {
@@ -66,7 +57,7 @@
             color: #e0e0e0;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             outline: none;
         }
 
@@ -87,7 +78,7 @@
         .btn {
             display: block;
             width: 100%;
-            padding: 9px;
+            padding: 10px;
             background-color: #0e639c;
             color: white;
             text-align: center;
@@ -96,7 +87,6 @@
             font-weight: 500;
             border: none;
             transition: background 0.2s;
-            font-size: 0.85rem;
         }
 
         .btn:hover {
@@ -105,8 +95,8 @@
 
         .btn-secondary {
             background-color: #3c3c3c;
-            padding: 7px;
-            font-size: 0.8rem;
+            padding: 8px;
+            font-size: 0.85rem;
         }
 
         .btn-secondary:hover {
@@ -115,18 +105,43 @@
 
         .btn-row {
             display: flex;
-            gap: 6px;
+            gap: 8px;
+        }
+
+        .btn-row .control-group {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .check-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #e0e0e0;
+            cursor: pointer;
+        }
+
+        .check-row input[type="checkbox"] {
+            width: auto;
+            cursor: pointer;
+        }
+
+        .hint {
+            font-size: 0.75rem;
+            color: #d4a05a;
+            line-height: 1.3;
         }
 
         .panel {
             background-color: #1e1e1e;
             border-radius: 4px;
-            padding: 10px;
+            padding: 12px;
             border: 1px solid #3c3c3c;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 8px;
         }
 
         .panel-title {
@@ -135,7 +150,6 @@
             border-bottom: 1px solid #2a2a2a;
             padding-bottom: 4px;
             margin-bottom: 2px;
-            font-size: 0.85rem;
         }
 
         .stats-row {
@@ -151,10 +165,10 @@
         .legend {
             display: flex;
             flex-direction: column;
-            gap: 5px;
-            font-size: 0.8rem;
+            gap: 6px;
+            font-size: 0.85rem;
             background-color: #1e1e1e;
-            padding: 8px;
+            padding: 10px;
             border-radius: 4px;
             border: 1px solid #3c3c3c;
         }
@@ -172,7 +186,7 @@
         }
 
         .heatmap-bar {
-            height: 10px;
+            height: 12px;
             border-radius: 2px;
             background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
             width: 100%;
@@ -193,22 +207,22 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.8);
             padding: 16px 24px;
             border-radius: 8px;
             display: none;
             color: #fff;
             font-weight: 500;
-            text-align: center;
         }
     </style>
+    <!-- Three.js and OrbitControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
 
     <div id="sidebar">
-        <h1>G-Code Visualizer & Simulator</h1>
+        <h1>G-Code Visualizer</h1>
         
         <div class="file-input-wrapper">
             <label for="gcode-file" class="btn">Open G-Code File</label>
@@ -225,32 +239,7 @@
 
         <div id="legend-container"></div>
 
-        <!-- Stock Setup Panel -->
-        <div class="panel">
-            <div class="panel-title">Stock Setup</div>
-            <div class="control-group">
-                <label>Dimensions X, Y, Z (mm)</label>
-                <div class="input-row">
-                    <input type="number" id="stock-x" placeholder="X" min="1" step="1" value="100">
-                    <input type="number" id="stock-y" placeholder="Y" min="1" step="1" value="100">
-                    <input type="number" id="stock-z" placeholder="Z" min="1" step="1" value="20">
-                </div>
-            </div>
-            <div class="control-group">
-                <label>Origin Min X, Y, Z (mm)</label>
-                <div class="input-row">
-                    <input type="number" id="stock-orig-x" placeholder="Min X" step="1" value="0">
-                    <input type="number" id="stock-orig-y" placeholder="Min Y" step="1" value="0">
-                    <input type="number" id="stock-orig-z" placeholder="Min Z" step="1" value="-20">
-                </div>
-            </div>
-            <div class="btn-row">
-                <button id="btn-apply-stock" class="btn btn-secondary">Apply Stock</button>
-                <button id="btn-auto-stock" class="btn btn-secondary">Auto-Fit to Path</button>
-            </div>
-        </div>
-
-        <!-- Simulation Controls Panel -->
+        <!-- Simulation Controls -->
         <div class="panel">
             <div class="panel-title">Simulation Controls</div>
             <div class="btn-row">
@@ -258,8 +247,8 @@
                 <button id="btn-reset" class="btn btn-secondary">Reset</button>
             </div>
             <div class="control-group">
-                <label for="tool-diameter">Tool Diameter (mm)</label>
-                <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1" value="6">
+                <label for="tool-diameter">Tool Diameter (mm) [Optional]</label>
+                <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1">
             </div>
             <div class="control-group">
                 <label for="sim-speed">Simulation Speed</label>
@@ -277,6 +266,40 @@
             </div>
             <div class="stats-row"><span>Current Feed:</span> <span id="sim-feed" class="stats-value">0 mm/min</span></div>
             <div class="stats-row"><span>Tool Pos:</span> <span id="sim-pos" class="stats-value">X0 Y0 Z0</span></div>
+        </div>
+
+        <!-- Stock Simulation -->
+        <div class="panel">
+            <div class="panel-title">Stock Simulation</div>
+            <label class="check-row">
+                <input type="checkbox" id="stock-enabled">
+                <span>Show stock &amp; simulate cutting</span>
+            </label>
+            <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter above to remove material.</div>
+            <div class="control-group">
+                <label for="stock-margin">Stock Margin (mm)</label>
+                <input type="number" id="stock-margin" value="5" min="0" step="1">
+            </div>
+            <div class="btn-row">
+                <div class="control-group">
+                    <label for="stock-top">Stock Top Z</label>
+                    <input type="number" id="stock-top" step="0.1">
+                </div>
+                <div class="control-group">
+                    <label for="stock-bottom">Stock Bottom Z</label>
+                    <input type="number" id="stock-bottom" step="0.1">
+                </div>
+            </div>
+            <div class="control-group">
+                <label for="stock-res">Stock Resolution</label>
+                <select id="stock-res">
+                    <option value="100">Low (fastest)</option>
+                    <option value="220" selected>Medium</option>
+                    <option value="360">High (slowest)</option>
+                </select>
+            </div>
+            <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
+            <div class="stats-row"><span>Material Removed:</span> <span id="stock-removed" class="stats-value">0.0 %</span></div>
         </div>
 
         <div class="panel">
@@ -300,11 +323,10 @@
         // --- 3D Scene Setup ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1e1e1e);
+        scene.background = new THREE.Color(0x1a1a1a);
 
         const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 10000);
-        camera.position.set(150, -150, 120);
-        camera.up.set(0, 0, 1);
+        camera.position.set(100, 100, 100);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(container.clientWidth, container.clientHeight);
@@ -315,20 +337,12 @@
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
 
-        // Enhanced Ambient & Directional Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+        // Lighting & Grid Helper
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
 
-        const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight1.position.set(200, -200, 300);
-        scene.add(dirLight1);
-
-        const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.5);
-        dirLight2.position.set(-200, 200, -100);
-        scene.add(dirLight2);
-
-        const gridHelper = new THREE.GridHelper(200, 50, 0x666666, 0x333333);
-        gridHelper.rotation.x = Math.PI / 2;
+        const gridHelper = new THREE.GridHelper(200, 50, 0x444444, 0x222222);
+        gridHelper.rotation.x = Math.PI / 2; // Orient grid along X/Y plane for CNC
         scene.add(gridHelper);
 
         let toolpathGroup = new THREE.Group();
@@ -336,8 +350,8 @@
 
         // --- Tool Mesh setup ---
         const toolMaterial = new THREE.MeshStandardMaterial({ 
-            color: 0xff3300, 
-            roughness: 0.2,
+            color: 0xffa500, 
+            roughness: 0.3,
             metalness: 0.8
         });
         
@@ -345,31 +359,48 @@
         toolMesh.visible = false;
         scene.add(toolMesh);
 
+        // Add a dedicated directional light so the 3D tool cylinder highlights nicely
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(1, 1, 2);
+        scene.add(dirLight);
+
         // --- Data & Simulation State ---
         let parsedSegments = [];
         let minFeed = Infinity;
         let maxFeed = -Infinity;
-        let bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
+        let bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
 
         let totalPathLength = 0;
         let isSimulating = false;
         let currentDistance = 0;
         let lastTimestamp = null;
-        let currentToolDiameter = 6;
+        let currentToolDiameter = null;
         const DEFAULT_RAPID_FEED = 5000;
 
-        // --- Stock Removal Voxel System ---
-        let voxelInstancedMesh = null;
-        let stockParams = null;
-        let voxelGrid = null;
-        let voxelsX = 0, voxelsY = 0, voxelsZ = 0;
-        let voxelSize = 1;
-        
-        const dummyPos = new THREE.Vector3();
-        const dummyScale = new THREE.Vector3(1, 1, 1);
-        const dummyRot = new THREE.Quaternion(0, 0, 0, 1);
-        const matrixDummy = new THREE.Matrix4();
-        const zeroScale = new THREE.Vector3(0, 0, 0);
+        // --- Stock (material removal) state ---
+        // The stock is modelled as a Z-height map: one height sample per grid vertex.
+        // Cutting only ever lowers a height, so the surface is rebuilt from scratch
+        // whenever the simulation is scrubbed backwards.
+        const stockMaterial = new THREE.MeshStandardMaterial({
+            color: 0xb8ac95,
+            roughness: 0.85,
+            metalness: 0.05,
+            flatShading: true
+        });
+
+        let stock = null;          // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, geometry, skirt }
+        let stockMesh = null;
+        let stockGeomDirty = false;
+        let carvedDistance = 0;    // how far along the path the stock has been carved
+        let carveSegIndex = 0;     // resume point into parsedSegments for carving
+        let firstCutSegIndex = 0;  // rapids before the first cutting move are not carved
+        let pendingCarve = null;   // coalesces carve requests to one per animation frame
+
+        const stockEnabledEl = document.getElementById('stock-enabled');
+        const stockMarginEl = document.getElementById('stock-margin');
+        const stockTopEl = document.getElementById('stock-top');
+        const stockBottomEl = document.getElementById('stock-bottom');
+        const stockResEl = document.getElementById('stock-res');
 
         window.addEventListener('resize', () => {
             camera.aspect = container.clientWidth / container.clientHeight;
@@ -377,7 +408,7 @@
             renderer.setSize(container.clientWidth, container.clientHeight);
         });
 
-        // Animation Loop
+        // Main Animation Loop
         function animate(timestamp) {
             requestAnimationFrame(animate);
 
@@ -387,6 +418,18 @@
                 lastTimestamp = timestamp;
 
                 updateSimulationStep(deltaSeconds);
+            }
+
+            // Carving is coalesced to once per frame so that dragging the progress
+            // slider (which can force a full re-cut) doesn't queue up work per event.
+            if (pendingCarve !== null) {
+                const target = pendingCarve;
+                pendingCarve = null;
+                carveTo(target);
+            }
+            if (stockGeomDirty) {
+                stockGeomDirty = false;
+                refreshStockGeometry();
             }
 
             controls.update();
@@ -404,13 +447,30 @@
             const val = parseFloat(e.target.value);
             currentToolDiameter = (!isNaN(val) && val > 0) ? val : null;
             updateToolGeometry();
+            updateStockHint();
+
+            // The cut depends on the tool size, so re-cut the stock from scratch.
+            if (stock) {
+                resetStockHeights();
+                requestCarve(currentDistance);
+            }
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(currentDistance);
             }
         });
 
-        document.getElementById('btn-apply-stock').addEventListener('click', applyStockFromUI);
-        document.getElementById('btn-auto-stock').addEventListener('click', autoFitStockToPath);
+        // --- Stock controls ---
+        stockEnabledEl.addEventListener('change', rebuildStock);
+        stockResEl.addEventListener('change', rebuildStock);
+        ['stock-margin', 'stock-top', 'stock-bottom'].forEach(id => {
+            document.getElementById(id).addEventListener('change', rebuildStock);
+        });
+
+        document.getElementById('btn-stock-fit').addEventListener('click', () => {
+            applySuggestedStockExtents();
+            stockMarginEl.value = '5';
+            rebuildStock();
+        });
 
         document.getElementById('gcode-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
@@ -425,8 +485,9 @@
                 renderToolpath();
                 updateLegend();
                 fitCameraToBounds();
-                applyStockFromUI();
                 resetSimulation();
+                applySuggestedStockExtents();
+                rebuildStock();
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('status').innerText = 'Loaded';
             };
@@ -449,15 +510,7 @@
         progressSlider.addEventListener('input', (e) => {
             if (parsedSegments.length === 0) return;
             const targetPct = parseFloat(e.target.value) / 100;
-            const targetDist = targetPct * totalPathLength;
-
-            if (targetDist < currentDistance) {
-                rebuildStockUpToDistance(targetDist);
-            } else {
-                subtractStockBetween(currentDistance, targetDist);
-            }
-
-            currentDistance = targetDist;
+            currentDistance = targetPct * totalPathLength;
             updateToolPositionByDistance(currentDistance);
         });
 
@@ -466,217 +519,358 @@
             toolMesh.geometry.dispose();
 
             if (currentToolDiameter) {
+                // Square End Mill: Cylinder with diameter and height = 3 * diameter
                 const radius = currentToolDiameter / 2;
                 const height = currentToolDiameter * 3;
                 
                 const geom = new THREE.CylinderGeometry(radius, radius, height, 32);
+                
+                // Align cylinder so its cutting tip sits exactly at (0,0,0) and extends upward (+Z)
                 geom.rotateX(Math.PI / 2);
                 geom.translate(0, 0, height / 2);
                 
                 toolMesh.geometry = geom;
             } else {
-                const maxDim = (bounds.minX !== Infinity && !isNaN(bounds.minX)) ? Math.max(
+                // Default fallback: Sphere scaled to part size
+                const maxDim = Math.max(
                     bounds.maxX - bounds.minX,
                     bounds.maxY - bounds.minY,
                     bounds.maxZ - bounds.minZ
-                ) : 50;
+                );
                 const radius = Math.max(maxDim * 0.012, 0.5);
                 toolMesh.geometry = new THREE.SphereGeometry(radius, 16, 16);
             }
         }
 
-        // --- Stock Removal Voxel Engine ---
-        function applyStockFromUI() {
-            const dx = parseFloat(document.getElementById('stock-x').value);
-            const dy = parseFloat(document.getElementById('stock-y').value);
-            const dz = parseFloat(document.getElementById('stock-z').value);
+        // --- Stock Simulation ---
+        function updateStockHint() {
+            const show = stockEnabledEl.checked && !currentToolDiameter;
+            document.getElementById('stock-hint').style.display = show ? 'block' : 'none';
+        }
 
-            const ox = parseFloat(document.getElementById('stock-orig-x').value);
-            const oy = parseFloat(document.getElementById('stock-orig-y').value);
-            const oz = parseFloat(document.getElementById('stock-orig-z').value);
+        // Suggested stock extents. The top is the shallowest depth a cutting move
+        // actually reaches: each feed move contributes the lowest Z it gets to (so a
+        // plunge counts where it lands, not where it starts from above the material).
+        function suggestStockExtents() {
+            let top = -Infinity;
+            parsedSegments.forEach(seg => {
+                if (seg.motion !== 'G0') top = Math.max(top, Math.min(seg.start[2], seg.end[2]));
+            });
+            if (!isFinite(top)) top = bounds.maxZ;
 
-            if (isNaN(dx) || isNaN(dy) || isNaN(dz) || dx <= 0 || dy <= 0 || dz <= 0) {
-                clearStock();
-                return;
+            let bottom = isFinite(bounds.minZ) ? bounds.minZ : top - 10;
+            if (top - bottom < 1e-6) {
+                const spanXY = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+                bottom = top - Math.max(1, spanXY * 0.05);
             }
+            return { top, bottom };
+        }
 
-            stockParams = {
-                dimX: dx, dimY: dy, dimZ: dz,
-                origX: isNaN(ox) ? 0 : ox,
-                origY: isNaN(oy) ? 0 : oy,
-                origZ: isNaN(oz) ? -dz : oz
+        function applySuggestedStockExtents() {
+            if (parsedSegments.length === 0) return;
+            const ext = suggestStockExtents();
+            stockTopEl.value = ext.top.toFixed(2);
+            stockBottomEl.value = ext.bottom.toFixed(2);
+        }
+
+        function disposeStock() {
+            if (stockMesh) {
+                scene.remove(stockMesh);
+                stockMesh.geometry.dispose();
+                stockMesh = null;
+            }
+            stock = null;
+            document.getElementById('stock-removed').innerText = '0.0 %';
+        }
+
+        function rebuildStock() {
+            disposeStock();
+            updateStockHint();
+
+            if (!stockEnabledEl.checked || parsedSegments.length === 0) return;
+
+            let top = parseFloat(stockTopEl.value);
+            let bottom = parseFloat(stockBottomEl.value);
+            if (!isFinite(top) || !isFinite(bottom)) {
+                const ext = suggestStockExtents();
+                if (!isFinite(top)) top = ext.top;
+                if (!isFinite(bottom)) bottom = ext.bottom;
+            }
+            if (bottom > top) { const tmp = top; top = bottom; bottom = tmp; }
+            if (top - bottom < 1e-6) bottom = top - 1;
+
+            const margin = Math.max(parseFloat(stockMarginEl.value) || 0, 0);
+            const minX = bounds.minX - margin;
+            const minY = bounds.minY - margin;
+            const sizeX = Math.max((bounds.maxX - bounds.minX) + 2 * margin, 1e-3);
+            const sizeY = Math.max((bounds.maxY - bounds.minY) + 2 * margin, 1e-3);
+
+            // Square-ish cells sized so the longest side gets the requested sample count
+            const cells = parseInt(stockResEl.value, 10) || 220;
+            const target = Math.max(sizeX, sizeY) / cells;
+            const nx = Math.max(1, Math.min(600, Math.round(sizeX / target)));
+            const ny = Math.max(1, Math.min(600, Math.round(sizeY / target)));
+
+            stock = {
+                nx, ny, minX, minY,
+                cellX: sizeX / nx,
+                cellY: sizeY / ny,
+                top, bottom,
+                heights: new Float32Array((nx + 1) * (ny + 1)),
+                skirt: null,
+                geometry: null
             };
 
-            initStockVoxels();
-            resetSimulation();
+            buildStockGeometry();
+            resetStockHeights();
+            requestCarve(currentDistance);
         }
 
-        function autoFitStockToPath() {
-            if (bounds.minX === Infinity) return;
+        // Builds a fixed-topology mesh: a height-map top surface, four side walls that
+        // follow the boundary heights, and a flat bottom. Only vertex Z values change
+        // as material is removed, so the index buffer is built once.
+        function buildStockGeometry() {
+            const nxv = stock.nx + 1;
+            const nyv = stock.ny + 1;
+            const topCount = nxv * nyv;
+            const skirtCount = 4 * (nxv + nyv);
+            const total = topCount + skirtCount + 4;
 
-            const padding = 5;
-            const dx = Math.ceil((bounds.maxX - bounds.minX) + padding * 2);
-            const dy = Math.ceil((bounds.maxY - bounds.minY) + padding * 2);
-            const dz = Math.ceil((bounds.maxZ - bounds.minZ) + padding * 2);
+            const positions = new Float32Array(total * 3);
+            const indices = [];
 
-            const ox = Math.floor(bounds.minX - padding);
-            const oy = Math.floor(bounds.minY - padding);
-            const oz = Math.floor(bounds.minZ - padding);
-
-            document.getElementById('stock-x').value = dx;
-            document.getElementById('stock-y').value = dy;
-            document.getElementById('stock-z').value = dz;
-
-            document.getElementById('stock-orig-x').value = ox;
-            document.getElementById('stock-orig-y').value = oy;
-            document.getElementById('stock-orig-z').value = oz;
-
-            applyStockFromUI();
-        }
-
-        function clearStock() {
-            if (voxelInstancedMesh) {
-                scene.remove(voxelInstancedMesh);
-                voxelInstancedMesh.geometry.dispose();
-                voxelInstancedMesh.material.dispose();
-                voxelInstancedMesh = null;
+            for (let gy = 0; gy < nyv; gy++) {
+                for (let gx = 0; gx < nxv; gx++) {
+                    const vi = gy * nxv + gx;
+                    positions[vi * 3] = stock.minX + gx * stock.cellX;
+                    positions[vi * 3 + 1] = stock.minY + gy * stock.cellY;
+                    positions[vi * 3 + 2] = stock.top;
+                }
             }
-            stockParams = null;
-            voxelGrid = null;
-        }
 
-        function initStockVoxels() {
-            clearStock();
-            if (!stockParams) return;
+            for (let gy = 0; gy < stock.ny; gy++) {
+                for (let gx = 0; gx < stock.nx; gx++) {
+                    const a = gy * nxv + gx;
+                    const b = a + 1;
+                    const c = a + nxv + 1;
+                    const d = a + nxv;
+                    indices.push(a, b, c, a, c, d);
+                }
+            }
 
-            const targetResolution = 35;
-            const maxDim = Math.max(stockParams.dimX, stockParams.dimY, stockParams.dimZ);
-            voxelSize = Math.max(1.0, maxDim / targetResolution);
+            // Side walls. `skirt` pairs each wall's top vertex with the height sample it follows.
+            const skirt = new Int32Array(skirtCount); // [vertexIndex, heightIndex, ...] for top verts
+            let skirtLen = 0;
+            let v = topCount;
 
-            voxelsX = Math.ceil(stockParams.dimX / voxelSize);
-            voxelsY = Math.ceil(stockParams.dimY / voxelSize);
-            voxelsZ = Math.ceil(stockParams.dimZ / voxelSize);
+            function addWall(heightIndices, forward) {
+                const startV = v;
+                for (let k = 0; k < heightIndices.length; k++) {
+                    const hi = heightIndices[k];
+                    const px = positions[hi * 3];
+                    const py = positions[hi * 3 + 1];
 
-            const totalVoxels = voxelsX * voxelsY * voxelsZ;
-            voxelGrid = new Uint8Array(totalVoxels);
-            voxelGrid.fill(1);
+                    positions[v * 3] = px;
+                    positions[v * 3 + 1] = py;
+                    positions[v * 3 + 2] = stock.top;
+                    skirt[skirtLen++] = v;
+                    skirt[skirtLen++] = hi;
+                    v++;
 
-            const geom = new THREE.BoxGeometry(voxelSize * 0.98, voxelSize * 0.98, voxelSize * 0.98);
-            
-            // High visibility material
-            const mat = new THREE.MeshStandardMaterial({
-                color: 0xd9a752,
-                roughness: 0.4,
-                metalness: 0.1,
-                side: THREE.DoubleSide
+                    positions[v * 3] = px;
+                    positions[v * 3 + 1] = py;
+                    positions[v * 3 + 2] = stock.bottom;
+                    v++;
+                }
+                for (let k = 0; k < heightIndices.length - 1; k++) {
+                    const t0 = startV + k * 2, b0 = t0 + 1, t1 = t0 + 2, b1 = t0 + 3;
+                    if (forward) indices.push(t0, b0, b1, t0, b1, t1);
+                    else indices.push(t0, b1, b0, t0, t1, b1);
+                }
+            }
+
+            const front = [], back = [], left = [], right = [];
+            for (let gx = 0; gx < nxv; gx++) {
+                front.push(gx);
+                back.push(stock.ny * nxv + gx);
+            }
+            for (let gy = 0; gy < nyv; gy++) {
+                left.push(gy * nxv);
+                right.push(gy * nxv + stock.nx);
+            }
+            addWall(front, true);   // -Y face
+            addWall(back, false);   // +Y face
+            addWall(left, false);   // -X face
+            addWall(right, true);   // +X face
+
+            // Flat bottom, wound so its normal points down
+            const maxX = stock.minX + stock.nx * stock.cellX;
+            const maxY = stock.minY + stock.ny * stock.cellY;
+            const corners = [[stock.minX, stock.minY], [maxX, stock.minY], [maxX, maxY], [stock.minX, maxY]];
+            const base = v;
+            corners.forEach(c => {
+                positions[v * 3] = c[0];
+                positions[v * 3 + 1] = c[1];
+                positions[v * 3 + 2] = stock.bottom;
+                v++;
             });
+            indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
 
-            voxelInstancedMesh = new THREE.InstancedMesh(geom, mat, totalVoxels);
-            voxelInstancedMesh.frustumCulled = false; // Prevents Three.js from dropping stock visibility
+            const geometry = new THREE.BufferGeometry();
+            const posAttr = new THREE.BufferAttribute(positions, 3);
+            posAttr.setUsage(THREE.DynamicDrawUsage);
+            geometry.setAttribute('position', posAttr);
+            // Placeholder normals: the material is flat shaded, so shading is derived
+            // per-face in the fragment shader and this attribute is never read.
+            const normals = new Float32Array(total * 3);
+            for (let i = 0; i < total; i++) normals[i * 3 + 2] = 1;
+            geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+            geometry.setIndex(indices);
+            geometry.computeBoundingSphere();
 
-            let idx = 0;
-            for (let ix = 0; ix < voxelsX; ix++) {
-                for (let iy = 0; iy < voxelsY; iy++) {
-                    for (let iz = 0; iz < voxelsZ; iz++) {
-                        dummyPos.set(
-                            stockParams.origX + (ix + 0.5) * voxelSize,
-                            stockParams.origY + (iy + 0.5) * voxelSize,
-                            stockParams.origZ + (iz + 0.5) * voxelSize
-                        );
+            stock.geometry = geometry;
+            stock.skirt = skirt;
+            stock.topCount = topCount;
 
-                        matrixDummy.compose(dummyPos, dummyRot, dummyScale);
-                        voxelInstancedMesh.setMatrixAt(idx++, matrixDummy);
+            stockMesh = new THREE.Mesh(geometry, stockMaterial);
+            scene.add(stockMesh);
+        }
+
+        function resetStockHeights() {
+            if (!stock) return;
+            stock.heights.fill(stock.top);
+            carvedDistance = 0;
+            carveSegIndex = 0;
+            stockGeomDirty = true;
+        }
+
+        // Pushes the current height map into the mesh's vertex positions.
+        function refreshStockGeometry() {
+            if (!stock) return;
+            const attr = stock.geometry.getAttribute('position');
+            const pos = attr.array;
+            const heights = stock.heights;
+
+            for (let i = 0; i < stock.topCount; i++) {
+                pos[i * 3 + 2] = heights[i];
+            }
+            const skirt = stock.skirt;
+            for (let k = 0; k < skirt.length; k += 2) {
+                pos[skirt[k] * 3 + 2] = heights[skirt[k + 1]];
+            }
+            attr.needsUpdate = true;
+
+            let removed = 0;
+            const span = stock.top - stock.bottom;
+            for (let i = 0; i < heights.length; i++) removed += stock.top - heights[i];
+            const pct = (removed / (heights.length * span)) * 100;
+            document.getElementById('stock-removed').innerText = `${pct.toFixed(1)} %`;
+        }
+
+        // Removes material under the swept disc of a flat end mill travelling from
+        // (x0,y0) to (x1,y1) with its tip at height z.
+        function carveCapsule(x0, y0, x1, y1, z) {
+            const r = currentToolDiameter / 2;
+            const cz = Math.max(z, stock.bottom);
+            if (cz >= stock.top) return false;
+
+            const gx0 = Math.max(0, Math.floor((Math.min(x0, x1) - r - stock.minX) / stock.cellX));
+            const gx1 = Math.min(stock.nx, Math.ceil((Math.max(x0, x1) + r - stock.minX) / stock.cellX));
+            const gy0 = Math.max(0, Math.floor((Math.min(y0, y1) - r - stock.minY) / stock.cellY));
+            const gy1 = Math.min(stock.ny, Math.ceil((Math.max(y0, y1) + r - stock.minY) / stock.cellY));
+            if (gx1 < gx0 || gy1 < gy0) return false;
+
+            const dx = x1 - x0;
+            const dy = y1 - y0;
+            const lenSq = dx * dx + dy * dy;
+            const r2 = r * r;
+            const nxv = stock.nx + 1;
+            const heights = stock.heights;
+            let changed = false;
+
+            for (let gy = gy0; gy <= gy1; gy++) {
+                const py = stock.minY + gy * stock.cellY;
+                const rowBase = gy * nxv;
+                for (let gx = gx0; gx <= gx1; gx++) {
+                    const px = stock.minX + gx * stock.cellX;
+
+                    let t = lenSq > 0 ? ((px - x0) * dx + (py - y0) * dy) / lenSq : 0;
+                    if (t < 0) t = 0; else if (t > 1) t = 1;
+
+                    const ex = px - (x0 + t * dx);
+                    const ey = py - (y0 + t * dy);
+                    if (ex * ex + ey * ey > r2) continue;
+
+                    const hi = rowBase + gx;
+                    if (heights[hi] > cz) {
+                        heights[hi] = cz;
+                        changed = true;
                     }
                 }
             }
-
-            voxelInstancedMesh.instanceMatrix.needsUpdate = true;
-            scene.add(voxelInstancedMesh);
+            return changed;
         }
 
-        function subtractToolVolume(toolPos) {
-            if (!voxelGrid || !stockParams || !currentToolDiameter) return;
+        // A capsule covers the full XY sweep of a move exactly, however long it is, so
+        // slicing is only needed to follow a changing Z (ramps, plunges, helical arcs).
+        // One slice per cell-sized drop keeps the Z error at the model's resolution.
+        function carveSweep(ax, ay, az, bx, by, bz) {
+            const zTol = Math.min(stock.cellX, stock.cellY);
+            if (Math.abs(az - bz) <= zTol) return carveCapsule(ax, ay, bx, by, Math.min(az, bz));
 
-            const toolRadius = currentToolDiameter / 2;
-            const toolHeight = currentToolDiameter * 3;
+            const slices = Math.min(4000, Math.max(1, Math.ceil(Math.abs(bz - az) / zTol)));
+            let changed = false;
 
-            const minIx = Math.max(0, Math.floor((toolPos.x - toolRadius - stockParams.origX) / voxelSize));
-            const maxIx = Math.min(voxelsX - 1, Math.ceil((toolPos.x + toolRadius - stockParams.origX) / voxelSize));
+            for (let k = 0; k < slices; k++) {
+                const t0 = k / slices;
+                const t1 = (k + 1) / slices;
+                const z0 = az + (bz - az) * t0;
+                const z1 = az + (bz - az) * t1;
+                if (carveCapsule(
+                    ax + (bx - ax) * t0, ay + (by - ay) * t0,
+                    ax + (bx - ax) * t1, ay + (by - ay) * t1,
+                    Math.min(z0, z1)
+                )) changed = true;
+            }
+            return changed;
+        }
 
-            const minIy = Math.max(0, Math.floor((toolPos.y - toolRadius - stockParams.origY) / voxelSize));
-            const maxIy = Math.min(voxelsY - 1, Math.ceil((toolPos.y + toolRadius - stockParams.origY) / voxelSize));
+        function requestCarve(dist) {
+            pendingCarve = dist;
+        }
 
-            const minIz = Math.max(0, Math.floor((toolPos.z - stockParams.origZ) / voxelSize));
-            const maxIz = Math.min(voxelsZ - 1, Math.ceil((toolPos.z + toolHeight - stockParams.origZ) / voxelSize));
+        function carveTo(dist) {
+            if (!stock || !currentToolDiameter) return;
+            if (dist < carvedDistance - 1e-9) resetStockHeights();
+            if (dist <= carvedDistance) return;
 
-            let modified = false;
+            let changed = false;
+            for (let i = carveSegIndex; i < parsedSegments.length; i++) {
+                const seg = parsedSegments[i];
+                if (seg.startDist >= dist) break;
 
-            for (let ix = minIx; ix <= maxIx; ix++) {
-                const vx = stockParams.origX + (ix + 0.5) * voxelSize;
-                const dx = vx - toolPos.x;
+                const segEnd = seg.startDist + seg.length;
+                const a = Math.max(carvedDistance, seg.startDist);
+                const b = Math.min(dist, segEnd);
 
-                for (let iy = minIy; iy <= maxIy; iy++) {
-                    const vy = stockParams.origY + (iy + 0.5) * voxelSize;
-                    const dy = vy - toolPos.y;
-
-                    if ((dx * dx + dy * dy) <= (toolRadius * toolRadius)) {
-                        for (let iz = minIz; iz <= maxIz; iz++) {
-                            const vz = stockParams.origZ + (iz + 0.5) * voxelSize;
-
-                            if (vz >= toolPos.z && vz <= toolPos.z + toolHeight) {
-                                const idx = ix * (voxelsY * voxelsZ) + iy * voxelsZ + iz;
-                                if (voxelGrid[idx] === 1) {
-                                    voxelGrid[idx] = 0;
-
-                                    dummyPos.set(
-                                        stockParams.origX + (ix + 0.5) * voxelSize,
-                                        stockParams.origY + (iy + 0.5) * voxelSize,
-                                        stockParams.origZ + (iz + 0.5) * voxelSize
-                                    );
-                                    
-                                    matrixDummy.compose(dummyPos, dummyRot, zeroScale);
-                                    voxelInstancedMesh.setMatrixAt(idx, matrixDummy);
-                                    modified = true;
-                                }
-                            }
-                        }
-                    }
+                if (b > a && i >= firstCutSegIndex) {
+                    const t0 = (a - seg.startDist) / seg.length;
+                    const t1 = (b - seg.startDist) / seg.length;
+                    const dxs = seg.end[0] - seg.start[0];
+                    const dys = seg.end[1] - seg.start[1];
+                    const dzs = seg.end[2] - seg.start[2];
+                    if (carveSweep(
+                        seg.start[0] + dxs * t0, seg.start[1] + dys * t0, seg.start[2] + dzs * t0,
+                        seg.start[0] + dxs * t1, seg.start[1] + dys * t1, seg.start[2] + dzs * t1
+                    )) changed = true;
                 }
+
+                if (segEnd <= dist) carveSegIndex = i + 1;
+                else break;
             }
 
-            if (modified) {
-                voxelInstancedMesh.instanceMatrix.needsUpdate = true;
-            }
-        }
-
-        function subtractStockBetween(startDist, endDist) {
-            if (!voxelGrid || !currentToolDiameter || parsedSegments.length === 0) return;
-
-            const stepSize = Math.max(currentToolDiameter * 0.3, 0.5);
-            let dist = startDist;
-
-            while (dist < endDist) {
-                dist = Math.min(dist + stepSize, endDist);
-                const seg = getCurrentSegment(dist);
-                if (seg && seg.motion !== 'G0') {
-                    const segProgress = (dist - seg.startDist) / seg.length;
-                    const t = Math.min(Math.max(segProgress, 0), 1);
-
-                    const pos = {
-                        x: seg.start[0] + t * (seg.end[0] - seg.start[0]),
-                        y: seg.start[1] + t * (seg.end[1] - seg.start[1]),
-                        z: seg.start[2] + t * (seg.end[2] - seg.start[2])
-                    };
-
-                    subtractToolVolume(pos);
-                }
-            }
-        }
-
-        function rebuildStockUpToDistance(targetDist) {
-            if (!stockParams) return;
-            initStockVoxels();
-            subtractStockBetween(0, targetDist);
+            carvedDistance = dist;
+            if (changed) stockGeomDirty = true;
         }
 
         // --- G-Code Parser ---
@@ -828,14 +1022,17 @@
 
             updateToolGeometry();
 
+            // The machine's true start position is unknown, so the rapids leading up to
+            // the first cutting move would otherwise gouge the stock from the origin.
+            firstCutSegIndex = parsedSegments.findIndex(seg => seg.motion !== 'G0');
+            if (firstCutSegIndex < 0) firstCutSegIndex = parsedSegments.length;
+
             document.getElementById('feed-min').innerText = minFeed === Infinity ? '0 mm/min' : `${minFeed} mm/min`;
             document.getElementById('feed-max').innerText = maxFeed === -Infinity ? '0 mm/min' : `${maxFeed} mm/min`;
         }
 
         // --- Simulation Execution ---
         function updateSimulationStep(deltaSeconds) {
-            const previousDistance = currentDistance;
-
             const currentSeg = getCurrentSegment(currentDistance);
             if (!currentSeg) {
                 isSimulating = false;
@@ -858,19 +1055,21 @@
                 btnPlay.innerText = 'Play';
             }
 
-            subtractStockBetween(previousDistance, currentDistance);
             updateToolPositionByDistance(currentDistance);
         }
 
         function getCurrentSegment(dist) {
             if (parsedSegments.length === 0) return null;
-            for (let i = 0; i < parsedSegments.length; i++) {
-                const seg = parsedSegments[i];
-                if (dist >= seg.startDist && dist <= seg.startDist + seg.length) {
-                    return seg;
-                }
+
+            // Segments are ordered by startDist, so binary search instead of scanning.
+            let lo = 0;
+            let hi = parsedSegments.length - 1;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >> 1;
+                if (parsedSegments[mid].startDist <= dist) lo = mid;
+                else hi = mid - 1;
             }
-            return parsedSegments[parsedSegments.length - 1];
+            return parsedSegments[lo];
         }
 
         function updateToolPositionByDistance(dist) {
@@ -887,6 +1086,9 @@
             toolMesh.position.set(posX, posY, posZ);
             toolMesh.visible = true;
 
+            requestCarve(dist);
+
+            // Update UI Metrics
             const pct = (dist / totalPathLength) * 100;
             progressSlider.value = pct.toFixed(1);
 
@@ -899,11 +1101,6 @@
             isSimulating = false;
             btnPlay.innerText = 'Play';
             currentDistance = 0;
-
-            if (stockParams) {
-                initStockVoxels();
-            }
-
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(0);
             } else {
@@ -1039,14 +1236,14 @@
                 const maxDim = Math.max(sizeX, sizeY, sizeZ);
                 
                 controls.target.set(centerX, centerY, centerZ);
-                camera.position.set(centerX + maxDim * 1.5, centerY - maxDim * 1.5, centerZ + maxDim * 1.5);
+                camera.position.set(centerX + maxDim, centerY - maxDim, centerZ + maxDim);
                 controls.update();
             }
         }
 
-        // Initialize default stock & legend immediately
-        applyStockFromUI();
+        // Initialize Legend
         updateLegend();
+        updateStockHint();
     </script>
 </body>
 </html>
