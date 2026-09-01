@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<?xml-stylesheet type='text/xsl' href='tool-library.xsl'?>
+<!--Use a standards compliant web browser to view this file-->
+<tool-table xmlns="http://www.hsmworks.com/xml/2004/cnc/tool-library" version="1.0">
+    <tool version="1.1" type="flat end mill" unit="millimeters" guid="{7a7b06c9-2edf-4996-a1a2-7a76d2728918}" id="1">
+        <description>Aluminum</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <nc number="4" diameter-offset="4" length-offset="4" turret="0" break-control="1" manual-tool-change="1"/>
+        <coolant mode="flood"/>
+        <material name="carbide"/>
+        <body diameter="12.7" flute-length="31.75" shoulder-length="31.75" shaft-diameter="12.7" body-length="38" overall-length="60.53" number-of-flutes="3" thread-pitch="0"/>
+        <holder description="TTS 3/4&quot; -ER20" comment="" vendor="https://tormach.com/tooling/tool-holding/mill-tool-holding/tts.html" guid="{2d50cbe4-ede2-4c11-970a-58f9103cccc2}" library-name="Example Tool Library">
+            <section diameter="25.2" length="0"/>
+            <section diameter="33.88" length="1.5"/>
+            <section diameter="33.88" length="16.3"/>
+            <section diameter="32.88" length="1.5"/>
+            <section diameter="24.7" length="0"/>
+            <section diameter="24.7" length="12.15"/>
+            <section diameter="26.12" length="1.5"/>
+            <section diameter="26.12" length="9.82"/>
+            <section diameter="38.25" length="0"/>
+            <section diameter="38.25" length="8.72"/>
+            <section diameter="37.4" length="0"/>
+            <section diameter="37.4" length="1"/>
+            <section diameter="19" length="0"/>
+            <section diameter="19" length="34.5"/>
+            <section diameter="18" length="1"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="1800" entry-feedrate="1800" exit-feedrate="1800" plunge-feedrate="600" ramp-feedrate="900" retract-feedrate="600"/>
+    </tool>
+    <tool version="1.1" type="flat end mill" unit="millimeters" guid="{7a5de52b-f2bd-4027-b842-aefbd915231e}" id="3">
+        <description>Aluminum</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <nc number="2" diameter-offset="2" length-offset="2" turret="0" break-control="1" manual-tool-change="1"/>
+        <coolant mode="flood"/>
+        <material name="carbide"/>
+        <body diameter="6.35" flute-length="19.05" shoulder-length="19.05" shaft-diameter="6.35" body-length="25" overall-length="39.56" number-of-flutes="3" thread-pitch="0"/>
+        <holder description="TTS 3/4&quot; -ER20" comment="" vendor="https://tormach.com/tooling/tool-holding/mill-tool-holding/tts.html" guid="{2d50cbe4-ede2-4c11-970a-58f9103cccc2}" library-name="Example Tool Library">
+            <section diameter="25.2" length="0"/>
+            <section diameter="33.88" length="1.5"/>
+            <section diameter="33.88" length="16.3"/>
+            <section diameter="32.88" length="1.5"/>
+            <section diameter="24.7" length="0"/>
+            <section diameter="24.7" length="12.15"/>
+            <section diameter="26.12" length="1.5"/>
+            <section diameter="26.12" length="9.82"/>
+            <section diameter="38.25" length="0"/>
+            <section diameter="38.25" length="8.72"/>
+            <section diameter="37.4" length="0"/>
+            <section diameter="37.4" length="1"/>
+            <section diameter="19" length="0"/>
+            <section diameter="19" length="34.5"/>
+            <section diameter="18" length="1"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="1000" entry-feedrate="1000" exit-feedrate="1000" plunge-feedrate="500" ramp-feedrate="1000" retract-feedrate="500"/>
+    </tool>
+    <tool version="1.1" type="spot drill" unit="millimeters" guid="{f30fef9d-6f47-40f9-809e-9764165d6d20}" id="4">
+        <description>4mm Carbide Spot Drill</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <nc number="11" diameter-offset="11" length-offset="11" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="hss"/>
+        <body diameter="4" tip-diameter="0.5" taper-angle="90" taper-angle2="60" flute-length="7.86" shoulder-length="7.86" shaft-diameter="4" body-length="27" overall-length="70" number-of-flutes="2" thread-pitch="0"/>
+        <holder description="Jacobs JT1 1/64&quot;-1/4&quot;" comment="" vendor="Tormach" product-id="https://tormach.com/drill-chuck-jt1-30102.html" guid="{513b27ce-73d0-48d4-b06a-5b489b1e2a9a}" library-name="Example Tool Library">
+            <section diameter="7.4" length="0"/>
+            <section diameter="11" length="7.5"/>
+            <section diameter="18.5" length="0"/>
+            <section diameter="21.6" length="3"/>
+            <section diameter="21.6" length="9.75"/>
+            <section diameter="30" length="1"/>
+            <section diameter="30" length="23"/>
+            <section diameter="8" length="0"/>
+            <section diameter="8" length="4.5"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="16.3"/>
+            <section diameter="19.05" length="0"/>
+            <section diameter="19.05" length="35"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="1000" entry-feedrate="1000" exit-feedrate="1000" plunge-feedrate="1000" ramp-feedrate="1000" retract-feedrate="2200"/>
+    </tool>
+    <tool version="1.1" type="drill" unit="millimeters" guid="{b1dc7827-84cc-474d-add6-80b9eb6ec805}" id="5">
+        <description>M3 Tap/M2 Clearance (#39)</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <product-id>#39 Jobber Drill</product-id>
+        <nc number="15" diameter-offset="15" length-offset="15" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="hss"/>
+        <body diameter="2.5" taper-angle="118" flute-length="35" shoulder-length="35" shaft-diameter="2.5" body-length="38" overall-length="60.325" number-of-flutes="2" thread-pitch="0"/>
+        <holder description="Jacobs JT1 1/64&quot;-1/4&quot;" comment="" vendor="Tormach" product-id="https://tormach.com/drill-chuck-jt1-30102.html" guid="{513b27ce-73d0-48d4-b06a-5b489b1e2a9a}" library-name="Example Tool Library">
+            <section diameter="7.4" length="0"/>
+            <section diameter="11" length="7.5"/>
+            <section diameter="18.5" length="0"/>
+            <section diameter="21.6" length="3"/>
+            <section diameter="21.6" length="9.75"/>
+            <section diameter="30" length="1"/>
+            <section diameter="30" length="23"/>
+            <section diameter="8" length="0"/>
+            <section diameter="8" length="4.5"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="16.3"/>
+            <section diameter="19.05" length="0"/>
+            <section diameter="19.05" length="35"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="0" entry-feedrate="0" exit-feedrate="0" plunge-feedrate="190.5" ramp-feedrate="0" retract-feedrate="2200"/>
+    </tool>
+    <tool version="1.1" type="tap right hand" unit="millimeters" guid="{6e956a9f-5832-45bd-b711-845e77859b15}" id="6">
+        <description>M3</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <product-id>Spiral Flute</product-id>
+        <nc number="25" diameter-offset="25" length-offset="25" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="unspecified"/>
+        <body diameter="3" flute-length="14.5" shoulder-length="14.5" shaft-diameter="2.5" body-length="20" overall-length="48" number-of-flutes="2" thread-pitch="0.5"/>
+        <holder description="Quick Change Tap Holder" comment="" vendor="Tormach" product-id="https://tormach.com/modular-tension-compression-tapping-head-kit-31807.html" guid="{56715823-4545-4742-9c86-2cce339cc0ce}" library-name="Example Tool Library">
+            <section diameter="19.3" length="0"/>
+            <section diameter="19.3" length="9"/>
+            <section diameter="34.75" length="0"/>
+            <section diameter="34.75" length="27.5"/>
+            <section diameter="25" length="0"/>
+            <section diameter="25" length="3.5"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="50"/>
+        </holder>
+        <motion spindle-rpm="500" ramp-spindle-rpm="500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="0" entry-feedrate="250" exit-feedrate="250" plunge-feedrate="0" ramp-feedrate="0" retract-feedrate="0"/>
+    </tool>
+    <tool version="1.1" type="drill" unit="millimeters" guid="{ab16a263-1acf-4217-9cb4-3e1cb737b7a7}" id="7">
+        <description>M6 Tap (#8)</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <product-id>#8 Jobber Drill</product-id>
+        <nc number="19" diameter-offset="19" length-offset="19" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="hss"/>
+        <body diameter="5" taper-angle="118" flute-length="63" shoulder-length="63" shaft-diameter="5" body-length="66" overall-length="88.9" number-of-flutes="2" thread-pitch="0"/>
+        <holder description="Jacobs JT2 1/32&quot;-3/8&quot;" comment="" vendor="Tormach" product-id="https://tormach.com/drill-chuck-jt2-30244.html" guid="{c9dfe723-bad9-4088-a055-d55ddebab0e0}" library-name="Example Tool Library">
+            <section diameter="12.5" length="0"/>
+            <section diameter="15" length="7.5"/>
+            <section diameter="23" length="0"/>
+            <section diameter="30.75" length="4.5"/>
+            <section diameter="30.75" length="9.75"/>
+            <section diameter="43" length="1"/>
+            <section diameter="43" length="31"/>
+            <section diameter="10" length="0"/>
+            <section diameter="10" length="5.75"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="16.3"/>
+            <section diameter="19.05" length="0"/>
+            <section diameter="19.05" length="35"/>
+        </holder>
+        <motion spindle-rpm="3880" ramp-spindle-rpm="3880" clockwise="yes" feed-mode="per-minute" cutting-feedrate="0" entry-feedrate="0" exit-feedrate="0" plunge-feedrate="295.656" ramp-feedrate="0" retract-feedrate="2200"/>
+    </tool>
+    <tool version="1.1" type="tap right hand" unit="millimeters" guid="{831d2032-973e-4cd4-af9f-db2729a5f733}" id="8">
+        <description>M6</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <product-id>Spiral Flute</product-id>
+        <nc number="28" diameter-offset="28" length-offset="28" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="unspecified"/>
+        <body diameter="6" flute-length="19" shoulder-length="19" shaft-diameter="5" body-length="46" overall-length="66" number-of-flutes="2" thread-pitch="1"/>
+        <holder description="Quick Change Tap Holder" comment="" vendor="Tormach" product-id="https://tormach.com/modular-tension-compression-tapping-head-kit-31807.html" guid="{56715823-4545-4742-9c86-2cce339cc0ce}" library-name="Example Tool Library">
+            <section diameter="19.3" length="0"/>
+            <section diameter="19.3" length="9"/>
+            <section diameter="34.75" length="0"/>
+            <section diameter="34.75" length="27.5"/>
+            <section diameter="25" length="0"/>
+            <section diameter="25" length="3.5"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="50"/>
+        </holder>
+        <motion spindle-rpm="500" ramp-spindle-rpm="500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="0" entry-feedrate="500" exit-feedrate="500" plunge-feedrate="0" ramp-feedrate="0" retract-feedrate="0"/>
+    </tool>
+    <tool version="1.1" type="drill" unit="millimeters" guid="{a6e7922e-6881-48a5-9f61-f0c53582faf2}" id="9">
+        <description>M4 Tap/M3 Clearance (#30)</description>
+        <comment></comment>
+        <product-id>#30 Jobber Drill</product-id>
+        <nc number="17" diameter-offset="17" length-offset="17" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="hss"/>
+        <body diameter="3.3" taper-angle="118" flute-length="45" shoulder-length="45" shaft-diameter="3.3" body-length="48" overall-length="69.850" number-of-flutes="3" thread-pitch="0"/>
+        <holder description="Jacobs JT1 1/64&quot;-1/4&quot;" comment="" vendor="Tormach" product-id="https://tormach.com/drill-chuck-jt1-30102.html" guid="{513b27ce-73d0-48d4-b06a-5b489b1e2a9a}" library-name="Example Tool Library">
+            <section diameter="7.4" length="0"/>
+            <section diameter="11" length="7.5"/>
+            <section diameter="18.5" length="0"/>
+            <section diameter="21.6" length="3"/>
+            <section diameter="21.6" length="9.75"/>
+            <section diameter="30" length="1"/>
+            <section diameter="30" length="23"/>
+            <section diameter="8" length="0"/>
+            <section diameter="8" length="4.5"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="16.3"/>
+            <section diameter="19.05" length="0"/>
+            <section diameter="19.05" length="35"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="0" entry-feedrate="0" exit-feedrate="0" plunge-feedrate="381" ramp-feedrate="0" retract-feedrate="2200"/>
+    </tool>
+    <tool version="1.1" type="drill" unit="millimeters" guid="{0cd7d04d-9e99-4daa-9c38-d7ecbba033fa}" id="10">
+        <description>M8 Tap/M6 Clearance (#H)</description>
+        <comment></comment>
+        <product-id>Letter H Jobber Drill</product-id>
+        <nc number="21" diameter-offset="21" length-offset="21" turret="0" break-control="0" manual-tool-change="0"/>
+        <coolant mode="flood"/>
+        <material name="hss"/>
+        <body diameter="6.75" taper-angle="118" flute-length="73" shoulder-length="73" shaft-diameter="6.75" body-length="76" overall-length="99" number-of-flutes="2" thread-pitch="0"/>
+        <holder description="Jacobs JT2 1/32&quot;-3/8&quot;" comment="" vendor="Tormach" product-id="https://tormach.com/drill-chuck-jt2-30244.html" guid="{c9dfe723-bad9-4088-a055-d55ddebab0e0}" library-name="Example Tool Library">
+            <section diameter="12.5" length="0"/>
+            <section diameter="15" length="7.5"/>
+            <section diameter="23" length="0"/>
+            <section diameter="30.75" length="4.5"/>
+            <section diameter="30.75" length="9.75"/>
+            <section diameter="43" length="1"/>
+            <section diameter="43" length="31"/>
+            <section diameter="10" length="0"/>
+            <section diameter="10" length="5.75"/>
+            <section diameter="38" length="0"/>
+            <section diameter="38" length="16.3"/>
+            <section diameter="19.05" length="0"/>
+            <section diameter="19.05" length="35"/>
+        </holder>
+        <motion spindle-rpm="2875" ramp-spindle-rpm="2875" clockwise="yes" feed-mode="per-minute" cutting-feedrate="0" entry-feedrate="0" exit-feedrate="0" plunge-feedrate="292.1" ramp-feedrate="0" retract-feedrate="2200"/>
+    </tool>
+    <tool version="1.1" type="flat end mill" unit="millimeters" guid="{08e74f77-0eee-4b9a-a9b3-2ee2d459c4c0}" id="11">
+        <description>Aluminum</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <nc number="1" diameter-offset="1" length-offset="1" turret="0" break-control="1" manual-tool-change="1"/>
+        <coolant mode="flood"/>
+        <material name="carbide"/>
+        <body diameter="3.175" flute-length="12.7" shoulder-length="12.7" shaft-diameter="3.175" body-length="15.625" overall-length="21.875" number-of-flutes="4" thread-pitch="0"/>
+        <holder description="TTS 3/4&quot; -ER20" comment="" vendor="https://tormach.com/tooling/tool-holding/mill-tool-holding/tts.html" guid="{2d50cbe4-ede2-4c11-970a-58f9103cccc2}" library-name="Example Tool Library">
+            <section diameter="25.2" length="0"/>
+            <section diameter="33.88" length="1.5"/>
+            <section diameter="33.88" length="16.3"/>
+            <section diameter="32.88" length="1.5"/>
+            <section diameter="24.7" length="0"/>
+            <section diameter="24.7" length="12.15"/>
+            <section diameter="26.12" length="1.5"/>
+            <section diameter="26.12" length="9.82"/>
+            <section diameter="38.25" length="0"/>
+            <section diameter="38.25" length="8.72"/>
+            <section diameter="37.4" length="0"/>
+            <section diameter="37.4" length="1"/>
+            <section diameter="19" length="0"/>
+            <section diameter="19" length="34.5"/>
+            <section diameter="18" length="1"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="1000" entry-feedrate="1000" exit-feedrate="1000" plunge-feedrate="300" ramp-feedrate="1000" retract-feedrate="300"/>
+    </tool>
+    <tool version="1.1" type="chamfer mill" unit="millimeters" guid="{b5c6ce17-492b-44a3-8d5d-c110e5ea1cdf}" id="13">
+        <description>1/4" Chamfer Mill</description>
+        <comment></comment>
+        <manufacturer></manufacturer>
+        <nc number="12" diameter-offset="12" length-offset="12" turret="0" break-control="1" manual-tool-change="1"/>
+        <coolant mode="flood"/>
+        <material name="carbide"/>
+        <body diameter="6.35" tip-diameter="0" taper-angle="45" taper-angle2="45" thread-profile-angle="60" flute-length="3.175" shoulder-length="26" shaft-diameter="6.35" body-length="30.26" overall-length="48.77" number-of-flutes="4" thread-pitch="0"/>
+        <holder description="TTS 3/4&quot; -ER20" comment="" vendor="https://tormach.com/tooling/tool-holding/mill-tool-holding/tts.html" guid="{2d50cbe4-ede2-4c11-970a-58f9103cccc2}" library-name="Example Tool Library">
+            <section diameter="25.2" length="0"/>
+            <section diameter="33.88" length="1.5"/>
+            <section diameter="33.88" length="16.3"/>
+            <section diameter="32.88" length="1.5"/>
+            <section diameter="24.7" length="0"/>
+            <section diameter="24.7" length="12.15"/>
+            <section diameter="26.12" length="1.5"/>
+            <section diameter="26.12" length="9.82"/>
+            <section diameter="38.25" length="0"/>
+            <section diameter="38.25" length="8.72"/>
+            <section diameter="37.4" length="0"/>
+            <section diameter="37.4" length="1"/>
+            <section diameter="19" length="0"/>
+            <section diameter="19" length="34.5"/>
+            <section diameter="18" length="1"/>
+        </holder>
+        <motion spindle-rpm="7500" ramp-spindle-rpm="7500" clockwise="yes" feed-mode="per-minute" cutting-feedrate="1500" entry-feedrate="1500" exit-feedrate="1500" plunge-feedrate="1500" ramp-feedrate="1500" retract-feedrate="1500"/>
+    </tool>
+</tool-table>
