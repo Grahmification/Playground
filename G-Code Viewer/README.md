@@ -12,10 +12,11 @@ Open `g-code viewer.html` in a browser. That is all.
 
 It needs an internet connection the first time, because it loads three.js from a CDN.
 
-Two example programs are in this folder if you want something to try:
+Some example programs are in this folder if you want something to try:
 
 - `example 1 - helical bore.nc`
 - `example 2 - multiple tools.nc`
+- `example 3 - 3D contouring.nc`
 
 ## Using it
 
