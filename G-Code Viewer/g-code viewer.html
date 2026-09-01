@@ -490,6 +490,70 @@
             min-width: 0;
         }
 
+        /* Playback controls floated over the bottom of the 3D view. Unlike the corner
+           stacks this one takes the mouse -- everything in it is interactive, and the bar
+           is small enough that giving up that patch of orbit surface costs nothing. */
+        #sim-controls {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px;
+            background-color: rgba(30, 30, 30, 0.78);
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+        }
+
+        .icon-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 28px;
+            padding: 0;
+            border: none;
+            border-radius: 4px;
+            background-color: transparent;
+            color: #e0e0e0;
+            cursor: pointer;
+        }
+
+        .icon-btn:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        .icon-btn svg {
+            display: block;
+            width: 15px;
+            height: 15px;
+            fill: currentColor;
+        }
+
+        /* The play button carries both glyphs and shows whichever matches the state, so
+           the swap is a class toggle rather than a rebuild of the button's contents. */
+        #btn-play .icon-pause,
+        #btn-play.playing .icon-play {
+            display: none;
+        }
+
+        #btn-play.playing .icon-pause {
+            display: block;
+        }
+
+        /* Sized to its own text rather than the sidebar's full-width default -- the
+           options are two or three characters wide. */
+        #sim-controls #sim-speed {
+            width: auto;
+            padding: 4px 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
         /* HSMWorks-style playback scrubber pinned under the 3D view. */
         #timeline-bar {
             flex: 0 0 auto;
@@ -637,25 +701,6 @@
             </label>
         </div>
 
-        <!-- Simulation Controls -->
-        <div class="panel">
-            <div class="panel-title">Simulation Controls</div>
-            <div class="btn-row">
-                <button id="btn-play" class="btn btn-secondary">Play</button>
-                <button id="btn-reset" class="btn btn-secondary">Reset</button>
-            </div>
-            <div class="control-group">
-                <label for="sim-speed">Simulation Speed</label>
-                <select id="sim-speed">
-                    <option value="0.5">0.5x Speed</option>
-                    <option value="1" selected>1x Real-time</option>
-                    <option value="5">5x Speed</option>
-                    <option value="10">10x Speed</option>
-                    <option value="50">50x Speed</option>
-                </select>
-            </div>
-        </div>
-
         <!-- Stock Simulation -->
         <div class="panel">
             <div class="panel-title">Stock Simulation</div>
@@ -790,6 +835,25 @@
                     </div>
                     <div id="gcode-lookahead" hidden></div>
                 </div>
+            </div>
+            <!-- Simulation Controls -->
+            <div id="sim-controls">
+                <button id="btn-play" class="icon-btn" type="button" title="Play" aria-label="Play">
+                    <svg class="icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>
+                    <svg class="icon-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h3.2v11H4zm4.8 0H12v11H8.8z"/></svg>
+                </button>
+                <button id="btn-reset" class="icon-btn" type="button" title="Reset to start" aria-label="Reset to start">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h2.2v11H3zm11 0v11L6 8z"/></svg>
+                </button>
+                <select id="sim-speed" title="Simulation speed" aria-label="Simulation speed">
+                    <option value="0.01">0.01x</option>
+                    <option value="0.1">0.1x</option>
+                    <option value="0.5">0.5x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="5">5x</option>
+                    <option value="10">10x</option>
+                    <option value="50">50x</option>
+                </select>
             </div>
         </div>
         <div id="loading">Parsing G-code...</div>
@@ -1572,10 +1636,18 @@
             progressValue.innerText = `${pct.toFixed(1)} %`;
         }
 
+        // The button is an icon, so its state lives in a class rather than a label -- but
+        // the tooltip is the only text there is now, so it has to move with it.
+        function showPlayState(playing) {
+            btnPlay.classList.toggle('playing', playing);
+            btnPlay.title = playing ? 'Pause' : 'Play';
+            btnPlay.setAttribute('aria-label', btnPlay.title);
+        }
+
         btnPlay.addEventListener('click', () => {
             if (parsedSegments.length === 0) return;
             isSimulating = !isSimulating;
-            btnPlay.innerText = isSimulating ? 'Pause' : 'Play';
+            showPlayState(isSimulating);
             lastTimestamp = null;
         });
 
@@ -3263,7 +3335,7 @@
             const currentSeg = getCurrentSegment(currentDistance);
             if (!currentSeg) {
                 isSimulating = false;
-                btnPlay.innerText = 'Play';
+                showPlayState(false);
                 return;
             }
 
@@ -3276,7 +3348,7 @@
             if (currentDistance >= totalPathLength) {
                 currentDistance = totalPathLength;
                 isSimulating = false;
-                btnPlay.innerText = 'Play';
+                showPlayState(false);
             }
 
             updateToolPositionByDistance(currentDistance);
@@ -3411,7 +3483,7 @@
 
         function resetSimulation() {
             isSimulating = false;
-            btnPlay.innerText = 'Play';
+            showPlayState(false);
             currentDistance = 0;
             if (parsedSegments.length > 0) {
                 updateToolPositionByDistance(0);
