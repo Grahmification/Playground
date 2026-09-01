@@ -710,6 +710,9 @@
             }
 
             controls.update();
+            // After controls.update(), so a zoom or orbit this frame is already accounted
+            // for: the highlight's thickness depends on where the camera ended up.
+            updateActiveSegmentThickness();
             renderer.render(scene, camera);
         }
         animate();
@@ -725,14 +728,23 @@
         const showToolpathEl = document.getElementById('show-toolpath');
         const activeSegmentOnlyEl = document.getElementById('active-segment-only');
 
-        // How thick the highlight is drawn. Scaled to the job so it stays legible on a
-        // 300 mm part without swamping a 5 mm one.
-        function activeSegmentRadius() {
-            const maxDim = Math.max(
-                bounds.maxX - bounds.minX,
-                bounds.maxY - bounds.minY,
-                bounds.maxZ - bounds.minZ);
-            return isFinite(maxDim) && maxDim > 0 ? maxDim * 0.004 : 0.2;
+        // How thick the highlight is drawn, in screen pixels. It used to be a fraction of
+        // the job's bounding box, which is the travel envelope rather than the part: a
+        // file that rapids out to a machine tool-change position measures hundreds of
+        // millimetres across and drew the highlight as a fat rod over a small part. Sizing
+        // it from the camera distance instead makes it independent of the extents
+        // altogether, and holds the same apparent thickness at any zoom.
+        const ACTIVE_SEG_PIXEL_RADIUS = 3;
+        let activeSegmentLength = 0;
+
+        function updateActiveSegmentThickness() {
+            if (!activeSegmentMesh.visible) return;
+            const dist = camera.position.distanceTo(activeSegmentMesh.position);
+            const viewHeight = Math.max(container.clientHeight, 1);
+            const worldPerPixel =
+                2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * dist / viewHeight;
+            const radius = Math.max(worldPerPixel * ACTIVE_SEG_PIXEL_RADIUS, 1e-4);
+            activeSegmentMesh.scale.set(radius, activeSegmentLength, radius);
         }
 
         // Decides what is on screen and lays the highlight over wherever the simulation
@@ -764,15 +776,15 @@
                 return;
             }
 
-            const radius = activeSegmentRadius();
             activeSegmentMesh.position.set(
                 (seg.start[0] + seg.end[0]) / 2,
                 (seg.start[1] + seg.end[1]) / 2,
                 (seg.start[2] + seg.end[2]) / 2);
             activeSegmentMesh.quaternion.setFromUnitVectors(
                 ACTIVE_SEG_UP, activeSegDir.divideScalar(length));
-            activeSegmentMesh.scale.set(radius, length, radius);
             activeSegmentMesh.visible = true;
+            activeSegmentLength = length;
+            updateActiveSegmentThickness();
         }
 
         showToolpathEl.addEventListener('change', refreshToolpathVisibility);
