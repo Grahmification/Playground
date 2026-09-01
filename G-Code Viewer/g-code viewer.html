@@ -50,6 +50,67 @@
             color: #aaaaaa;
         }
 
+        /* A label with a help affordance beside it. Also the positioning context for the
+           bubble, so the bubble spans the row rather than the icon and can never be
+           pushed out through the sidebar's edge. */
+        .label-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            position: relative;
+        }
+
+        .help {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            flex: 0 0 auto;
+            border: 1px solid #4a4a4a;
+            border-radius: 50%;
+            color: #aaaaaa;
+            font-size: 0.65rem;
+            line-height: 1;
+            cursor: help;
+            user-select: none;
+        }
+
+        .help:hover,
+        .help:focus-visible {
+            border-color: #6a6a6a;
+            color: #ffffff;
+        }
+
+        /* Opens downward over the field it describes. Upward would be clipped whenever
+           the row sits at the top of the scrolled sidebar -- #sidebar has overflow-y,
+           which makes it clip on both axes. */
+        .help-bubble {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            padding: 8px 10px;
+            background-color: #2b2b2b;
+            border: 1px solid #4a4a4a;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            z-index: 20;
+            /* Kept in flow-less limbo rather than display:none so it never reflows the
+               panel, and click-through so it cannot swallow a click on the input. */
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .help:hover .help-bubble,
+        .help:focus-visible .help-bubble {
+            visibility: visible;
+            opacity: 1;
+        }
+
 
         select, input[type="range"], input[type="number"] {
             width: 100%;
@@ -626,9 +687,13 @@
                 </select>
             </div>
             <div class="control-group">
-                <label for="stock-margin">Stock Margin (mm)</label>
+                <div class="label-row">
+                    <label for="stock-margin">Stock Margin (mm)</label>
+                    <span class="help" tabindex="0">?<span class="help-bubble">How far the
+                        stock extends past the toolpath extents on each side. Negative pulls
+                        the stock inside the toolpath.</span></span>
+                </div>
                 <input type="number" id="stock-margin" value="5" step="1">
-                <div class="hint hint-muted">Negative starts the block inside the cutting extent.</div>
             </div>
             <div class="btn-row">
                 <div class="control-group">
