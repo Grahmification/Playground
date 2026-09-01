@@ -877,7 +877,9 @@
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a1a);
 
-        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 10000);
+        // Retuned to the job by fitCameraToBounds; near has to stay well inside
+        // controls.minDistance or a surface clips away as you reach it.
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.05, 3000);
         camera.position.set(100, 100, 100);
         // The scene is authored in machine coordinates, where Z is up: the grid lies in
         // XY, the stock is a height map along Z, and tool profiles are revolved about Z.
@@ -895,6 +897,14 @@
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
+        // A notch is a fixed fraction of the distance to the target, so a bigger fraction
+        // covers the same ground in fewer of them: ~10% rather than 5%.
+        controls.zoomSpeed = 2.0;
+        // Retuned to the job by fitCameraToBounds. The floor matters most -- zoom step, pan
+        // and orbit rates all scale by the distance to the target, so letting it decay to
+        // zero is what seizes up the camera when zoomed in.
+        controls.minDistance = 2;
+        controls.maxDistance = 1200;
 
         // --- Lighting ------------------------------------------------------------------
         // Lit for reading surface finish. A defect is a degree or two of normal change,
@@ -3872,7 +3882,18 @@
                 const centerZ = (bounds.minZ + bounds.maxZ) / 2;
 
                 const maxDim = Math.max(sizeX, sizeY, sizeZ);
-                
+
+                // Scaled to the job so a 10mm part and a 1m one behave alike. The zoom floor
+                // lands inside the part, since the target is at its centre, but leaves pan
+                // and zoom a distance to work with. far is pulled in to pay for the closer
+                // near plane in depth precision.
+                const scale = Math.max(maxDim, 1);
+                camera.near = clamp(scale / 2000, 0.02, 0.5);
+                camera.far = Math.max(scale * 30, 1500);
+                camera.updateProjectionMatrix();
+                controls.minDistance = scale * 0.02;
+                controls.maxDistance = scale * 12;
+
                 controls.target.set(centerX, centerY, centerZ);
                 camera.position.set(centerX + maxDim, centerY - maxDim, centerZ + maxDim);
                 controls.update();
