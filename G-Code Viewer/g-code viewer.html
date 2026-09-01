@@ -218,6 +218,25 @@
             margin-bottom: 2px;
         }
 
+        /* A title that carries a control. .panel-toggle floats itself right from here. */
+        .panel-title-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Repeats the panel's own column so the rows keep their spacing once nested, and
+           spells out the hidden case -- a display rule outranks the browser's [hidden]. */
+        #stock-details {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #stock-details[hidden] {
+            display: none;
+        }
+
         .stats-row {
             display: flex;
             justify-content: space-between;
@@ -717,55 +736,63 @@
 
         <!-- Stock Simulation -->
         <div class="panel">
-            <div class="panel-title">Stock Simulation</div>
+            <div class="panel-title panel-title-row">
+                <span>Stock Simulation</span>
+                <button id="stock-collapse" class="panel-toggle" type="button"
+                        title="Hide stock settings" aria-expanded="true">&#9652;</button>
+            </div>
+            <!-- Left out of the collapsible part: with the section folded away this is the
+                 one control still worth reaching. -->
             <label class="check-row">
                 <input type="checkbox" id="stock-enabled">
                 <span>Show stock &amp; simulate cutting</span>
             </label>
-            <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter under Manual Tool below to remove material.</div>
-            <label class="check-row">
-                <input type="checkbox" id="use-file-tools" disabled>
-                <span>Use tool geometry from G-code file</span>
-            </label>
-            <div id="file-tools-hint" class="hint hint-muted">Open a file whose header lists its tools.</div>
-            <div class="control-group">
-                <label for="stock-res">Stock Resolution</label>
-                <select id="stock-res">
-                    <option value="220">Low (fastest)</option>
-                    <option value="360">High</option>
-                    <option value="500" selected>Very High</option>
-                    <option value="1200">Ultra (slowest)</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label for="stock-color-mode">Stock Color</label>
-                <select id="stock-color-mode">
-                    <option value="off">Uniform</option>
-                    <option value="tool">By Tool</option>
-                    <option value="op" selected>By Operation</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <div class="label-row">
-                    <label for="stock-margin">Stock Margin (mm)</label>
-                    <span class="help" tabindex="0">?<span class="help-bubble">How far the
-                        stock extends past the toolpath extents on each side. Negative pulls
-                        the stock inside the toolpath.</span></span>
-                </div>
-                <input type="number" id="stock-margin" value="5" step="1">
-            </div>
-            <div class="btn-row">
+            <div id="stock-details">
+                <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter under Manual Tool below to remove material.</div>
+                <label class="check-row">
+                    <input type="checkbox" id="use-file-tools" disabled>
+                    <span>Use tool geometry from G-code file</span>
+                </label>
+                <div id="file-tools-hint" class="hint hint-muted">Open a file whose header lists its tools.</div>
                 <div class="control-group">
-                    <label for="stock-top">Stock Top Z</label>
-                    <input type="number" id="stock-top" step="0.1">
+                    <label for="stock-res">Stock Resolution</label>
+                    <select id="stock-res">
+                        <option value="220">Low (fastest)</option>
+                        <option value="360">High</option>
+                        <option value="500" selected>Very High</option>
+                        <option value="1200">Ultra (slowest)</option>
+                    </select>
                 </div>
                 <div class="control-group">
-                    <label for="stock-bottom">Stock Bottom Z</label>
-                    <input type="number" id="stock-bottom" step="0.1">
+                    <label for="stock-color-mode">Stock Color</label>
+                    <select id="stock-color-mode">
+                        <option value="off">Uniform</option>
+                        <option value="tool">By Tool</option>
+                        <option value="op" selected>By Operation</option>
+                    </select>
                 </div>
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="stock-margin">Stock Margin (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">How far the
+                            stock extends past the toolpath extents on each side. Negative pulls
+                            the stock inside the toolpath.</span></span>
+                    </div>
+                    <input type="number" id="stock-margin" value="5" step="1">
+                </div>
+                <div class="btn-row">
+                    <div class="control-group">
+                        <label for="stock-top">Stock Top Z</label>
+                        <input type="number" id="stock-top" step="0.1">
+                    </div>
+                    <div class="control-group">
+                        <label for="stock-bottom">Stock Bottom Z</label>
+                        <input type="number" id="stock-bottom" step="0.1">
+                    </div>
+                </div>
+                <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
+                <div class="stats-row"><span>Material Removed:</span> <span id="stock-removed" class="stats-value">0.0 %</span></div>
             </div>
-            <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
-            <div class="stats-row"><span>Material Removed:</span> <span id="stock-removed" class="stats-value">0.0 %</span></div>
         </div>
 
         <!-- Manual Tool. Only in play when the file has no tool table, or when the
@@ -1662,6 +1689,19 @@
             applySuggestedStockExtents();
             stockMarginEl.value = '5';
             rebuildStock();
+        });
+
+        // Purely a view state: the settings underneath stay live while folded away.
+        const stockCollapseEl = document.getElementById('stock-collapse');
+        const stockDetailsEl = document.getElementById('stock-details');
+        let stockDetailsExpanded = true;
+
+        stockCollapseEl.addEventListener('click', () => {
+            stockDetailsExpanded = !stockDetailsExpanded;
+            stockDetailsEl.hidden = !stockDetailsExpanded;
+            stockCollapseEl.setAttribute('aria-expanded', String(stockDetailsExpanded));
+            stockCollapseEl.innerHTML = stockDetailsExpanded ? '&#9652;' : '&#9662;';
+            stockCollapseEl.title = stockDetailsExpanded ? 'Hide stock settings' : 'Show stock settings';
         });
 
         document.getElementById('gcode-file').addEventListener('change', function(e) {
