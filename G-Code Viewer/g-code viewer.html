@@ -581,6 +581,10 @@
         let minFeed = Infinity;
         let maxFeed = -Infinity;
         let bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+        // XY extent of the cutting moves alone, filled in by a post-pass. `bounds` covers
+        // every move including rapids, which is what the camera and the reported job size
+        // want; the stock wants this one. Null when a file has no cutting moves at all.
+        let cutFootprint = null;
 
         let totalPathLength = 0;
         let isSimulating = false;
@@ -1257,10 +1261,18 @@
 
             let bottom = isFinite(bounds.minZ) ? bounds.minZ : top - 10;
             if (top - bottom < 1e-6) {
-                const spanXY = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+                const fp = stockFootprint();
+                const spanXY = Math.max(fp.maxX - fp.minX, fp.maxY - fp.minY);
                 bottom = top - Math.max(1, spanXY * 0.05);
             }
             return { top, bottom };
+        }
+
+        // The XY the stock is built on. Falls back to the full move extent for a file that
+        // never cuts -- a probing or setup program still gets a block to look at rather
+        // than a degenerate one.
+        function stockFootprint() {
+            return cutFootprint || bounds;
         }
 
         function applySuggestedStockExtents() {
@@ -1317,10 +1329,11 @@
             if (top - bottom < 1e-6) bottom = top - 1;
 
             const margin = effectiveStockMargin();
-            const minX = bounds.minX - margin;
-            const minY = bounds.minY - margin;
-            const sizeX = Math.max((bounds.maxX - bounds.minX) + 2 * margin, 1e-3);
-            const sizeY = Math.max((bounds.maxY - bounds.minY) + 2 * margin, 1e-3);
+            const fp = stockFootprint();
+            const minX = fp.minX - margin;
+            const minY = fp.minY - margin;
+            const sizeX = Math.max((fp.maxX - fp.minX) + 2 * margin, 1e-3);
+            const sizeY = Math.max((fp.maxY - fp.minY) + 2 * margin, 1e-3);
 
             // Square-ish cells sized so the longest side gets the requested sample count
             const cells = parseInt(stockResEl.value, 10) || 220;
@@ -2156,6 +2169,31 @@
                 }
                 if (seg.motion !== 'G0') seenCut = true;
                 seg.carve = seenCut;
+            });
+
+            // The stock footprint follows the cutting moves only. A rapid says nothing
+            // about how big the material is -- a retract to a tool change position or a
+            // park off the side of the part is off in free air, and letting it into the
+            // XY extent inflates the stock around a block of material that was never
+            // there, which also spends the sample grid on empty space.
+            //
+            // Same test as suggestStockExtents uses for Z, so the six faces of the
+            // suggested stock are all derived from the same set of moves.
+            cutFootprint = null;
+            parsedSegments.forEach(seg => {
+                if (seg.motion === 'G0') return;
+                if (cutFootprint === null) {
+                    cutFootprint = {
+                        minX: Infinity, maxX: -Infinity,
+                        minY: Infinity, maxY: -Infinity
+                    };
+                }
+                [seg.start, seg.end].forEach(p => {
+                    cutFootprint.minX = Math.min(cutFootprint.minX, p[0]);
+                    cutFootprint.maxX = Math.max(cutFootprint.maxX, p[0]);
+                    cutFootprint.minY = Math.min(cutFootprint.minY, p[1]);
+                    cutFootprint.maxY = Math.max(cutFootprint.maxY, p[1]);
+                });
             });
 
             // Palette slots go to tools in the order they first cut, so the legend reads
