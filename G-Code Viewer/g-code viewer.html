@@ -555,25 +555,71 @@
         let toolpathGroup = new THREE.Group();
         scene.add(toolpathGroup);
 
-        // The highlight for the segment currently being cut. WebGL ignores
+        // The highlight for the g-code command currently being cut. WebGL ignores
         // LineBasicMaterial.linewidth on nearly every platform, so "bold" has to be real
-        // geometry: a unit cylinder along +Y, stretched and rotated onto the segment.
+        // geometry: a unit cylinder along +Y, stretched and rotated onto a segment.
         // depthTest off is what lets it read through the tool and the stock; it is the
         // only object in the scene that does that, and depthWrite is off so it cannot
-        // occlude anything drawn after it. It is repositioned every frame, so its
-        // bounding sphere is always stale -- hence no frustum culling.
-        const activeSegmentMesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(1, 1, 1, 8),
-            new THREE.MeshBasicMaterial({ color: 0xffe000, depthTest: false, depthWrite: false })
-        );
-        activeSegmentMesh.renderOrder = 999;
-        activeSegmentMesh.frustumCulled = false;
-        activeSegmentMesh.visible = false;
-        scene.add(activeSegmentMesh);
+        // occlude anything drawn after it. It is rewritten every frame, so its bounding
+        // sphere is always stale -- hence no frustum culling.
+        //
+        // Instanced, because one command is not one segment: an arc is flattened into
+        // chords and a drill cycle into a plunge and its pecks, and the highlight has to
+        // cover all of them. One instance per segment keeps that to a single draw call.
+        const ACTIVE_SEG_GEOMETRY = new THREE.CylinderGeometry(1, 1, 1, 8);
+        const ACTIVE_SEG_MATERIAL = new THREE.MeshBasicMaterial({
+            color: 0xffe000, depthTest: false, depthWrite: false
+        });
+        const ACTIVE_SEG_MIN_CAPACITY = 64;
+        let activeSegmentMesh = null;
+
+        // The command on screen, and the radius its instances were last written at. The
+        // matrices only need rewriting when one of those changes, which keeps a paused,
+        // un-orbited view from re-composing a whole arc's worth every frame. Declared here
+        // rather than beside the code that uses them because ensureActiveSegmentCapacity()
+        // clears them, and it runs during setup below.
+        let activeMoveRange = null;
+        let activeSegRadius = -1;
+
+        // Capacity is fixed at construction, so a file with a longer command than anything
+        // seen so far needs a new mesh. That happens at most once per load, never in a
+        // frame.
+        function ensureActiveSegmentCapacity(count) {
+            // instanceMatrix.count is the allocation; mesh.count is how many of them are
+            // being drawn right now, which says nothing about how many there is room for.
+            if (activeSegmentMesh && activeSegmentMesh.instanceMatrix.count >= count) return;
+
+            const capacity = Math.max(count, ACTIVE_SEG_MIN_CAPACITY);
+            if (activeSegmentMesh) {
+                scene.remove(activeSegmentMesh);
+                activeSegmentMesh.dispose();
+            }
+            activeSegmentMesh = new THREE.InstancedMesh(
+                ACTIVE_SEG_GEOMETRY, ACTIVE_SEG_MATERIAL, capacity);
+            activeSegmentMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            activeSegmentMesh.renderOrder = 999;
+            activeSegmentMesh.frustumCulled = false;
+            activeSegmentMesh.visible = false;
+            activeSegmentMesh.count = 0;
+            scene.add(activeSegmentMesh);
+
+            // The new mesh holds none of the old one's matrices, so whatever was being
+            // highlighted has to be resolved again rather than assumed still drawn.
+            activeMoveRange = null;
+            activeSegRadius = -1;
+        }
+        ensureActiveSegmentCapacity(ACTIVE_SEG_MIN_CAPACITY);
 
         // Scratch objects for the per-frame placement above, kept out of the hot path.
         const ACTIVE_SEG_UP = new THREE.Vector3(0, 1, 0);
         const activeSegDir = new THREE.Vector3();
+        const activeSegPos = new THREE.Vector3();
+        const activeSegQuat = new THREE.Quaternion();
+        const activeSegScale = new THREE.Vector3();
+        const activeSegMatrix = new THREE.Matrix4();
+        // Camera distance is measured to the middle of the whole command, since an
+        // instanced mesh has no meaningful position of its own.
+        const activeSegCenter = new THREE.Vector3();
 
         // --- Tool Mesh setup ---
         const toolMaterial = new THREE.MeshStandardMaterial({ 
@@ -600,6 +646,11 @@
         // every move including rapids, which is what the camera and the reported job size
         // want; the stock wants this one. Null when a file has no cutting moves at all.
         let cutFootprint = null;
+        // moveIndex -> { first, last } indices into parsedSegments, so a segment can be
+        // widened back out to every segment its g-code command produced. Sparse: a command
+        // that emitted nothing leaves a hole.
+        let moveRanges = [];
+        let maxMoveSegments = 0;
 
         let totalPathLength = 0;
         let isSimulating = false;
@@ -760,16 +811,52 @@
         // it from the camera distance instead makes it independent of the extents
         // altogether, and holds the same apparent thickness at any zoom.
         const ACTIVE_SEG_PIXEL_RADIUS = 3;
-        let activeSegmentLength = 0;
+
+        // Lays one stretched cylinder along every segment of the active command. Same
+        // position/orientation/scale maths a single mesh used, once per instance.
+        function rebuildActiveSegmentInstances(radius) {
+            const capacity = activeSegmentMesh.instanceMatrix.count;
+            let drawn = 0;
+            for (let i = activeMoveRange.first; i <= activeMoveRange.last; i++) {
+                if (drawn >= capacity) break;   // never write past the allocation
+                const seg = parsedSegments[i];
+                activeSegDir.set(
+                    seg.end[0] - seg.start[0],
+                    seg.end[1] - seg.start[1],
+                    seg.end[2] - seg.start[2]);
+                const length = activeSegDir.length();
+                if (length <= 0) continue;   // nothing to orient a cylinder along
+
+                activeSegPos.set(
+                    (seg.start[0] + seg.end[0]) / 2,
+                    (seg.start[1] + seg.end[1]) / 2,
+                    (seg.start[2] + seg.end[2]) / 2);
+                activeSegQuat.setFromUnitVectors(
+                    ACTIVE_SEG_UP, activeSegDir.divideScalar(length));
+                activeSegScale.set(radius, length, radius);
+
+                activeSegMatrix.compose(activeSegPos, activeSegQuat, activeSegScale);
+                activeSegmentMesh.setMatrixAt(drawn++, activeSegMatrix);
+            }
+
+            activeSegmentMesh.count = drawn;
+            activeSegmentMesh.instanceMatrix.needsUpdate = true;
+            activeSegmentMesh.visible = drawn > 0;
+            activeSegRadius = radius;
+        }
 
         function updateActiveSegmentThickness() {
-            if (!activeSegmentMesh.visible) return;
-            const dist = camera.position.distanceTo(activeSegmentMesh.position);
+            if (activeMoveRange === null) return;
+            const dist = camera.position.distanceTo(activeSegCenter);
             const viewHeight = Math.max(container.clientHeight, 1);
             const worldPerPixel =
                 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * dist / viewHeight;
             const radius = Math.max(worldPerPixel * ACTIVE_SEG_PIXEL_RADIUS, 1e-4);
-            activeSegmentMesh.scale.set(radius, activeSegmentLength, radius);
+
+            // Sub-pixel changes are invisible, and the camera drifts by tiny amounts under
+            // damping long after a drag has stopped.
+            if (Math.abs(radius - activeSegRadius) < activeSegRadius * 0.01) return;
+            rebuildActiveSegmentInstances(radius);
         }
 
         // Decides what is on screen and lays the highlight over wherever the simulation
@@ -786,29 +873,28 @@
             const seg = showLines && parsedSegments.length > 0
                 ? getCurrentSegment(currentDistance)
                 : null;
-            if (!seg) {
+
+            // Widen from the segment the simulation is on to every segment its g-code
+            // command produced, so an arc lights up whole rather than one chord at a time.
+            const range = seg ? moveRanges[seg.moveIndex] : undefined;
+            if (!range) {
+                activeMoveRange = null;
                 activeSegmentMesh.visible = false;
                 return;
             }
 
-            activeSegDir.set(
-                seg.end[0] - seg.start[0],
-                seg.end[1] - seg.start[1],
-                seg.end[2] - seg.start[2]);
-            const length = activeSegDir.length();
-            if (length <= 0) {
-                activeSegmentMesh.visible = false;
-                return;
-            }
+            activeMoveRange = range;
 
-            activeSegmentMesh.position.set(
-                (seg.start[0] + seg.end[0]) / 2,
-                (seg.start[1] + seg.end[1]) / 2,
-                (seg.start[2] + seg.end[2]) / 2);
-            activeSegmentMesh.quaternion.setFromUnitVectors(
-                ACTIVE_SEG_UP, activeSegDir.divideScalar(length));
-            activeSegmentMesh.visible = true;
-            activeSegmentLength = length;
+            const first = parsedSegments[range.first];
+            const last = parsedSegments[range.last];
+            activeSegCenter.set(
+                (first.start[0] + last.end[0]) / 2,
+                (first.start[1] + last.end[1]) / 2,
+                (first.start[2] + last.end[2]) / 2);
+
+            // Force the rebuild: the range just changed, so the cached radius says nothing
+            // about whether the matrices are current.
+            activeSegRadius = -1;
             updateActiveSegmentThickness();
         }
 
@@ -895,6 +981,10 @@
                     : 'This file has no tool geometry in its header.';
                 updateManualToolFieldState();
                 currentTool = readToolInputs();
+
+                // Before anything can place the highlight: the longest command in this file
+                // decides how many instances it has to be able to draw.
+                ensureActiveSegmentCapacity(maxMoveSegments);
 
                 renderToolpath();
                 updateLegend();
@@ -2061,6 +2151,8 @@
             totalPathLength = 0;
             operations = [];
             toolColorIndex = new Map();
+            moveRanges = [];
+            maxMoveSegments = 0;
 
             const lines = text.split('\n');
             document.getElementById('line-count').innerText = lines.length.toLocaleString();
@@ -2143,6 +2235,15 @@
                 bounds.maxZ = Math.max(bounds.maxZ, z);
             }
 
+            // Which g-code command the segments being emitted came from. One command can
+            // produce many segments -- an arc's chords, a drill cycle's plunge and pecks --
+            // and the highlight needs to be able to put them back together, so every
+            // segment carries the index of the move that produced it.
+            let currentMove = -1;
+            function beginMove() {
+                currentMove++;
+            }
+
             // Emits one segment and advances the running path length. Zero-length moves
             // are dropped. `carve` is filled in by the post-pass once the whole segment
             // list exists.
@@ -2162,6 +2263,7 @@
                     startDist: totalPathLength,
                     toolNum: activeTool,
                     opIndex: currentOp < 0 ? null : currentOp,
+                    moveIndex: currentMove,
                     carve: false
                 });
                 totalPathLength += segDist;
@@ -2174,6 +2276,8 @@
             // words on a G81 line read as ordinary modal moves and drag a trench between
             // the hole positions.
             function emitDrillCycle(hx, hy) {
+                // The whole hole is one command in the file, so it highlights as one move.
+                beginMove();
                 const feed = currentFeed;
                 if (feed > 0) {
                     minFeed = Math.min(minFeed, feed);
@@ -2228,6 +2332,7 @@
                 // Explicit fields rather than relying on undefined being falsy: an unset
                 // toolNum here would make the tool mesh flip between this segment and the
                 // next one on every frame of the opening descent.
+                beginMove();
                 parsedSegments.push({
                     start: above,
                     end: firstPoint,
@@ -2237,6 +2342,7 @@
                     startDist: 0,
                     toolNum: null,
                     opIndex: null,
+                    moveIndex: currentMove,
                     carve: false
                 });
                 totalPathLength = startPoint.clearance;
@@ -2337,6 +2443,9 @@
                 }
 
                 if (hasMove || currentMotion === 'G2' || currentMotion === 'G3') {
+                    // One line, one move -- whether it emits a single straight segment or
+                    // an arc's worth of chords.
+                    beginMove();
                     const start = [currentPos.x, currentPos.y, currentPos.z];
 
                     if (currentMotion !== 'G0' && currentFeed > 0) {
@@ -2414,6 +2523,24 @@
                 }
                 if (seg.motion !== 'G0') seenCut = true;
                 seg.carve = seenCut;
+            });
+
+            // Where each g-code command's segments live, so the highlight can cover a
+            // whole arc rather than one of its chords. Built from the segments rather than
+            // from the move counter: a command whose every segment was zero-length gets
+            // dropped by pushSegment and simply leaves a hole here, which nothing looks up
+            // because no segment carries that index.
+            moveRanges = [];
+            maxMoveSegments = 0;
+            parsedSegments.forEach((seg, i) => {
+                const range = moveRanges[seg.moveIndex];
+                if (range === undefined) {
+                    moveRanges[seg.moveIndex] = { first: i, last: i };
+                    maxMoveSegments = Math.max(maxMoveSegments, 1);
+                } else {
+                    range.last = i;
+                    maxMoveSegments = Math.max(maxMoveSegments, range.last - range.first + 1);
+                }
             });
 
             // The stock footprint follows the cutting moves only. A rapid says nothing
