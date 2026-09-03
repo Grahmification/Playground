@@ -1311,14 +1311,20 @@
             vertexColors: true
         });
 
-        // How steep a one-cell drop has to be before it is drawn as a wall rather than as
-        // a slope, as a multiple of the cell size. Below WALL_LO the two halves of a split
-        // cell meet at the interpolated height and the face is continuous, so a chamfer, a
-        // ball-nose fillet and a ramp keep their true shape; past WALL_HI the face is fully
-        // vertical. The blend between them is what keeps the transition from showing up as
-        // a line of sharp cells against a line of soft ones.
-        const WALL_LO = 1.0;
-        const WALL_HI = 2.0;
+        // How far a boundary has to drop across one cell before it counts as a wall, as a
+        // multiple of the cell size. Below WALL_LO the overlay leaves the cell to the base
+        // grid entirely; between the two the face opens gradually, so the transition never
+        // shows up as a line of crisp cells beside a line of soft ones; past WALL_HI it is
+        // fully vertical.
+        //
+        // A uniform slope of angle t drops cell*tan(t) per cell, so 1.25 puts the cut-off at
+        // 51 degrees and full verticality at 68. That clears a 45 degree chamfer, a ball-nose
+        // fillet and any ramp with room to spare, while a real milled wall -- 90 degrees, and
+        // usually many cells deep -- is past WALL_HI several times over. WALL_LO doubles as
+        // the depth tolerance that decides whether two cut floors are the same level, so
+        // raising it also widens what carveCapsule treats as one continuous cut region.
+        const WALL_LO = 1.25;
+        const WALL_HI = 2.5;
 
         let stock = null;          // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, cutIds, phi, phiOwner, phiBand, contour, contourList, contourLen, geometry, skirt, topCount, total, colorData, colorTexture, overlay }
         let stockMesh = null;
@@ -2818,14 +2824,43 @@
             stock.contourList = next;
         }
 
-        // Adds every cell in the region just carved whose corners no longer agree on which
-        // side of the boundary they are. Only the carved region is walked: `phi` cannot
-        // have changed anywhere else, so neither can membership. Cells leave the set in
-        // rebuildStockOverlay, which has to re-read all of them anyway.
+        // Whether the boundary running through a cell is a step worth taking the cell over
+        // for, rather than just a change of surface. A sign change on its own is not enough:
+        // every pass boundary makes one, including the seam between two passes of a 3D
+        // finishing job, and there the two halves of a split cell meet at the interpolated
+        // height anyway -- the overlay would draw the base grid's own surface a slower way,
+        // fanned around a centre vertex that does not quite sit on it. Scattered over a
+        // sloped surface that reads as grain.
+        //
+        // Judged only on the four cell edges, never on anything interior, so the two cells
+        // sharing an edge always agree. Either both take over or neither does, and a crossed
+        // edge can never have the overlay on one side and the base grid on the other -- which
+        // is what would open a crack.
+        function edgeIsStep(phi, h, a, b, minStep) {
+            const ina = phi[a] < 0;
+            if (ina === (phi[b] < 0)) return false;
+            // The uncut side is the positive one, and there is only a wall if it stands
+            // above the cut one. Exactly the test overlayCrossing's wallness makes, so a
+            // cell is taken over if and only if one of its edges would open a face.
+            return (ina ? h[b] - h[a] : h[a] - h[b]) > minStep;
+        }
+
+        function cellHasStep(phi, h, i0, i1, i2, i3, minStep) {
+            return edgeIsStep(phi, h, i0, i1, minStep)
+                || edgeIsStep(phi, h, i1, i2, minStep)
+                || edgeIsStep(phi, h, i2, i3, minStep)
+                || edgeIsStep(phi, h, i3, i0, minStep);
+        }
+
+        // Adds every cell in the region just carved that now holds a step. Only the carved
+        // region is walked: neither `phi` nor `heights` can have changed anywhere else, so
+        // neither can membership. Cells leave the set in rebuildStockOverlay, which has to
+        // re-read all of them anyway.
         function scanContourCells() {
             if (stock.dirtyX1 < stock.dirtyX0) return;
             const nx = stock.nx, nxv = nx + 1;
-            const phi = stock.phi, contour = stock.contour;
+            const phi = stock.phi, heights = stock.heights, contour = stock.contour;
+            const minStep = WALL_LO * Math.max(stock.cellX, stock.cellY);
             const cx0 = stock.dirtyX0, cx1 = stock.dirtyX1;
             const cy0 = stock.dirtyY0, cy1 = stock.dirtyY1;
 
@@ -2836,10 +2871,7 @@
                     const ci = cellRow + cx;
                     if (contour[ci]) continue;
                     const i0 = row + cx;
-                    const a = phi[i0] < 0;
-                    if (a === (phi[i0 + 1] < 0)
-                        && a === (phi[i0 + nxv] < 0)
-                        && a === (phi[i0 + nxv + 1] < 0)) continue;
+                    if (!cellHasStep(phi, heights, i0, i0 + 1, i0 + nxv + 1, i0 + nxv, minStep)) continue;
 
                     contour[ci] = 1;
                     if (stock.contourLen === stock.contourList.length) growContourList();
@@ -2902,6 +2934,7 @@
             const minX = stock.minX, minY = stock.minY;
             const cell = Math.max(cellX, cellY);
             const wallLo = WALL_LO * cell;
+            const minStep = wallLo;
             const wallSpan = (WALL_HI - WALL_LO) * cell;
             const mode = stockColorModeEl.value;
             // Same constant the base mesh's alpha pass uses: at or below this a column is
@@ -2938,9 +2971,10 @@
                 const i2 = i3 + 1;
 
                 const p0 = phi[i0], p1 = phi[i1], p2 = phi[i2], p3 = phi[i3];
-                const s0 = p0 < 0;
-                if (s0 === (p1 < 0) && s0 === (p2 < 0) && s0 === (p3 < 0)) {
-                    // The boundary has moved out of this cell. Hand it back to the base mesh.
+                // Re-tested every rebuild, not just on entry: the step can shrink back below
+                // the threshold when a later pass lowers the standing side of it.
+                if (!cellHasStep(phi, heights, i0, i1, i2, i3, minStep)) {
+                    // No step here any more. Hand the cell back to the base mesh.
                     contour[ci] = 0;
                     suppressChanged = true;
                     continue;
@@ -2980,19 +3014,35 @@
                 // The wall still runs the full depth, so the bore keeps its true radius.
                 const skipFloor = inThrough && inCount > 0;
 
-                // The centre sample. Its height is the mean of only the corners on its own
-                // side of the boundary; a plain mean would hang it in mid-air halfway down
-                // the wall.
+                // The centre sample. It has to sit on the surface of its own side of the
+                // boundary: the mean of all four corners would hang it in mid-air halfway
+                // down the wall, and the mean of the corners on its side is only right when
+                // that side is level. Get it wrong on a slope and the fan bulges, which flat
+                // shading turns into a speck of grain.
+                //
+                // On a plane, opposite corners average to the centre. Any three corners
+                // contain a diagonal pair, so that covers every case but two adjacent
+                // corners or one, where there is nothing to extrapolate from and the mean is
+                // the best available answer.
                 const pc = (p0 + p1 + p2 + p3) * 0.25;
                 const cIn = pc < 0;
-                let hSum = 0, hCount = 0;
-                for (let k = 0; k < 4; k++) {
-                    if ((ovP[k] < 0) === cIn) { hSum += ovH[k]; hCount++; }
+                const k0 = (p0 < 0) === cIn, k1 = (p1 < 0) === cIn;
+                const k2 = (p2 < 0) === cIn, k3 = (p3 < 0) === cIn;
+                let hc;
+                if (k0 && k2) hc = (ovH[0] + ovH[2]) * 0.5;
+                else if (k1 && k3) hc = (ovH[1] + ovH[3]) * 0.5;
+                else {
+                    let hSum = 0, hCount = 0;
+                    if (k0) { hSum += ovH[0]; hCount++; }
+                    if (k1) { hSum += ovH[1]; hCount++; }
+                    if (k2) { hSum += ovH[2]; hCount++; }
+                    if (k3) { hSum += ovH[3]; hCount++; }
+                    hc = hCount > 0 ? hSum / hCount : (ovH[0] + ovH[1] + ovH[2] + ovH[3]) * 0.25;
                 }
                 ovX[4] = (px0 + px1) * 0.5;
                 ovY[4] = (py0 + py1) * 0.5;
                 ovP[4] = pc;
-                ovH[4] = hCount > 0 ? hSum / hCount : (ovH[0] + ovH[1] + ovH[2] + ovH[3]) * 0.25;
+                ovH[4] = hc;
 
                 // Fan into four sub-triangles and contour each one. A triangle is never
                 // ambiguous -- it has 0 or exactly 1 chord -- so saddles, pinch points and
@@ -3315,7 +3365,10 @@
             // this pass leaves standing. Constant for the call, and the depth on which
             // ownership of the distance field is decided.
             const rimBase = Math.max(z + toolHeightAt(tool, r), stockBottom);
-            const eps = (stock.top - stockBottom) * 1e-6;
+            // Two cut floors closer together than this are one level: a step the grid could
+            // not draw as a step anyway. Same measure the overlay uses to decide whether a
+            // boundary is worth taking a cell over for, so the two never disagree.
+            const levelTol = WALL_LO * Math.max(cellX, cellY);
             const nxv = stock.nx + 1;
             const heights = stock.heights;
             const cutIds = stock.cutIds;
@@ -3348,28 +3401,35 @@
                     //
                     // A sample can lie beside more than one boundary, and the one that
                     // matters is the deepest -- that is the wall left standing. So a pass
-                    // may only take ownership by reaching below the current owner; a pass
-                    // at the same depth unions with it, and a shallower one leaves it
-                    // alone. Without that test a facing pass run after a pocket would
-                    // flood the field and erase the pocket wall, and the answer would
-                    // depend on program order. With it, either order gives the same
-                    // result, and so do a chorded arc, a sliced plunge and a helix
-                    // sweeping the same wall on every revolution: `min` is the exact
-                    // union of two distance fields, and it does not care how many times
-                    // it is applied.
+                    // that reaches meaningfully below the current owner replaces the
+                    // record, and a meaningfully shallower one leaves it alone. Without
+                    // that a facing pass run after a pocket would flood the field and erase
+                    // the pocket wall, and the answer would depend on program order.
+                    //
+                    // "Meaningfully" is `levelTol`, not an exact comparison, and the size of
+                    // it is what keeps sloped surfaces clean. Two passes whose floors differ
+                    // by less than the grid can resolve are one cut region, not two levels,
+                    // so they union -- and `min` is the exact union of two distance fields,
+                    // which is why a chorded arc, a sliced plunge, a ramp and a helix
+                    // sweeping the same wall every revolution all give the same answer as a
+                    // single pass. Comparing exactly instead made every neighbouring pair of
+                    // 3D finishing passes a separate level, so the deeper one took the
+                    // record and its rim showed up as a boundary in the middle of a surface
+                    // that is in fact continuously machined. On a flat floor the passes all
+                    // share a depth and union, which is why only slopes went grainy.
                     const owner = phiOwner[hi];
-                    if (rimBase < owner + eps) {
+                    if (rimBase < owner + levelTol) {
                         let sd = Math.sqrt(distSq) - r;
                         if (sd > phiBand) sd = phiBand;
                         else if (sd < -phiBand) sd = -phiBand;
-                        if (rimBase < owner - eps) {
-                            phiOwner[hi] = rimBase;
-                            phi[hi] = sd;
-                            touched = true;
-                        } else if (sd < phi[hi]) {
+                        if (rimBase < owner - levelTol || sd < phi[hi]) {
                             phi[hi] = sd;
                             touched = true;
                         }
+                        // Track the deepest rim seen, even when unioning, so a run of small
+                        // steps -- a ramp, a helix -- ratchets down as one region instead of
+                        // eventually tripping the replace test against a stale first slice.
+                        if (rimBase < owner) phiOwner[hi] = rimBase;
                     }
 
                     if (distSq > r2) continue;
@@ -3396,7 +3456,10 @@
                 }
             }
 
-            if (touched) {
+            // Heights as well as the field: whether a boundary is a step depends on both, so
+            // lowering the standing side of one can take a cell out of the overlay without
+            // the field moving at all.
+            if (touched || changed) {
                 // The cells this call could have changed the boundary of: a sample belongs
                 // to the cell on either side of it along each axis.
                 const cx0 = gx0 > 0 ? gx0 - 1 : 0;
