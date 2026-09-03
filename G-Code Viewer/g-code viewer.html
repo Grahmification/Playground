@@ -1288,10 +1288,50 @@
             if (had !== (texture != null)) stockMaterial.needsUpdate = true;
         }
 
-        let stock = null;          // { nx, ny, minX, minY, cellX, cellY, halfBand, top, bottom, heights, hardHeights, cutIds, geometry, skirt, topCount, total, colorData, colorTexture }
+        // The contour overlay. A height map pins every wall to a cell boundary, which is
+        // what makes a curved wall a staircase. The cells the cut boundary actually passes
+        // through are dropped from the base mesh and redrawn here, split along the boundary
+        // at its true sub-cell position with a real vertical face between the two halves.
+        // See buildStockOverlay / rebuildStockOverlay.
+        //
+        // Its faces are unshared, so the flat per-face colour comes from a vertex attribute
+        // rather than the per-cell texture -- the texel those faces would have read is the
+        // transparent one that hid the base quad they replaced. The note above about r128
+        // and ColorManagement applies here too: outputEncoding is left at LinearEncoding and
+        // DataTexture defaults to it, so a normalized byte in this attribute and the same
+        // byte in the texture land on the same pixel. Do not convert either.
+        //
+        // No alphaTest: a through cut is drawn by omitting the floor polygon, not by
+        // discarding it, so the overlay never needs a hole.
+        const stockOverlayMaterial = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            roughness: 0.62,
+            metalness: 0.08,
+            flatShading: true,
+            vertexColors: true
+        });
+
+        // How steep a one-cell drop has to be before it is drawn as a wall rather than as
+        // a slope, as a multiple of the cell size. Below WALL_LO the two halves of a split
+        // cell meet at the interpolated height and the face is continuous, so a chamfer, a
+        // ball-nose fillet and a ramp keep their true shape; past WALL_HI the face is fully
+        // vertical. The blend between them is what keeps the transition from showing up as
+        // a line of sharp cells against a line of soft ones.
+        const WALL_LO = 1.0;
+        const WALL_HI = 2.0;
+
+        let stock = null;          // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, cutIds, phi, phiOwner, phiBand, contour, contourList, contourLen, geometry, skirt, topCount, total, colorData, colorTexture, overlay }
         let stockMesh = null;
+        let stockOverlayMesh = null;
         let stockGeomDirty = false;
         let stockColorDirty = false;
+        // Whether the distance field moved since the last refresh. A cut can shift a wall
+        // within a cell without changing any sample height, and that still has to redraw.
+        let stockPhiDirty = false;
+        // Whether the set of cells hidden from the base mesh has changed. Those cells are
+        // hidden by writing alpha 0 into their texel, so the colour pass has to run again
+        // even in Uniform mode, where it would otherwise be skipped entirely.
+        let stockSuppressDirty = false;
         // Whether any rapid has removed material in the cut so far. Drives the legend
         // key, and forces colour uploads that Uniform mode would otherwise skip.
         let stockHasGouge = false;
@@ -2331,6 +2371,11 @@
                 stockMesh.geometry.dispose();
                 stockMesh = null;
             }
+            if (stockOverlayMesh) {
+                scene.remove(stockOverlayMesh);
+                stockOverlayMesh.geometry.dispose();
+                stockOverlayMesh = null;
+            }
             if (stock && stock.colorTexture) {
                 setStockMap(null);
                 stock.colorTexture.dispose();
@@ -2409,34 +2454,61 @@
             const cellX = sizeX / nx;
             const cellY = sizeY / ny;
 
+            const samples = (nx + 1) * (ny + 1);
+
             stock = {
                 nx, ny, minX, minY,
                 cellX, cellY,
                 top, bottom,
-                heights: new Float32Array((nx + 1) * (ny + 1)),
-                // What the carve would have produced without the rim filter: the hard min
-                // over full-coverage cuts only. carveCapsule blends rim samples away from
-                // this rather than away from `heights`, which is what makes a filtered
-                // write idempotent -- a plunge sliced 100 ways, a helix sweeping the same
-                // wall every revolution, or an arc chorded six times across one cell all
-                // land on the same answer as a single pass. Blending from `heights` would
-                // decay each of them to full depth and put the staircase back, half a cell
-                // oversize. Always >= heights.
-                hardHeights: new Float32Array((nx + 1) * (ny + 1)),
-                // Half the cell diagonal: the widest the rim filter's support can be along
-                // any boundary normal. Precomputed because carveCapsule runs thousands of
-                // times per scrub. Math.sqrt of the sum, not Math.hypot, which is far
-                // slower in V8.
-                halfBand: 0.5 * Math.sqrt(cellX * cellX + cellY * cellY),
+                heights: new Float32Array(samples),
                 // Strict shadow of `heights`: operation index + 1, 0 for uncut. Cleared
                 // in lockstep by resetStockHeights(). Uint16 because operation counts can
                 // exceed 255.
-                cutIds: new Uint16Array((nx + 1) * (ny + 1)),
+                cutIds: new Uint16Array(samples),
+
+                // Signed distance in XY from the sample to the cut boundary that governs
+                // it, negative inside the cut, truncated to +/- phiBand. This is the
+                // sub-cell information point sampling throws away, and the only reason a
+                // wall can be drawn anywhere but on a cell boundary.
+                //
+                // Cuts compose here by `min`, which is the exact union operator for a
+                // distance field and is order-independent and idempotent: an arc chorded
+                // six times across one cell, a plunge sliced a hundred ways and a helix
+                // sweeping the same wall every revolution all land on the same answer as
+                // a single pass. That property is what the old `hardHeights` array existed
+                // to fake, and why it is gone.
+                phi: new Float32Array(samples),
+                // The Z of the wall that owns phi[i] -- the rim height of the cut that
+                // wrote it. A sample can sit beside more than one cut boundary, and the
+                // one that matters is always the deepest, so a cut only takes ownership
+                // when it reaches below the current owner. Without this a later facing
+                // pass over an existing pocket would flood the field and erase the pocket
+                // wall, and the result would depend on program order.
+                phiOwner: new Float32Array(samples),
+                // Truncation radius. Wider than a cell so that any grid edge with a true
+                // crossing has both endpoints unsaturated, which is what lets the crossing
+                // be located by interpolation rather than guessed at.
+                phiBand: 1.5 * Math.max(cellX, cellY),
+
+                // 1 where the cut boundary passes through the cell, which is also the flag
+                // the colour pass reads to force that cell's texel transparent so the
+                // overlay can stand in for it.
+                contour: new Uint8Array(nx * ny),
+                // The listed cells, so every per-frame sweep is O(boundary) rather than
+                // O(grid). Append-only during carving; the overlay rebuild has to re-read
+                // every listed cell anyway, so it compacts stale entries out for free.
+                contourList: new Int32Array(4096),
+                contourLen: 0,
+                // Cells touched since the last contour scan, in cell coordinates.
+                dirtyX0: 0, dirtyY0: 0, dirtyX1: -1, dirtyY1: -1,
+
                 skirt: null,
-                geometry: null
+                geometry: null,
+                overlay: null
             };
 
             buildStockGeometry();
+            buildStockOverlay();
             resetStockHeights();
             requestCarve(currentDistance);
             updateGridPlacement();
@@ -2663,15 +2735,390 @@
             scene.add(stockMesh);
         }
 
+        // --- Contour overlay ------------------------------------------------------------
+        //
+        // The base mesh can only put a wall on a cell boundary, because that is where its
+        // vertices are. `phi` knows where the wall really is, to a fraction of a cell, so
+        // the cells the boundary passes through are taken away from the base mesh and
+        // redrawn here: each is split along the boundary, the two halves sit at their own
+        // heights, and a real vertical face joins them.
+        //
+        // Everything about a crossing is a function of the two samples it lies between, so
+        // the two cells sharing a grid edge compute it identically and the overlay is
+        // watertight -- against itself, and against the base grid along the cell edges the
+        // boundary does not cross. There is no case analysis and no fallback: a cell either
+        // has a sign change or it does not.
+
+        // Four split sub-triangles, each 3 surface triangles plus a 2-triangle wall.
+        const OVERLAY_VERTS_PER_CELL = 60;
+
+        // One cell's samples: four corners in CCW order seen from +Z, then the centre.
+        const ovX = new Float64Array(5);
+        const ovY = new Float64Array(5);
+        const ovP = new Float64Array(5);
+        const ovH = new Float64Array(5);
+        const ovI = new Int32Array(4);
+        const ovC0 = new Float64Array(4);   // x, y, topZ, botZ
+        const ovC1 = new Float64Array(4);
+        // Live write cursor into the overlay buffers, so the emit helpers stay flat.
+        let ovPos = null, ovCol = null, ovN = 0;
+
+        function makeOverlayGeometry(capacity, keep) {
+            const geometry = new THREE.BufferGeometry();
+            const position = new THREE.BufferAttribute(new Float32Array(capacity * 3), 3);
+            position.setUsage(THREE.DynamicDrawUsage);
+            const color = new THREE.BufferAttribute(new Uint8Array(capacity * 3), 3, true);
+            color.setUsage(THREE.DynamicDrawUsage);
+            if (keep > 0) {
+                position.array.set(ovPos.subarray(0, keep * 3));
+                color.array.set(ovCol.subarray(0, keep * 3));
+            }
+            geometry.setAttribute('position', position);
+            geometry.setAttribute('color', color);
+            // Never read: the material is flat shaded, so the fragment shader derives the
+            // normal from screen-space derivatives. Present because the attribute is
+            // declared in the shader regardless. Same placeholder as the base mesh.
+            geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
+            geometry.setDrawRange(0, keep);
+            ovPos = position.array;
+            ovCol = color.array;
+            return geometry;
+        }
+
+        function buildStockOverlay() {
+            const capacity = OVERLAY_VERTS_PER_CELL * 4096;
+            const geometry = makeOverlayGeometry(capacity, 0);
+
+            stockOverlayMesh = new THREE.Mesh(geometry, stockOverlayMaterial);
+            // The overlay never leaves the block and the block is always on screen, so a
+            // bounding sphere recomputed every frame over a few hundred thousand vertices
+            // would be the most expensive thing the rebuild does, to learn nothing.
+            stockOverlayMesh.frustumCulled = false;
+            scene.add(stockOverlayMesh);
+
+            stock.overlay = { geometry, capacity };
+        }
+
+        // Doubles the pool, mid-rebuild. A whole new geometry rather than new attributes on
+        // the old one: swapping an attribute leaves its GL buffer alive until the geometry
+        // itself is disposed, and this can run several times in a session.
+        function growStockOverlay() {
+            const ov = stock.overlay;
+            const capacity = ov.capacity * 2;
+            const geometry = makeOverlayGeometry(capacity, ovN);
+            ov.geometry.dispose();
+            stockOverlayMesh.geometry = geometry;
+            ov.geometry = geometry;
+            ov.capacity = capacity;
+        }
+
+        function growContourList() {
+            const next = new Int32Array(stock.contourList.length * 2);
+            next.set(stock.contourList);
+            stock.contourList = next;
+        }
+
+        // Adds every cell in the region just carved whose corners no longer agree on which
+        // side of the boundary they are. Only the carved region is walked: `phi` cannot
+        // have changed anywhere else, so neither can membership. Cells leave the set in
+        // rebuildStockOverlay, which has to re-read all of them anyway.
+        function scanContourCells() {
+            if (stock.dirtyX1 < stock.dirtyX0) return;
+            const nx = stock.nx, nxv = nx + 1;
+            const phi = stock.phi, contour = stock.contour;
+            const cx0 = stock.dirtyX0, cx1 = stock.dirtyX1;
+            const cy0 = stock.dirtyY0, cy1 = stock.dirtyY1;
+
+            for (let cy = cy0; cy <= cy1; cy++) {
+                const row = cy * nxv;
+                const cellRow = cy * nx;
+                for (let cx = cx0; cx <= cx1; cx++) {
+                    const ci = cellRow + cx;
+                    if (contour[ci]) continue;
+                    const i0 = row + cx;
+                    const a = phi[i0] < 0;
+                    if (a === (phi[i0 + 1] < 0)
+                        && a === (phi[i0 + nxv] < 0)
+                        && a === (phi[i0 + nxv + 1] < 0)) continue;
+
+                    contour[ci] = 1;
+                    if (stock.contourLen === stock.contourList.length) growContourList();
+                    stock.contourList[stock.contourLen++] = ci;
+                    stockSuppressDirty = true;
+                }
+            }
+            stock.dirtyX1 = -1;
+        }
+
+        // Where the boundary crosses the segment between samples `a` and `b`, and the two
+        // heights the face takes there. Writes [x, y, topZ, botZ].
+        function overlayCrossing(a, b, wallLo, wallSpan, out) {
+            const pa = ovP[a], pb = ovP[b];
+            const den = pa - pb;
+            let t = den !== 0 ? pa / den : 0.5;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+
+            out[0] = ovX[a] + t * (ovX[b] - ovX[a]);
+            out[1] = ovY[a] + t * (ovY[b] - ovY[a]);
+
+            const hLerp = ovH[a] + t * (ovH[b] - ovH[a]);
+            const hOut = pa > 0 ? ovH[a] : ovH[b];   // the side that still has material
+            const hIn = pa > 0 ? ovH[b] : ovH[a];
+
+            // Wallness. At 0 both heights collapse onto the interpolated one and the
+            // surface stays continuous, which is the right answer for a chamfer flank, a
+            // ball-nose fillet or a ramp -- the sign change is real there, but the step is
+            // not. At 1 the face is fully vertical. Blending between them is what stops
+            // the transition from reading as a line of crisp cells beside a line of soft
+            // ones, which is worse to look at than uniform aliasing.
+            let w = (hOut - hIn - wallLo) / wallSpan;
+            if (w <= 0) w = 0;
+            else if (w >= 1) w = 1;
+            else w = w * w * (3 - 2 * w);
+
+            out[2] = hLerp + (hOut - hLerp) * w;
+            out[3] = hLerp + (hIn - hLerp) * w;
+        }
+
+        function ovVert(x, y, z, hex) {
+            const i = ovN * 3;
+            ovPos[i] = x;
+            ovPos[i + 1] = y;
+            ovPos[i + 2] = z;
+            ovCol[i] = (hex >> 16) & 0xff;
+            ovCol[i + 1] = (hex >> 8) & 0xff;
+            ovCol[i + 2] = hex & 0xff;
+            ovN++;
+        }
+
+        // Redraws every boundary cell and compacts the ones the boundary has left out of
+        // the list. Returns true if the hidden set changed, which is what tells the colour
+        // pass it has alpha to rewrite.
+        function rebuildStockOverlay() {
+            const nx = stock.nx, nxv = nx + 1;
+            const heights = stock.heights, phi = stock.phi, cutIds = stock.cutIds;
+            const contour = stock.contour, list = stock.contourList;
+            const cellX = stock.cellX, cellY = stock.cellY;
+            const minX = stock.minX, minY = stock.minY;
+            const cell = Math.max(cellX, cellY);
+            const wallLo = WALL_LO * cell;
+            const wallSpan = (WALL_HI - WALL_LO) * cell;
+            const mode = stockColorModeEl.value;
+            // Same constant the base mesh's alpha pass uses: at or below this a column is
+            // a void, not a floor.
+            const throughLevel = stock.bottom + Math.max((stock.top - stock.bottom) * 1e-5, 1e-9);
+            const flatTol = (stock.top - stock.bottom) * 1e-6;
+
+            const ov = stock.overlay;
+            ovPos = ov.geometry.getAttribute('position').array;
+            ovCol = ov.geometry.getAttribute('color').array;
+            ovN = 0;
+
+            let suppressChanged = stockSuppressDirty;
+            let outLen = 0;
+
+            const cache = new Map();
+            function rgb(id) {
+                let c = cache.get(id);
+                if (c === undefined) {
+                    c = stockColorForCutId(id, mode);
+                    cache.set(id, c);
+                }
+                return c;
+            }
+
+            for (let li = 0; li < stock.contourLen; li++) {
+                const ci = list[li];
+                const cx = ci % nx;
+                const cy = (ci - cx) / nx;
+
+                const i0 = cy * nxv + cx;
+                const i1 = i0 + 1;
+                const i3 = i0 + nxv;
+                const i2 = i3 + 1;
+
+                const p0 = phi[i0], p1 = phi[i1], p2 = phi[i2], p3 = phi[i3];
+                const s0 = p0 < 0;
+                if (s0 === (p1 < 0) && s0 === (p2 < 0) && s0 === (p3 < 0)) {
+                    // The boundary has moved out of this cell. Hand it back to the base mesh.
+                    contour[ci] = 0;
+                    suppressChanged = true;
+                    continue;
+                }
+                list[outLen++] = ci;
+
+                if (ovN + OVERLAY_VERTS_PER_CELL > ov.capacity) growStockOverlay();
+
+                const px0 = minX + cx * cellX, px1 = px0 + cellX;
+                const py0 = minY + cy * cellY, py1 = py0 + cellY;
+                ovX[0] = px0; ovY[0] = py0; ovP[0] = p0; ovH[0] = heights[i0]; ovI[0] = i0;
+                ovX[1] = px1; ovY[1] = py0; ovP[1] = p1; ovH[1] = heights[i1]; ovI[1] = i1;
+                ovX[2] = px1; ovY[2] = py1; ovP[2] = p2; ovH[2] = heights[i2]; ovI[2] = i2;
+                ovX[3] = px0; ovY[3] = py1; ovP[3] = p3; ovH[3] = heights[i3]; ovI[3] = i3;
+
+                // The cut that made each half. Deepest corner wins, ties to the later
+                // operation -- the base mesh's per-cell rule, but applied to each side of
+                // the boundary separately, so the sliver of old surface left standing above
+                // a wall keeps its own colour instead of being repainted by the cut below.
+                let hIn = Infinity, idIn = 0, hOut = Infinity, idOut = 0;
+                let inCount = 0, inThrough = true;
+                for (let k = 0; k < 4; k++) {
+                    const h = ovH[k], id = cutIds[ovI[k]];
+                    if (ovP[k] < 0) {
+                        inCount++;
+                        if (h > throughLevel) inThrough = false;
+                        if (h < hIn || (h === hIn && id > idIn)) { hIn = h; idIn = id; }
+                    } else if (h < hOut || (h === hOut && id > idOut)) {
+                        hOut = h;
+                        idOut = id;
+                    }
+                }
+                const colIn = rgb(idIn);
+                const colOut = rgb(idOut);
+                // Cut clean through on the inside: there is no floor to draw, and a polygon
+                // at the underside would be exactly the membrane alphaTest exists to delete.
+                // The wall still runs the full depth, so the bore keeps its true radius.
+                const skipFloor = inThrough && inCount > 0;
+
+                // The centre sample. Its height is the mean of only the corners on its own
+                // side of the boundary; a plain mean would hang it in mid-air halfway down
+                // the wall.
+                const pc = (p0 + p1 + p2 + p3) * 0.25;
+                const cIn = pc < 0;
+                let hSum = 0, hCount = 0;
+                for (let k = 0; k < 4; k++) {
+                    if ((ovP[k] < 0) === cIn) { hSum += ovH[k]; hCount++; }
+                }
+                ovX[4] = (px0 + px1) * 0.5;
+                ovY[4] = (py0 + py1) * 0.5;
+                ovP[4] = pc;
+                ovH[4] = hCount > 0 ? hSum / hCount : (ovH[0] + ovH[1] + ovH[2] + ovH[3]) * 0.25;
+
+                // Fan into four sub-triangles and contour each one. A triangle is never
+                // ambiguous -- it has 0 or exactly 1 chord -- so saddles, pinch points and
+                // islands all come out right with no special cases.
+                for (let k = 0; k < 4; k++) {
+                    const a = k, b = (k + 1) & 3, c = 4;
+                    const ia = ovP[a] < 0, ib = ovP[b] < 0, ic = ovP[c] < 0;
+
+                    if (ia === ib && ib === ic) {
+                        if (ia && skipFloor) continue;
+                        const hex = ia ? colIn : colOut;
+                        ovVert(ovX[a], ovY[a], ovH[a], hex);
+                        ovVert(ovX[b], ovY[b], ovH[b], hex);
+                        ovVert(ovX[c], ovY[c], ovH[c], hex);
+                        continue;
+                    }
+
+                    // One vertex is alone on its side, and the chord crosses the two edges
+                    // that touch it. Rotate so the lone vertex leads and the CCW winding of
+                    // (a, b, c) is preserved.
+                    let L, M, N;
+                    if (ia !== ib && ia !== ic) { L = a; M = b; N = c; }
+                    else if (ib !== ia && ib !== ic) { L = b; M = c; N = a; }
+                    else { L = c; M = a; N = b; }
+
+                    overlayCrossing(L, M, wallLo, wallSpan, ovC0);
+                    overlayCrossing(N, L, wallLo, wallSpan, ovC1);
+
+                    const lIn = ovP[L] < 0;
+                    // out[2] is the height on the material side, out[3] on the cut side.
+                    const lz0 = lIn ? ovC0[3] : ovC0[2];
+                    const lz1 = lIn ? ovC1[3] : ovC1[2];
+                    const mz0 = lIn ? ovC0[2] : ovC0[3];
+                    const mz1 = lIn ? ovC1[2] : ovC1[3];
+
+                    // The corner at L.
+                    if (!(lIn && skipFloor)) {
+                        const hex = lIn ? colIn : colOut;
+                        ovVert(ovX[L], ovY[L], ovH[L], hex);
+                        ovVert(ovC0[0], ovC0[1], lz0, hex);
+                        ovVert(ovC1[0], ovC1[1], lz1, hex);
+                    }
+
+                    // The quad left over, fanned from the first crossing. Convex: it is a
+                    // triangle with one corner clipped off.
+                    if (!(!lIn && skipFloor)) {
+                        const hex = lIn ? colOut : colIn;
+                        ovVert(ovC0[0], ovC0[1], mz0, hex);
+                        ovVert(ovX[M], ovY[M], ovH[M], hex);
+                        ovVert(ovX[N], ovY[N], ovH[N], hex);
+                        ovVert(ovC0[0], ovC0[1], mz0, hex);
+                        ovVert(ovX[N], ovY[N], ovH[N], hex);
+                        ovVert(ovC1[0], ovC1[1], mz1, hex);
+                    }
+
+                    // The wall. Walking C0 -> C1 keeps L's half on the left, so the face is
+                    // wound to look at whichever half is the cut one -- the winding is
+                    // load-bearing, because a flat-shaded back face is lit as if it were a
+                    // front face and DoubleSide does not flip the derived normal in r128.
+                    const t0 = ovC0[2], b0 = ovC0[3], t1 = ovC1[2], b1 = ovC1[3];
+                    if (t0 - b0 > flatTol || t1 - b1 > flatTol) {
+                        if (lIn) {
+                            ovVert(ovC0[0], ovC0[1], t0, colIn);
+                            ovVert(ovC1[0], ovC1[1], b1, colIn);
+                            ovVert(ovC0[0], ovC0[1], b0, colIn);
+                            ovVert(ovC0[0], ovC0[1], t0, colIn);
+                            ovVert(ovC1[0], ovC1[1], t1, colIn);
+                            ovVert(ovC1[0], ovC1[1], b1, colIn);
+                        } else {
+                            ovVert(ovC0[0], ovC0[1], t0, colIn);
+                            ovVert(ovC0[0], ovC0[1], b0, colIn);
+                            ovVert(ovC1[0], ovC1[1], b1, colIn);
+                            ovVert(ovC0[0], ovC0[1], t0, colIn);
+                            ovVert(ovC1[0], ovC1[1], b1, colIn);
+                            ovVert(ovC1[0], ovC1[1], t1, colIn);
+                        }
+                    }
+                }
+            }
+
+            stock.contourLen = outLen;
+            stockSuppressDirty = false;
+
+            const posAttr = ov.geometry.getAttribute('position');
+            const colAttr = ov.geometry.getAttribute('color');
+            // r128 resets updateRange.count to -1 after every upload, so this has to be
+            // set again each time rather than once at construction.
+            posAttr.updateRange.offset = 0;
+            posAttr.updateRange.count = ovN * 3;
+            posAttr.needsUpdate = true;
+            colAttr.updateRange.offset = 0;
+            colAttr.updateRange.count = ovN * 3;
+            colAttr.needsUpdate = true;
+            ov.geometry.setDrawRange(0, ovN);
+
+            return suppressChanged;
+        }
+
         function resetStockHeights() {
             if (!stock) return;
             stock.heights.fill(stock.top);
-            // The rim filter's reference ceiling has to go back with it, or the first
-            // pass after a backward scrub would blend down from a stale cut depth.
-            stock.hardHeights.fill(stock.top);
             // cutIds is a shadow of heights, not an accumulator. This is also the
             // backward-scrub path, so missing it would leave uncut stock fully coloured.
             stock.cutIds.fill(0);
+
+            // The walls go with the material. `phi` back to "no boundary anywhere near",
+            // and its owner back to the top of the block so the first pass to reach a
+            // sample always takes it.
+            stock.phi.fill(stock.phiBand);
+            stock.phiOwner.fill(stock.top);
+            // Only the listed cells are cleared, not the whole map: `contour` is 1.4 MB at
+            // Ultra and this runs once per frame for as long as the scrubber is dragged
+            // backwards.
+            const hadContour = stock.contourLen > 0;
+            for (let i = 0; i < stock.contourLen; i++) stock.contour[stock.contourList[i]] = 0;
+            stock.contourLen = 0;
+            stock.dirtyX1 = -1;
+            stock.overlay.geometry.setDrawRange(0, 0);
+            stockPhiDirty = false;
+            // Hidden cells carry alpha 0 and nothing else will put it back -- the same
+            // argument the stockAnyThroughCut block below makes.
+            if (hadContour) {
+                stockSuppressDirty = true;
+                stockColorDirty = true;
+            }
+
             carvedDistance = 0;
             carveSegIndex = 0;
             stockGeomDirty = true;
@@ -2716,11 +3163,19 @@
                 attr.needsUpdate = true;
             }
 
-            // The alpha half of this pass follows the height map, not the cut ids, so it
-            // has to run whenever geometry moves -- but only once something has actually
-            // reached the underside. Until then there is no hole to punch and Uniform mode
-            // costs exactly what it always did.
-            const doAlpha = doPositions && stockAnyThroughCut;
+            // The overlay has to be settled before the alpha pass, because that pass is
+            // what actually hides the cells the overlay has taken over.
+            scanContourCells();
+            const suppressChanged = (doPositions || doColors || stockSuppressDirty)
+                ? rebuildStockOverlay()
+                : false;
+
+            // The alpha half of this pass follows the height map and the hidden set, not
+            // the cut ids, so it has to run whenever either moves -- but not before one of
+            // them can matter. Until something reaches the underside and until the boundary
+            // first moves, there is nothing to punch and Uniform mode costs what it always
+            // did.
+            const doAlpha = (doPositions && stockAnyThroughCut) || suppressChanged;
 
             if (doColors || doAlpha) {
                 const col = stock.colorData;
@@ -2757,6 +3212,7 @@
                 // block is a second alpha write a fixed distance along the same buffer.
                 const nxv = stock.nx + 1;
                 const bottomOffset = stock.nx * stock.ny * 4;
+                const contour = stock.contour;
                 for (let cy = 0; cy < stock.ny; cy++) {
                     for (let cx = 0; cx < stock.nx; cx++) {
                         const corner = cy * nxv + cx;
@@ -2791,9 +3247,16 @@
                         // height map can show a hole rather than a membrane lying on the
                         // floor of the block. The underside opens with it, or the hole
                         // would be visible from above and closed from below.
-                        const alpha = worstH <= throughLevel ? 0 : 255;
-                        col[ci + 3] = alpha;
-                        col[bottomOffset + ci + 3] = alpha;
+                        const through = worstH <= throughLevel;
+                        // The same discard is what hides a cell the contour overlay has
+                        // taken over. Editing the index buffer instead would be far worse:
+                        // updateRange is a single contiguous span and boundary cells are
+                        // scattered across nearly every row, so the touched span is the
+                        // whole 6-35 MB buffer, every frame.
+                        col[ci + 3] = (through || contour[cy * stock.nx + cx]) ? 0 : 255;
+                        // Not the overlay's business: it draws the top of the hole, and the
+                        // underside stays closed until the whole cell is through.
+                        col[bottomOffset + ci + 3] = through ? 0 : 255;
                     }
                 }
                 stock.colorTexture.needsUpdate = true;
@@ -2827,17 +3290,13 @@
             const minY = stock.minY;
             const cellX = stock.cellX;
             const cellY = stock.cellY;
-            const halfBand = stock.halfBand;
 
-            // A tool narrower than one cell fits its whole disc inside a single sample's
-            // cell, where the filter's straight-boundary assumption collapses and it
-            // over-removes by close to an order of magnitude -- a spot drill's point would
-            // paint a broad shallow crater. Those fall back to the binary test, where
-            // rIn and rOut both collapse to r and the rim branch is unreachable.
-            const doAA = r >= 2 * halfBand;
-            const rIn = doAA ? r - halfBand : r;
-            const rOut = doAA ? r + halfBand : r;
-            const rIn2 = rIn * rIn;
+            // The scan runs a band wider than the tool so the distance field gets written
+            // on both sides of the boundary. A wall can only be placed between two samples
+            // that both know how far away it is; a sample that was never visited still
+            // holds the truncated value and would put the crossing at the wrong fraction.
+            const phiBand = stock.phiBand;
+            const rOut = r + phiBand;
             const rOut2 = rOut * rOut;
 
             const gx0 = Math.max(0, Math.floor((Math.min(x0, x1) - rOut - minX) / cellX));
@@ -2852,19 +3311,18 @@
             const r2 = tool.r2;
             const flatSq = tool.flatSq;
             const stockBottom = stock.bottom;
-            // The profile height at the rim, constant for the call. Lets the rim branch
-            // answer the outer half of the band without a sqrt.
-            const rimBase = z + toolHeightAt(tool, r);
-            // A rim write of a nanometre would still set `changed`, and that re-uploads
-            // every vertex and rescans the whole map for the removed-% readout on a frame
-            // that used to do nothing. It would also report a rapid grazing past the
-            // surface as a gouge.
-            const minDrop = (stock.top - stockBottom) * 1e-6;
+            // The highest point of the tool's cutting surface, and so the depth of the wall
+            // this pass leaves standing. Constant for the call, and the depth on which
+            // ownership of the distance field is decided.
+            const rimBase = Math.max(z + toolHeightAt(tool, r), stockBottom);
+            const eps = (stock.top - stockBottom) * 1e-6;
             const nxv = stock.nx + 1;
             const heights = stock.heights;
-            const hard = stock.hardHeights;
             const cutIds = stock.cutIds;
+            const phi = stock.phi;
+            const phiOwner = stock.phiOwner;
             let changed = false;
+            let touched = false;
 
             for (let gy = gy0; gy <= gy1; gy++) {
                 const py = minY + gy * cellY;
@@ -2881,91 +3339,82 @@
                     if (distSq > rOut2) continue;
 
                     const hi = rowBase + gx;
-                    const h = heights[hi];
 
-                    if (distSq <= rIn2) {
-                        // Interior: the sample's whole cell is under the tool, so the
-                        // profile height is the answer outright.
-                        // A flat end mill has flatSq === r2, so it never reaches the sqrt.
-                        let target = distSq <= flatSq ? z : z + toolHeightAt(tool, Math.sqrt(distSq));
-                        if (target < stockBottom) {
-                            target = stockBottom;
-                            // Reaching the underside is what the alpha pass looks for; noting
-                            // it here saves that pass from running at all until it can matter.
-                            stockAnyThroughCut = true;
+                    // --- Distance field ---------------------------------------------
+                    // Where this sample sits relative to the pass's boundary, signed and
+                    // truncated to the band. This is the sub-cell fact point sampling
+                    // throws away, and the whole reason a wall can be drawn anywhere but
+                    // on a cell boundary.
+                    //
+                    // A sample can lie beside more than one boundary, and the one that
+                    // matters is the deepest -- that is the wall left standing. So a pass
+                    // may only take ownership by reaching below the current owner; a pass
+                    // at the same depth unions with it, and a shallower one leaves it
+                    // alone. Without that test a facing pass run after a pocket would
+                    // flood the field and erase the pocket wall, and the answer would
+                    // depend on program order. With it, either order gives the same
+                    // result, and so do a chorded arc, a sliced plunge and a helix
+                    // sweeping the same wall on every revolution: `min` is the exact
+                    // union of two distance fields, and it does not care how many times
+                    // it is applied.
+                    const owner = phiOwner[hi];
+                    if (rimBase < owner + eps) {
+                        let sd = Math.sqrt(distSq) - r;
+                        if (sd > phiBand) sd = phiBand;
+                        else if (sd < -phiBand) sd = -phiBand;
+                        if (rimBase < owner - eps) {
+                            phiOwner[hi] = rimBase;
+                            phi[hi] = sd;
+                            touched = true;
+                        } else if (sd < phi[hi]) {
+                            phi[hi] = sd;
+                            touched = true;
                         }
-                        if (h > target) {
-                            heights[hi] = target;
-                            hard[hi] = target;
-                            cutIds[hi] = cutId;
-                            changed = true;
-                        } else if (hard[hi] > target) {
-                            // The filter already took this sample below the true cut. Keep
-                            // it, but record the honest depth for later rim blends.
-                            hard[hi] = target;
-                        }
-                        continue;
                     }
 
-                    // --- Rim band -------------------------------------------------------
-                    // The sample's cell straddles the tool's edge. Point-sampling here is
-                    // what makes a diagonal or curved wall a staircase: every row rounds
-                    // the edge to a different column. Give the sample the average height
-                    // over its cell instead, so the wall lands where the tool really was.
-                    // Clamped at the rim, so this is continuous with the interior branch
-                    // even where the profile turns vertical, as a ball nose does at its
-                    // equator. A flat end mill has flatSq === r2, so one of the two cheap
-                    // arms always answers and the sqrt is never reached.
-                    const base = distSq <= flatSq ? z
-                        : (distSq >= r2 ? rimBase : z + toolHeightAt(tool, Math.sqrt(distSq)));
+                    if (distSq > r2) continue;
 
-                    if (base <= stockBottom) {
-                        // Through cut: the column is a void. A height map cannot hold a
-                        // sloped lip over one, so filtering would only shrink the opening
-                        // and ring it with an opaque fringe. Use the original binary edge.
-                        if (distSq > r2) continue;
+                    // Under the tool. Its profile rises monotonically outward, so the
+                    // sample's closest approach to the swept axis is where the tool reaches
+                    // lowest over it. A flat end mill has flatSq === r2, so it never
+                    // reaches the sqrt.
+                    let target = distSq <= flatSq ? z : z + toolHeightAt(tool, Math.sqrt(distSq));
+                    if (target < stockBottom) {
+                        target = stockBottom;
+                        // Reaching the underside is what the alpha pass looks for; noting
+                        // it here saves that pass from running at all until it can matter.
                         stockAnyThroughCut = true;
-                        if (h > stockBottom) {
-                            heights[hi] = stockBottom;
-                            hard[hi] = stockBottom;
-                            cutIds[hi] = cutId;
-                            changed = true;
-                        } else if (hard[hi] > stockBottom) {
-                            hard[hi] = stockBottom;
-                        }
-                        continue;
                     }
-
-                    // Blend away from the unfiltered height, never from the live one --
-                    // see the note on hardHeights in rebuildStock().
-                    const ref = hard[hi];
-                    if (ref <= base) continue;
-
-                    // |ex|*cellX + |ey|*cellY is the width of the sample's cell measured
-                    // along the outward normal, times d. Dividing (distSq - r2) by twice
-                    // it gives the signed distance past the edge in cell widths: the
-                    // factorisation (d - r)(d + r) with (d + r)/2 read as d, exact to
-                    // within d/((d+r)/2) across a band one cell wide. No sqrt, so a flat
-                    // end mill keeps the square-root-free path it was written for.
-                    const den = Math.abs(ex) * cellX + Math.abs(ey) * cellY;
-                    if (den <= 0) continue;
-                    let cov = 0.5 - 0.5 * (distSq - r2) / den;
-                    if (cov <= 0) continue;
-                    if (cov > 1) cov = 1;
-
-                    // cov = 1 at d = rIn in every direction, so this meets the interior
-                    // branch exactly and the two leave no seam.
-                    const v = base + (1 - cov) * (ref - base);
-                    if (h > v + minDrop) {
-                        heights[hi] = v;
+                    if (heights[hi] > target) {
+                        heights[hi] = target;
                         // cutIds stays a strict shadow of heights. Leaving a stale id on a
                         // lowered sample would hand its cell to the wrong operation in the
-                        // colour pass, and would let a grazing rapid raise the gouge flag
-                        // without painting anything red.
+                        // colour pass.
                         cutIds[hi] = cutId;
                         changed = true;
                     }
                 }
+            }
+
+            if (touched) {
+                // The cells this call could have changed the boundary of: a sample belongs
+                // to the cell on either side of it along each axis.
+                const cx0 = gx0 > 0 ? gx0 - 1 : 0;
+                const cy0 = gy0 > 0 ? gy0 - 1 : 0;
+                const cx1 = Math.min(gx1, stock.nx - 1);
+                const cy1 = Math.min(gy1, stock.ny - 1);
+                if (cx1 >= cx0 && cy1 >= cy0) {
+                    if (stock.dirtyX1 < stock.dirtyX0) {
+                        stock.dirtyX0 = cx0; stock.dirtyX1 = cx1;
+                        stock.dirtyY0 = cy0; stock.dirtyY1 = cy1;
+                    } else {
+                        if (cx0 < stock.dirtyX0) stock.dirtyX0 = cx0;
+                        if (cx1 > stock.dirtyX1) stock.dirtyX1 = cx1;
+                        if (cy0 < stock.dirtyY0) stock.dirtyY0 = cy0;
+                        if (cy1 > stock.dirtyY1) stock.dirtyY1 = cy1;
+                    }
+                }
+                stockPhiDirty = true;
             }
             return changed;
         }
@@ -3008,6 +3457,10 @@
 
             let changed = false;
             let gouged = false;
+            // Only the material-removed answer decides whether a rapid was a gouge, so the
+            // boundary having moved is tracked separately. A pass can shift a wall inside a
+            // cell without lowering any sample, and that still has to redraw.
+            stockPhiDirty = false;
             for (let i = carveSegIndex; i < parsedSegments.length; i++) {
                 const seg = parsedSegments[i];
                 if (seg.startDist >= dist) break;
@@ -3051,7 +3504,7 @@
                 updateToolLegend();
             }
 
-            if (changed) {
+            if (changed || stockPhiDirty) {
                 stockGeomDirty = true;
                 // Only worth re-uploading the colour texture if it is actually being
                 // looked at. In Uniform mode every cell already holds the base colour, so
