@@ -836,7 +836,8 @@
                         <option value="220">Low (fastest)</option>
                         <option value="360">High</option>
                         <option value="500" selected>Very High</option>
-                        <option value="1200">Ultra (slowest)</option>
+                        <option value="1200">Ultra</option>
+                        <option value="2048">Extreme (slowest)</option>
                     </select>
                 </div>
                 <div class="control-group">
@@ -1007,7 +1008,27 @@
         // moment, and never re-reads it.
         camera.up.set(0, 0, 1);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        // The stock simulation runs on the GPU and needs WebGL2: gl_FragDepth, depth
+        // textures as samplers, instanced arrays, gl_VertexID and async readback are all
+        // core there and none of them exist in WebGL1. r128 already probes 'webgl2' first,
+        // so this is normally what comes back; the explicit re-ask is the belt-and-braces
+        // path for a browser that hands a WebGL1 context back from the generic probe.
+        // If even that fails the viewer still runs -- the stock simulation is what turns
+        // itself off, in rebuildStock.
+        let renderer = new THREE.WebGLRenderer({ antialias: true });
+        if (renderer.capabilities.isWebGL2 !== true) {
+            const canvas2 = document.createElement('canvas');
+            const ctx2 = canvas2.getContext('webgl2', {
+                alpha: false, depth: true, stencil: true, antialias: true,
+                premultipliedAlpha: true, preserveDrawingBuffer: false
+            });
+            if (ctx2) {
+                renderer.dispose();
+                renderer = new THREE.WebGLRenderer({ canvas: canvas2, context: ctx2, antialias: true });
+            } else {
+                console.warn('WebGL2 unavailable: the stock simulation will stay disabled.');
+            }
+        }
         renderer.setSize(container.clientWidth, container.clientHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         container.appendChild(renderer.domElement);
@@ -1245,30 +1266,83 @@
         const RAPID_GOUGE_COLOR = 0xff2a2a;
 
         // --- Stock (material removal) state ---
-        // The stock is modelled as a Z-height map: one height sample per grid vertex.
-        // Cutting only ever lowers a height, so the surface is rebuilt from scratch
-        // whenever the simulation is scrubbed backwards.
+        // The stock is modelled as a Z-height map: one height sample per grid vertex. It
+        // lives entirely in GPU textures -- see the "GPU stock simulation" section -- and is
+        // recomputed from the start of the program every time the carve target moves, which
+        // is why scrubbing backwards costs no more than scrubbing forwards.
         const STOCK_BASE_COLOR = 0xb8ac95;
+
+        // Both stock materials are built by patching named chunks out of three.js' own
+        // shaders, and String.replace returns the string untouched when it matches nothing.
+        // A chunk that moved between versions would therefore fail silently, so each patch
+        // names a marker it must have left behind.
+        function assertStockPatched(label, shader, vertexMarkers, fragmentMarkers) {
+            const missing = vertexMarkers.filter(m => shader.vertexShader.indexOf(m) === -1)
+                .concat(fragmentMarkers.filter(m => shader.fragmentShader.indexOf(m) === -1));
+            if (missing.length > 0) {
+                console.error(`${label}: shader patch did not apply (missing ${missing.join(', ')}). `
+                    + 'A three.js shader chunk name has probably changed.');
+            }
+        }
+
+        // --- Shared GPU stock uniforms -------------------------------------------------
+        // The stock's state lives in GPU textures written by the carve passes (see the
+        // "GPU stock simulation" section). Nothing about it is read back, so both stock
+        // materials have to reach into those textures directly rather than being fed
+        // through vertex attributes.
+        //
+        // These uniform objects are handed to every program compiled from the two stock
+        // materials and are then mutated in place. That is what lets a render target be
+        // swapped -- the double-buffered cell texture does exactly this every few frames
+        // -- without forcing a shader recompile.
+        //
+        // `texture2D` in a vertex shader is vertex texture fetch, which is universally
+        // available; onBeforeCompile shaders are GLSL ES 1.00 in r128, so there is no
+        // texelFetch and no gl_VertexID here, and every sample lands on an exact texel
+        // centre with NearestFilter instead.
+        const stockGpuUniforms = {
+            uHeightTex: { value: null },   // depth24, one texel per height sample
+            uCellTex:   { value: null },   // RGBA8, one texel per cell: colour + flags
+            uGridMin:   { value: new THREE.Vector2() },
+            uInvCell:   { value: new THREE.Vector2() },
+            uSampleInv: { value: new THREE.Vector2() },
+            uZTop:      { value: 0 },
+            uZBottom:   { value: 0 },
+            uBaseColor: { value: new THREE.Color(STOCK_BASE_COLOR) }
+        };
+
+        // Vertex classes on the base mesh. The height-map surface and the top edge of the
+        // side walls follow the carve; the bottom edge of the walls and the underside quad
+        // are pinned to the block floor, and only the last of those can be punched through.
+        // A height map has no way to say this in the position attribute alone, so it rides
+        // in its own attribute.
+        const STOCK_KIND_SURFACE = 0;
+        const STOCK_KIND_SKIRT_TOP = 1;
+        const STOCK_KIND_SKIRT_BOTTOM = 2;
+        const STOCK_KIND_FLOOR = 3;
 
         // Colour comes entirely from a nearest-filtered texture holding one texel per
         // height-map cell, so the material tint is white and uncut cells are written as
         // STOCK_BASE_COLOR. Every face gets exactly one flat colour: see the UV setup in
-        // buildStockGeometry for how a cell is pinned to its texel, and the colour pass in
-        // refreshStockGeometry for how a cell picks which of its corners it belongs to.
+        // buildStockGeometry for how a cell is pinned to its texel, and the cell pass in
+        // the GPU section for how a cell picks which of its corners it belongs to.
         //
         // A vertex colour attribute cannot express this: colours interpolate across a
         // triangle, so every operation boundary came out as a gradient smeared over a
         // whole cell. Duplicating vertices per face would fix it too, but at six vertices
-        // per cell the position buffer -- rewritten on every carve -- grows sixfold, which
-        // the high resolutions cannot absorb. A per-cell texture costs nothing extra.
+        // per cell the position buffer grows sixfold, which the high resolutions cannot
+        // absorb. A per-cell texture costs nothing extra.
         //
         // three.js here is r128, which predates ColorManagement, so a hex in the texture
         // and the same hex in `material.color` match exactly -- do not add a
         // convertSRGBToLinear() call.
-        // alphaTest is what opens a hole where the tool cut clean through. A height map
+        //
+        // The discard is what opens a hole where the tool cut clean through. A height map
         // cannot describe a void -- a fully cut cell just sits at the bottom of the block,
         // coplanar with the underside, leaving a paper-thin membrane closing what should be
-        // an opening. Those cells are written with alpha 0 and discarded outright.
+        // an opening. It is also what hands a cell over to the contour overlay. Both are
+        // flag bits in the cell texture's alpha now rather than an alphaTest on a written
+        // alpha, so the material does its own discarding and alphaTest stays off.
         // Semi-matte, not matte: diffuse changes slowly with the normal, a broad specular
         // lobe changes fast, so slight facet differences read as an edge. Not glossier --
         // that narrows the lobe to a hotspot that hides more than it shows.
@@ -1276,17 +1350,81 @@
             color: 0xffffff,
             roughness: 0.62,
             metalness: 0.08,
-            flatShading: true,
-            alphaTest: 0.5
+            flatShading: true
         });
 
-        // Attaching or detaching a map flips a shader define, so the recompile is forced
-        // only when the map goes from absent to present or back -- not on every rebuild.
-        function setStockMap(texture) {
-            const had = stockMaterial.map !== null && stockMaterial.map !== undefined;
-            stockMaterial.map = texture;
-            if (had !== (texture != null)) stockMaterial.needsUpdate = true;
-        }
+        stockMaterial.onBeforeCompile = shader => {
+            Object.assign(shader.uniforms, stockGpuUniforms);
+
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', `#include <common>
+// GLSL ES 1.00 predeclares "precision lowp sampler2D" in the vertex language as well as the
+// fragment one, and lowp is only guaranteed 8 bits. Reading a 24-bit depth texture through a
+// lowp sampler would quantise the height map to about a quarter of a millimetre on a 50 mm
+// block. Desktop drivers ignore lowp; mobile ones do not.
+precision highp sampler2D;
+attribute float aKind;
+uniform sampler2D uHeightTex;
+uniform vec2 uGridMin;
+uniform vec2 uInvCell;
+uniform vec2 uSampleInv;
+uniform float uZTop;
+uniform float uZBottom;
+varying float vKind;
+varying vec2 vCellUv;`)
+                .replace('#include <begin_vertex>', `
+vec3 transformed = vec3( position );
+if ( aKind < 1.5 ) {
+    // Exact texel centre for this sample: position.xy is built from minX + gx * cellX, so
+    // the division recovers gx to well inside the half-texel that NearestFilter allows.
+    vec2 huv = ( ( position.xy - uGridMin ) * uInvCell + 0.5 ) * uSampleInv;
+    transformed.z = uZBottom + texture2D( uHeightTex, huv ).r * ( uZTop - uZBottom );
+}
+vKind = aKind;
+vCellUv = uv;`);
+
+            shader.fragmentShader = shader.fragmentShader
+                .replace('#include <common>', `#include <common>
+// GLSL ES 1.00 defaults sampler precision to lowp in a fragment shader, which is only
+// guaranteed 8 bits of mantissa -- not enough to get k/255 back out of a byte exactly, and
+// the flag decode below is an exact comparison on one.
+precision highp sampler2D;
+uniform sampler2D uCellTex;
+uniform vec3 uBaseColor;
+varying float vKind;
+varying vec2 vCellUv;`)
+                .replace('#include <map_fragment>', `
+if ( vKind < 0.5 ) {
+    vec4 cellTexel = texture2D( uCellTex, vCellUv );
+    // Any flag at all takes the cell away from the base mesh: bit 0 hands it to the
+    // contour overlay, bit 1 opens a through hole.
+    if ( floor( cellTexel.a * 255.0 + 0.5 ) >= 0.5 ) discard;
+    diffuseColor.rgb *= cellTexel.rgb;
+} else if ( vKind > 2.5 ) {
+    // The underside. It opens only where the whole cell is gone, never for a cell the
+    // overlay has taken over -- the overlay draws the top of the hole, not the bottom.
+    if ( floor( texture2D( uCellTex, vCellUv ).a * 255.0 + 0.5 ) >= 1.5 ) discard;
+    diffuseColor.rgb *= uBaseColor;
+} else {
+    // The four side walls are the original outside of the block: no tool can ever face
+    // them, so they stay uncut stock whatever ran along the boundary.
+    diffuseColor.rgb *= uBaseColor;
+}`);
+
+            // A String.replace that matches nothing returns the string unchanged, so a
+            // renamed or moved three.js chunk would leave the patch silently unapplied --
+            // white stock, or a surface pinned at the block top. Check the markers instead.
+            assertStockPatched('stockMaterial', shader,
+                ['uHeightTex', 'vKind = aKind'], ['uCellTex', 'cellTexel']);
+        };
+
+        // The program cache key is built from the material's parameters *before*
+        // onBeforeCompile runs, so two MeshStandardMaterials configured identically would
+        // otherwise be handed the same compiled program -- and the base mesh and the GPU
+        // overlay are configured identically. r128 defaults this to the source text of
+        // onBeforeCompile, which would also separate them, but saying it outright is
+        // cheaper than depending on that.
+        stockMaterial.customProgramCacheKey = () => 'stock-base';
 
         // The contour overlay. A height map pins every wall to a cell boundary, which is
         // what makes a curved wall a staircase. The cells the cut boundary actually passes
@@ -1311,6 +1449,313 @@
             vertexColors: true
         });
 
+        // --- The GPU contour overlay ----------------------------------------------------
+        // A direct port of rebuildStockOverlay into a vertex shader. The geometry is a
+        // static template -- 64 cells of one 8x8 tile, 60 vertices each -- instanced once
+        // per *active* tile, so the cost follows the boundary rather than the grid. Every
+        // vertex works out for itself which cell and which of the 20 triangles it belongs
+        // to, reads the same four corner samples the CPU version reads, and either places
+        // itself or collapses onto the cell's first corner so its triangle is degenerate
+        // and gets culled.
+        //
+        // Two properties make the CPU version watertight and both are preserved here
+        // deliberately, because losing either opens cracks that only show at grazing
+        // angles: every crossing is a function of the two samples it lies between and
+        // nothing else, so two cells sharing an edge agree to the bit; and cell membership
+        // is judged only on the four cell edges, so a crossed edge can never have the
+        // overlay on one side and the base grid on the other.
+        //
+        // Membership is read from the same cell texture the base mesh discards on -- the
+        // one generation the active-tile list was built from -- so the two can never
+        // disagree about who owns a cell, however far the tile readback lags.
+        const stockOvUniforms = {
+            uHeightTex:    { value: null },
+            uPhiTex:       { value: null },
+            uIdTex:        { value: null },
+            uCellTex:      { value: null },
+            uPaletteTex:   { value: null },
+            uGridMin:      { value: new THREE.Vector2() },
+            uCellSize:     { value: new THREE.Vector2() },
+            uSampleInv:    { value: new THREE.Vector2() },
+            uCellInv:      { value: new THREE.Vector2() },
+            uGridCells:    { value: new THREE.Vector2() },
+            uTilesX:       { value: 1 },
+            uZTop:         { value: 0 },
+            uZBottom:      { value: 0 },
+            uPhiBand:      { value: 1 },
+            uWallLo:       { value: 0 },
+            uWallSpan:     { value: 1 },
+            uThroughLevel: { value: 0 },
+            uFlatTol:      { value: 0 },
+            uPaletteInvW:  { value: 1 }
+        };
+
+        const stockGpuOverlayMaterial = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            roughness: 0.62,
+            metalness: 0.08,
+            flatShading: true
+        });
+
+        stockGpuOverlayMaterial.onBeforeCompile = shader => {
+            Object.assign(shader.uniforms, stockOvUniforms);
+
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', `#include <common>
+// See the note in stockMaterial: the vertex language's default sampler precision is lowp,
+// and both the height and the distance field are read out of 24-bit depth textures here.
+precision highp sampler2D;
+attribute float aTile;
+uniform sampler2D uHeightTex;
+uniform sampler2D uPhiTex;
+uniform sampler2D uIdTex;
+uniform sampler2D uCellTex;
+uniform sampler2D uPaletteTex;
+uniform vec2 uGridMin;
+uniform vec2 uCellSize;
+uniform vec2 uSampleInv;
+uniform vec2 uCellInv;
+uniform vec2 uGridCells;
+uniform float uTilesX;
+uniform float uZTop;
+uniform float uZBottom;
+uniform float uPhiBand;
+uniform float uWallLo;
+uniform float uWallSpan;
+uniform float uThroughLevel;
+uniform float uFlatTol;
+uniform float uPaletteInvW;
+varying vec3 vOvColor;
+vec3 ovPos;
+
+// Named st rather than uv: three declares an "attribute vec2 uv" in every non-raw vertex
+// shader, and shadowing it in a parameter upsets some older compilers.
+// (No backticks anywhere in this GLSL -- it is a JS template literal.)
+float ovHeightAt( vec2 st ) { return uZBottom + texture2D( uHeightTex, st ).r * ( uZTop - uZBottom ); }
+float ovPhiAt( vec2 st ) { return texture2D( uPhiTex, st ).r * 2.0 * uPhiBand - uPhiBand; }
+float ovSlotAt( vec2 st ) { vec4 t = texture2D( uIdTex, st ); return floor( t.r * 255.0 + 0.5 ) + 256.0 * floor( t.g * 255.0 + 0.5 ); }
+vec3 ovPalette( float slot ) { return texture2D( uPaletteTex, vec2( ( slot + 0.5 ) * uPaletteInvW, 0.5 ) ).rgb; }
+
+// The deepest corner on each side of the boundary, ties to the later operation. The base
+// mesh's per-cell rule, applied to each side separately, so the sliver of old surface left
+// standing above a wall keeps its own colour instead of being repainted by the cut below.
+void ovAccum( float p, float h, float d, inout float hIn, inout float idIn, inout float hOut, inout float idOut, inout float inCount, inout float inThrough ) {
+    if ( p < 0.0 ) {
+        inCount += 1.0;
+        if ( h > uThroughLevel ) inThrough = 0.0;
+        if ( h < hIn || ( h == hIn && d > idIn ) ) { hIn = h; idIn = d; }
+    } else if ( h < hOut || ( h == hOut && d > idOut ) ) {
+        hOut = h;
+        idOut = d;
+    }
+}
+
+// Where the boundary crosses the segment between two samples, and the two heights the face
+// takes there: xy, then the height on the material side and on the cut side.
+//
+// Wallness. At 0 both heights collapse onto the interpolated one and the surface stays
+// continuous, which is the right answer for a chamfer flank, a ball-nose fillet or a ramp
+// -- the sign change is real there, but the step is not. At 1 the face is fully vertical.
+vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
+    float den = ap - bp;
+    float t = den != 0.0 ? ap / den : 0.5;
+    t = clamp( t, 0.0, 1.0 );
+    vec2 xy = axy + t * ( bxy - axy );
+    float hLerp = ah + t * ( bh - ah );
+    float hOut = ap > 0.0 ? ah : bh;
+    float hIn = ap > 0.0 ? bh : ah;
+    float w = clamp( ( hOut - hIn - uWallLo ) / uWallSpan, 0.0, 1.0 );
+    w = w * w * ( 3.0 - 2.0 * w );
+    return vec4( xy, hLerp + ( hOut - hLerp ) * w, hLerp + ( hIn - hLerp ) * w );
+}`)
+                .replace('#include <color_vertex>', `
+{
+    float ovTy = floor( aTile / uTilesX );
+    float ovTx = aTile - ovTy * uTilesX;
+    float ovInY = floor( position.x / 8.0 );
+    float ovInX = position.x - ovInY * 8.0;
+    float cellX = ovTx * 8.0 + ovInX;
+    float cellY = ovTy * 8.0 + ovInY;
+
+    vec2 corner0 = uGridMin + vec2( cellX, cellY ) * uCellSize;
+    // Every vertex of a cell the overlay does not own collapses here, which makes each of
+    // its 20 triangles zero-area.
+    ovPos = vec3( corner0, uZBottom );
+    vOvColor = vec3( 1.0 );
+
+    bool ovLive = cellX < uGridCells.x && cellY < uGridCells.y;
+    if ( ovLive ) {
+        float flags = floor( texture2D( uCellTex, ( vec2( cellX, cellY ) + 0.5 ) * uCellInv ).a * 255.0 + 0.5 );
+        ovLive = mod( flags, 2.0 ) >= 0.5;
+    }
+
+    if ( ovLive ) {
+        vec2 s0 = ( vec2( cellX, cellY ) + 0.5 ) * uSampleInv;
+        vec2 s1 = s0 + vec2( uSampleInv.x, 0.0 );
+        vec2 s2 = s0 + uSampleInv;
+        vec2 s3 = s0 + vec2( 0.0, uSampleInv.y );
+
+        vec2 xy0 = corner0;
+        vec2 xy1 = corner0 + vec2( uCellSize.x, 0.0 );
+        vec2 xy2 = corner0 + uCellSize;
+        vec2 xy3 = corner0 + vec2( 0.0, uCellSize.y );
+
+        float p0 = ovPhiAt( s0 ), p1 = ovPhiAt( s1 ), p2 = ovPhiAt( s2 ), p3 = ovPhiAt( s3 );
+        float h0 = ovHeightAt( s0 ), h1 = ovHeightAt( s1 ), h2 = ovHeightAt( s2 ), h3 = ovHeightAt( s3 );
+        float d0 = ovSlotAt( s0 ), d1 = ovSlotAt( s1 ), d2 = ovSlotAt( s2 ), d3 = ovSlotAt( s3 );
+
+        float hIn = 1.0e30, idIn = 0.0, hOut = 1.0e30, idOut = 0.0, inCount = 0.0, inThrough = 1.0;
+        ovAccum( p0, h0, d0, hIn, idIn, hOut, idOut, inCount, inThrough );
+        ovAccum( p1, h1, d1, hIn, idIn, hOut, idOut, inCount, inThrough );
+        ovAccum( p2, h2, d2, hIn, idIn, hOut, idOut, inCount, inThrough );
+        ovAccum( p3, h3, d3, hIn, idIn, hOut, idOut, inCount, inThrough );
+        vec3 colIn = ovPalette( idIn );
+        vec3 colOut = ovPalette( idOut );
+        // Cut clean through on the inside: there is no floor to draw, and a polygon at the
+        // underside would be exactly the membrane the base mesh's discard exists to delete.
+        // The wall still runs the full depth, so the bore keeps its true radius.
+        bool skipFloor = inThrough > 0.5 && inCount > 0.0;
+
+        // The centre sample has to sit on the surface of its own side of the boundary. On a
+        // plane, opposite corners average to the centre; any three corners contain a
+        // diagonal pair, so only two adjacent corners or one fall back to the mean.
+        float pc = ( p0 + p1 + p2 + p3 ) * 0.25;
+        bool cIn = pc < 0.0;
+        bool q0 = ( p0 < 0.0 ) == cIn;
+        bool q1 = ( p1 < 0.0 ) == cIn;
+        bool q2 = ( p2 < 0.0 ) == cIn;
+        bool q3 = ( p3 < 0.0 ) == cIn;
+        float hc;
+        if ( q0 && q2 ) hc = ( h0 + h2 ) * 0.5;
+        else if ( q1 && q3 ) hc = ( h1 + h3 ) * 0.5;
+        else {
+            float hSum = 0.0, hCount = 0.0;
+            if ( q0 ) { hSum += h0; hCount += 1.0; }
+            if ( q1 ) { hSum += h1; hCount += 1.0; }
+            if ( q2 ) { hSum += h2; hCount += 1.0; }
+            if ( q3 ) { hSum += h3; hCount += 1.0; }
+            hc = hCount > 0.0 ? hSum / hCount : ( h0 + h1 + h2 + h3 ) * 0.25;
+        }
+        vec2 xyc = corner0 + uCellSize * 0.5;
+
+        // Fan into four sub-triangles and contour each one. A triangle is never ambiguous
+        // -- it has 0 or exactly 1 chord -- so saddles, pinch points and islands all come
+        // out right with no special cases. 15 vertex slots each: 3 for the lone corner,
+        // 6 for the quad left over, 6 for the wall.
+        float k = floor( position.y / 15.0 );
+        float local = position.y - k * 15.0;
+        float kb = mod( k + 1.0, 4.0 );
+
+        vec2 axy; float ap, ah;
+        vec2 bxy; float bp, bh;
+        if ( k < 0.5 ) { axy = xy0; ap = p0; ah = h0; }
+        else if ( k < 1.5 ) { axy = xy1; ap = p1; ah = h1; }
+        else if ( k < 2.5 ) { axy = xy2; ap = p2; ah = h2; }
+        else { axy = xy3; ap = p3; ah = h3; }
+        if ( kb < 0.5 ) { bxy = xy0; bp = p0; bh = h0; }
+        else if ( kb < 1.5 ) { bxy = xy1; bp = p1; bh = h1; }
+        else if ( kb < 2.5 ) { bxy = xy2; bp = p2; bh = h2; }
+        else { bxy = xy3; bp = p3; bh = h3; }
+
+        bool ia = ap < 0.0, ib = bp < 0.0, ic = pc < 0.0;
+        bool emit = false;
+        vec3 outPos = ovPos;
+        vec3 outCol = vec3( 1.0 );
+
+        if ( ia == ib && ib == ic ) {
+            if ( local < 2.5 && !( ia && skipFloor ) ) {
+                outPos = local < 0.5 ? vec3( axy, ah ) : ( local < 1.5 ? vec3( bxy, bh ) : vec3( xyc, hc ) );
+                outCol = ia ? colIn : colOut;
+                emit = true;
+            }
+        } else {
+            // One vertex is alone on its side, and the chord crosses the two edges that
+            // touch it. Rotate so the lone vertex leads and the CCW winding is preserved.
+            vec2 lxy, mxy, nxy;
+            float lp, lh, mp, mh, np, nh;
+            if ( ia != ib && ia != ic ) {
+                lxy = axy; lp = ap; lh = ah; mxy = bxy; mp = bp; mh = bh; nxy = xyc; np = pc; nh = hc;
+            } else if ( ib != ia && ib != ic ) {
+                lxy = bxy; lp = bp; lh = bh; mxy = xyc; mp = pc; mh = hc; nxy = axy; np = ap; nh = ah;
+            } else {
+                lxy = xyc; lp = pc; lh = hc; mxy = axy; mp = ap; mh = ah; nxy = bxy; np = bp; nh = bh;
+            }
+
+            vec4 c0 = ovCrossing( lxy, lp, lh, mxy, mp, mh );
+            vec4 c1 = ovCrossing( nxy, np, nh, lxy, lp, lh );
+
+            bool lIn = lp < 0.0;
+            float lz0 = lIn ? c0.w : c0.z;
+            float lz1 = lIn ? c1.w : c1.z;
+            float mz0 = lIn ? c0.z : c0.w;
+            float mz1 = lIn ? c1.z : c1.w;
+
+            if ( local < 2.5 ) {
+                // The corner at L.
+                if ( !( lIn && skipFloor ) ) {
+                    outPos = local < 0.5 ? vec3( lxy, lh ) : ( local < 1.5 ? vec3( c0.xy, lz0 ) : vec3( c1.xy, lz1 ) );
+                    outCol = lIn ? colIn : colOut;
+                    emit = true;
+                }
+            } else if ( local < 8.5 ) {
+                // The quad left over, fanned from the first crossing. Convex: it is a
+                // triangle with one corner clipped off.
+                if ( !( !lIn && skipFloor ) ) {
+                    float q = local - 3.0;
+                    if ( q < 0.5 ) outPos = vec3( c0.xy, mz0 );
+                    else if ( q < 1.5 ) outPos = vec3( mxy, mh );
+                    else if ( q < 2.5 ) outPos = vec3( nxy, nh );
+                    else if ( q < 3.5 ) outPos = vec3( c0.xy, mz0 );
+                    else if ( q < 4.5 ) outPos = vec3( nxy, nh );
+                    else outPos = vec3( c1.xy, mz1 );
+                    outCol = lIn ? colOut : colIn;
+                    emit = true;
+                }
+            } else {
+                // The wall. Walking C0 -> C1 keeps L's half on the left, so the face is
+                // wound to look at whichever half is the cut one -- the winding is
+                // load-bearing, because a flat-shaded back face is lit as if it were a
+                // front face and DoubleSide does not flip the derived normal in r128.
+                if ( c0.z - c0.w > uFlatTol || c1.z - c1.w > uFlatTol ) {
+                    float q = local - 9.0;
+                    if ( lIn ) {
+                        if ( q < 0.5 ) outPos = vec3( c0.xy, c0.z );
+                        else if ( q < 1.5 ) outPos = vec3( c1.xy, c1.w );
+                        else if ( q < 2.5 ) outPos = vec3( c0.xy, c0.w );
+                        else if ( q < 3.5 ) outPos = vec3( c0.xy, c0.z );
+                        else if ( q < 4.5 ) outPos = vec3( c1.xy, c1.z );
+                        else outPos = vec3( c1.xy, c1.w );
+                    } else {
+                        if ( q < 0.5 ) outPos = vec3( c0.xy, c0.z );
+                        else if ( q < 1.5 ) outPos = vec3( c0.xy, c0.w );
+                        else if ( q < 2.5 ) outPos = vec3( c1.xy, c1.w );
+                        else if ( q < 3.5 ) outPos = vec3( c0.xy, c0.z );
+                        else if ( q < 4.5 ) outPos = vec3( c1.xy, c1.w );
+                        else outPos = vec3( c1.xy, c1.z );
+                    }
+                    outCol = colIn;
+                    emit = true;
+                }
+            }
+        }
+
+        if ( emit ) { ovPos = outPos; vOvColor = outCol; }
+    }
+}`)
+                .replace('#include <begin_vertex>', 'vec3 transformed = ovPos;');
+
+            shader.fragmentShader = shader.fragmentShader
+                .replace('#include <common>', '#include <common>\nvarying vec3 vOvColor;')
+                .replace('#include <map_fragment>', 'diffuseColor.rgb *= vOvColor;');
+
+            assertStockPatched('stockGpuOverlayMaterial', shader,
+                ['ovCrossing', 'ovLive', 'transformed = ovPos'],
+                ['varying vec3 vOvColor', 'diffuseColor.rgb *= vOvColor']);
+        };
+
+        // See the note on stockMaterial.customProgramCacheKey.
+        stockGpuOverlayMaterial.customProgramCacheKey = () => 'stock-gpu-overlay';
+
         // How far a boundary has to drop across one cell before it counts as a wall, as a
         // multiple of the cell size. Below WALL_LO the overlay leaves the cell to the base
         // grid entirely; between the two the face opens gradually, so the transition never
@@ -1322,32 +1767,62 @@
         // fillet and any ramp with room to spare, while a real milled wall -- 90 degrees, and
         // usually many cells deep -- is past WALL_HI several times over. WALL_LO doubles as
         // the depth tolerance that decides whether two cut floors are the same level, so
-        // raising it also widens what carveCapsule treats as one continuous cut region.
+        // raising it also widens what the phi pass treats as one continuous cut region.
         const WALL_LO = 1.25;
         const WALL_HI = 2.5;
 
-        let stock = null;          // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, cutIds, phi, phiOwner, phiBand, contour, contourList, contourLen, geometry, skirt, topCount, total, colorData, colorTexture, overlay }
+        // { nx, ny, minX, minY, cellX, cellY, top, bottom, phiBand, geometry, topCount,
+        //   total, overlay, + the debug reference arrays: heights, cutIds, phi, phiOwner,
+        //   contour, contourList, contourLen }
+        let stock = null;
         let stockMesh = null;
         let stockOverlayMesh = null;
-        let stockGeomDirty = false;
-        let stockColorDirty = false;
-        // Whether the distance field moved since the last refresh. A cut can shift a wall
-        // within a cell without changing any sample height, and that still has to redraw.
-        let stockPhiDirty = false;
-        // Whether the set of cells hidden from the base mesh has changed. Those cells are
-        // hidden by writing alpha 0 into their texel, so the colour pass has to run again
-        // even in Uniform mode, where it would otherwise be skipped entirely.
-        let stockSuppressDirty = false;
-        // Whether any rapid has removed material in the cut so far. Drives the legend
-        // key, and forces colour uploads that Uniform mode would otherwise skip.
+        // Whether any rapid has removed material in the cut so far. Drives the legend key.
+        // Now derived from the statistics reduction over the finished height map rather than
+        // recorded as the carve runs, so it follows what is actually on screen: a gouge a
+        // later operation cut away no longer keeps the key alive.
         let stockHasGouge = false;
-        // Whether anything has reached the bottom of the block. The per-cell alpha pass
-        // exists only to punch those holes, so until one appears it can be skipped --
-        // which is what keeps Uniform mode as cheap as it was.
-        let stockAnyThroughCut = false;
-        let carvedDistance = 0;    // how far along the path the stock has been carved
-        let carveSegIndex = 0;     // resume point into parsedSegments for carving
         let pendingCarve = null;   // coalesces carve requests to one per animation frame
+
+        // All three belong to the debug reference carve alone; nothing on the GPU path reads
+        // any of them. See the section on the debug harness.
+        let stockPhiDirty = false;
+        let stockSuppressDirty = false;
+        let stockAnyThroughCut = false;
+
+        // --- GPU stock state ------------------------------------------------------------
+        // Declared here rather than beside the code that uses it: animate() runs once during
+        // script setup, before the GPU section has been evaluated, and a `let` read before
+        // its declaration is a TypeError rather than undefined.
+        const STOCK_TILE = 8;                       // cells per side of an overlay tile
+        const STOCK_TILE_CELLS = STOCK_TILE * STOCK_TILE;
+        const STOCK_MAX_TOOLS = 64;                 // size of the uTools uniform array
+        const STOCK_STATS_SIZE = 64;                // side of the statistics reduction target
+
+        let sgl = null;                 // the raw WebGL2 context, shared with three.js
+        let stockGpu = null;            // per-grid GPU resources
+        let stockGpuPrograms = null;    // compiled once per context, reused across rebuilds
+        let stockGpuOverlayMesh = null;
+        let carveInst = null;           // { data, count, segFirst, segSlices }
+        let carveTools = null;          // { keys, index, params, resolved }
+
+        let stockPaletteTexture = null;
+        let stockPaletteData = null;
+        let stockPaletteWidth = 0;
+
+        // How far along the path the GPU has been asked to carve, and what still needs
+        // recomputing. The carve is replayed in full whenever the target moves, so there is
+        // no incremental state to invalidate.
+        let stockCarveTarget = 0;
+        let stockCarveDirty = false;
+        let stockCellDirty = false;
+        let stockStatsDirty = false;
+
+        // Debug affordances, driven by the Alt+D / Alt+V / Alt+O keys at the end of the GPU
+        // section. Off by default: the CPU reference costs exactly the time this change
+        // exists to remove, and its arrays are ~60 MB at the top resolution.
+        let debugCpuRef = false;
+        let stockOverlaySource = 'gpu';   // 'gpu' | 'cpu' | 'both'
 
         const stockEnabledEl = document.getElementById('stock-enabled');
         const stockMarginEl = document.getElementById('stock-margin');
@@ -1638,11 +2113,10 @@
                 pendingCarve = null;
                 carveTo(target);
             }
-            if (stockGeomDirty || stockColorDirty) {
-                refreshStockGeometry(stockGeomDirty, stockColorDirty);
-                stockGeomDirty = false;
-                stockColorDirty = false;
-            }
+            // Runs the carve passes if the target moved, the cell pass if the state moved,
+            // and collects whichever asynchronous readbacks have landed. Has to be before
+            // renderer.render, and leaves the GL state as three expects to find it.
+            stockGpuUpdate();
 
             // Before controls.update(), which reads the camera position back out: a swing
             // in progress moves the camera, and the controls then settle it as if the user
@@ -1785,8 +2259,11 @@
 
             // The cut depends on the tool, so re-cut the stock from scratch. The grid
             // itself is sized from the cutting extent and the margin alone, neither of
-            // which the tool touches, so it can be reused as it stands.
+            // which the tool touches, so it can be reused as it stands -- and so can the
+            // instance buffer, because a move's slicing follows the cell size and not the
+            // cutter. Only the 64-entry tool table is rewritten.
             if (stock) {
+                resolveCarveTools();
                 resetStockHeights();
                 requestCarve(currentDistance);
             }
@@ -1807,10 +2284,11 @@
             updateToolLegend();
         });
 
-        // Colouring is a pure view over `cutIds`, which is accumulated regardless of the
-        // selected mode, so this repaints without touching the height map.
+        // Colouring is a pure view over the cut slots, which are accumulated regardless of
+        // the selected mode, so this is a 1 KB palette upload and one full-screen cell pass
+        // -- never a re-carve, and never a full-grid repaint.
         stockColorModeEl.addEventListener('change', () => {
-            stockColorDirty = true;
+            if (stockGpu) rebuildStockPalette();
             updateToolLegend();
             if (parsedSegments.length > 0) updateToolPositionByDistance(currentDistance);
             else applyToolMeshTint(null);
@@ -2382,10 +2860,12 @@
                 stockOverlayMesh.geometry.dispose();
                 stockOverlayMesh = null;
             }
-            if (stock && stock.colorTexture) {
-                setStockMap(null);
-                stock.colorTexture.dispose();
+            if (stockGpuOverlayMesh) {
+                scene.remove(stockGpuOverlayMesh);
+                stockGpuOverlayMesh.geometry.dispose();
+                stockGpuOverlayMesh = null;
             }
+            disposeStockGpu();
             stock = null;
             // Nothing is cut any more, so nothing is gouged. Matters for the path where
             // the stock is switched off entirely and resetStockHeights never runs.
@@ -2426,7 +2906,10 @@
 
             // Both exits settle the grid: disposeStock() above has already cleared `stock`,
             // so turning the stock off drops the floor back to the toolpath's own depth.
-            if (!stockEnabledEl.checked || parsedSegments.length === 0) {
+            // The WebGL2 case is the same story -- there is no CPU carve to fall back on
+            // any more, so a context that cannot run the passes gets no stock at all.
+            if (!stockEnabledEl.checked || parsedSegments.length === 0
+                || renderer.capabilities.isWebGL2 !== true) {
                 updateGridPlacement();
                 return;
             }
@@ -2452,77 +2935,66 @@
             // The cap is a backstop against a malformed value in the select, not a working
             // limit: `target` is set from the longest side, so neither axis can exceed
             // `cells` on its own. It has to stay at or above the largest option.
+            // The cap is a backstop against a malformed value in the select, not a working
+            // limit. It used to sit at 1600 because the CPU carve and the per-frame vertex
+            // upload could not absorb more; with both gone the limiter is the base mesh's
+            // triangle count -- 2048 squared is 8.4M triangles a frame -- so the honest
+            // next step past this is a level-of-detail base mesh, not a bigger grid.
             const cells = parseInt(stockResEl.value, 10) || 500;
             const target = Math.max(sizeX, sizeY) / cells;
-            const nx = Math.max(1, Math.min(1600, Math.round(sizeX / target)));
-            const ny = Math.max(1, Math.min(1600, Math.round(sizeY / target)));
+            const nx = Math.max(1, Math.min(2048, Math.round(sizeX / target)));
+            const ny = Math.max(1, Math.min(2048, Math.round(sizeY / target)));
 
             const cellX = sizeX / nx;
             const cellY = sizeY / ny;
-
-            const samples = (nx + 1) * (ny + 1);
 
             stock = {
                 nx, ny, minX, minY,
                 cellX, cellY,
                 top, bottom,
-                heights: new Float32Array(samples),
-                // Strict shadow of `heights`: operation index + 1, 0 for uncut. Cleared
-                // in lockstep by resetStockHeights(). Uint16 because operation counts can
-                // exceed 255.
-                cutIds: new Uint16Array(samples),
-
-                // Signed distance in XY from the sample to the cut boundary that governs
-                // it, negative inside the cut, truncated to +/- phiBand. This is the
-                // sub-cell information point sampling throws away, and the only reason a
-                // wall can be drawn anywhere but on a cell boundary.
-                //
-                // Cuts compose here by `min`, which is the exact union operator for a
-                // distance field and is order-independent and idempotent: an arc chorded
-                // six times across one cell, a plunge sliced a hundred ways and a helix
-                // sweeping the same wall every revolution all land on the same answer as
-                // a single pass. That property is what the old `hardHeights` array existed
-                // to fake, and why it is gone.
-                phi: new Float32Array(samples),
-                // The Z of the wall that owns phi[i] -- the rim height of the cut that
-                // wrote it. A sample can sit beside more than one cut boundary, and the
-                // one that matters is always the deepest, so a cut only takes ownership
-                // when it reaches below the current owner. Without this a later facing
-                // pass over an existing pocket would flood the field and erase the pocket
-                // wall, and the result would depend on program order.
-                phiOwner: new Float32Array(samples),
-                // Truncation radius. Wider than a cell so that any grid edge with a true
-                // crossing has both endpoints unsaturated, which is what lets the crossing
-                // be located by interpolation rather than guessed at.
+                // Truncation radius of the distance field. Wider than a cell so that any
+                // grid edge with a true crossing has both endpoints unsaturated, which is
+                // what lets the crossing be located by interpolation rather than guessed at.
                 phiBand: 1.5 * Math.max(cellX, cellY),
 
-                // 1 where the cut boundary passes through the cell, which is also the flag
-                // the colour pass reads to force that cell's texel transparent so the
-                // overlay can stand in for it.
-                contour: new Uint8Array(nx * ny),
-                // The listed cells, so every per-frame sweep is O(boundary) rather than
-                // O(grid). Append-only during carving; the overlay rebuild has to re-read
-                // every listed cell anyway, so it compacts stale entries out for free.
-                contourList: new Int32Array(4096),
+                // The CPU height map and everything hanging off it is now a debug-only
+                // reference, allocated by ensureCpuRefArrays() when the diff harness is
+                // switched on and left null otherwise. At 2048 it is ~60 MB of arrays that
+                // the GPU path never reads.
+                heights: null,
+                cutIds: null,
+                phi: null,
+                phiOwner: null,
+                contour: null,
+                contourList: null,
                 contourLen: 0,
-                // Cells touched since the last contour scan, in cell coordinates.
                 dirtyX0: 0, dirtyY0: 0, dirtyX1: -1, dirtyY1: -1,
 
-                skirt: null,
                 geometry: null,
                 overlay: null
             };
 
             buildStockGeometry();
-            buildStockOverlay();
+            buildStockGpu();
+            // Nothing to fall back on if the passes could not be built, and a base mesh
+            // reading unbound samplers is worse than no stock at all.
+            if (!stockGpu) {
+                disposeStock();
+                updateGridPlacement();
+                return;
+            }
+            buildCarveInstances();
+            if (debugCpuRef) ensureCpuRefArrays();
             resetStockHeights();
             requestCarve(currentDistance);
             updateGridPlacement();
         }
 
         // Builds a fixed-topology mesh: a height-map top surface, four side walls that
-        // follow the boundary heights, and a flat bottom. Only vertex Z values change
-        // as material is removed, so the index buffer is built once.
+        // follow the boundary heights, and a flat bottom. Entirely static now -- the vertex
+        // shader reads each vertex's Z out of the height texture, so nothing here is ever
+        // rewritten, and the ~17 MB of vertex positions that used to be re-uploaded on
+        // every dirty frame are uploaded once.
         function buildStockGeometry() {
             const nxv = stock.nx + 1;
             const nyv = stock.ny + 1;
@@ -2543,42 +3015,22 @@
             // the lower half showed the cut that made the wall. One texel per quad puts
             // the whole face in one colour, with the change of colour landing exactly on
             // the top edge where the wall meets the surface above it.
+            //
+            // The texture this addresses is the nx x ny cell texture the GPU cell pass
+            // writes, so unlike the old CPU DataTexture it has no stacked blocks: the
+            // underside reads the same texels the surface does and takes only the flag bits
+            // from them, and the side walls read nothing at all.
             const uvs = new Float32Array(total * 2);
 
-            // The texture is three blocks of cells stacked: rows [0, ny) are the surface,
-            // rows [ny, 2ny) shadow them for the flat bottom, and row 2ny is a single spare
-            // row the four side walls share. The bottom is one quad spanning the whole
-            // footprint, so it cannot take a single texel -- a hole cut through the block
-            // has to open in the underside too, and that means the quad needs per-fragment
-            // alpha across the same grid. Its own block, rather than sampling the surface's,
-            // keeps the underside from being painted in the colours of cuts that only ever
-            // touched the top.
-            const texRows = stock.ny * 2 + 1;
-            const BOTTOM_V0 = stock.ny / texRows;
-            const BOTTOM_V1 = stock.ny * 2 / texRows;
-            // Centre of the first texel of the spare row. Nothing ever writes to that row,
-            // so it stays uncut stock for the life of the mesh.
-            const SKIRT_U = 0.5 / stock.nx;
-            const SKIRT_V = (stock.ny * 2 + 0.5) / texRows;
+            // Which of the four vertex classes each vertex is. See STOCK_KIND_* -- the
+            // stock material's vertex shader uses this to decide whether to pull Z out of
+            // the height texture, and its fragment shader to decide what may discard.
+            const kinds = new Float32Array(total);
 
             // Height-map vertices: cell-corner aligned.
             function setSurfaceUV(vertexIndex, gx, gy) {
                 uvs[vertexIndex * 2] = gx / stock.nx;
-                uvs[vertexIndex * 2 + 1] = gy / texRows;
-            }
-
-            // The four side walls are the original outside of the block. No tool can ever
-            // face them: a height map holds one height per sample, so a cut that reaches the
-            // boundary only drops that sample -- the material below it, which is what the
-            // wall actually shows, is never touched. Borrowing the boundary sample's texel
-            // painted the whole outside face in the colour of that cut, from the cut depth
-            // down to the underside, whenever a pass ran along or past the edge. So every
-            // wall vertex reads the spare row instead and stays uncut stock. The wall the
-            // cut really made is the steep surface quad just inboard of it, and that one is
-            // coloured by the pass below like any other.
-            function setSkirtUV(vertexIndex) {
-                uvs[vertexIndex * 2] = SKIRT_U;
-                uvs[vertexIndex * 2 + 1] = SKIRT_V;
+                uvs[vertexIndex * 2 + 1] = gy / stock.ny;
             }
 
             // Preallocated rather than a growing JS array: the count is known exactly --
@@ -2599,6 +3051,7 @@
                     positions[vi * 3] = stock.minX + gx * stock.cellX;
                     positions[vi * 3 + 1] = stock.minY + gy * stock.cellY;
                     positions[vi * 3 + 2] = stock.top;
+                    kinds[vi] = STOCK_KIND_SURFACE;
                     setSurfaceUV(vi, gx, gy);
                 }
             }
@@ -2624,9 +3077,19 @@
                 }
             }
 
-            // Side walls. `skirt` pairs each wall's top vertex with the height sample it follows.
-            const skirt = new Int32Array(skirtCount); // [vertexIndex, heightIndex, ...] for top verts
-            let skirtLen = 0;
+            // Side walls. The top edge follows the boundary height samples, which the vertex
+            // shader reads for itself out of the height texture: a wall vertex shares its XY
+            // with the sample it follows, so it resolves to the same texel with no pairing
+            // table to maintain.
+            //
+            // They are the original outside of the block, and no tool can ever face them: a
+            // height map holds one height per sample, so a cut that reaches the boundary only
+            // drops that sample -- the material below it, which is what the wall actually
+            // shows, is never touched. Painting them from the boundary cell's texel put the
+            // whole outside face in the colour of that cut, from the cut depth down to the
+            // underside, whenever a pass ran along or past the edge. So they carry their own
+            // vertex kind and stay uncut stock. The wall the cut really made is the steep
+            // surface quad just inboard of it, and that one is coloured like any other.
             let v = topCount;
 
             function addWall(heightIndices, forward) {
@@ -2639,15 +3102,13 @@
                     positions[v * 3] = px;
                     positions[v * 3 + 1] = py;
                     positions[v * 3 + 2] = stock.top;
-                    setSkirtUV(v);
-                    skirt[skirtLen++] = v;
-                    skirt[skirtLen++] = hi;
+                    kinds[v] = STOCK_KIND_SKIRT_TOP;
                     v++;
 
                     positions[v * 3] = px;
                     positions[v * 3 + 1] = py;
                     positions[v * 3 + 2] = stock.bottom;
-                    setSkirtUV(v);
+                    kinds[v] = STOCK_KIND_SKIRT_BOTTOM;
                     v++;
                 }
                 for (let k = 0; k < heightIndices.length - 1; k++) {
@@ -2675,10 +3136,12 @@
             const maxX = stock.minX + stock.nx * stock.cellX;
             const maxY = stock.minY + stock.ny * stock.cellY;
             const corners = [[stock.minX, stock.minY], [maxX, stock.minY], [maxX, maxY], [stock.minX, maxY]];
-            // Stretched across the bottom block of the texture, in the same order as the
-            // corners, so every fragment of the quad lands on the shadow of the cell
-            // directly above it.
-            const cornerUVs = [[0, BOTTOM_V0], [1, BOTTOM_V0], [1, BOTTOM_V1], [0, BOTTOM_V1]];
+            // Stretched across the whole cell texture, in the same order as the corners, so
+            // every fragment of the quad lands on the cell directly above it. It reads only
+            // the through-cut flag from there, never the colour: the underside stays uncut
+            // stock rather than being painted in the colours of cuts that only touched the
+            // top.
+            const cornerUVs = [[0, 0], [1, 0], [1, 1], [0, 1]];
             const base = v;
             corners.forEach((c, i) => {
                 positions[v * 3] = c[0];
@@ -2686,15 +3149,16 @@
                 positions[v * 3 + 2] = stock.bottom;
                 uvs[v * 2] = cornerUVs[i][0];
                 uvs[v * 2 + 1] = cornerUVs[i][1];
+                kinds[v] = STOCK_KIND_FLOOR;
                 v++;
             });
             tri(base, base + 2, base + 1);
             tri(base, base + 3, base + 2);
 
             const geometry = new THREE.BufferGeometry();
-            const posAttr = new THREE.BufferAttribute(positions, 3);
-            posAttr.setUsage(THREE.DynamicDrawUsage);
-            geometry.setAttribute('position', posAttr);
+            // Static now: only XY is ever read off it, and Z comes out of the height
+            // texture in the vertex shader. Nothing rewrites this buffer.
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             // Placeholder normals: the material is flat shaded, so shading is derived
             // per-face in the fragment shader and this attribute is never read.
             const normals = new Float32Array(total * 3);
@@ -2702,46 +3166,1464 @@
             geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
 
             geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-
-            // Two texels per cell -- one for the surface, one for the bottom's shadow of it
-            // -- plus the spare row the side walls read. RGBA rather than RGB so each row is
-            // 4-byte aligned, which is what WebGL's default unpack alignment expects.
-            // Everything starts as opaque uncut stock -- the bottom block keeps that colour
-            // for good and only its alpha ever moves, and the spare row never moves at all.
-            const texelCount = stock.nx * texRows;
-            const colorData = new Uint8Array(texelCount * 4);
-            const baseR = (STOCK_BASE_COLOR >> 16) & 0xff;
-            const baseG = (STOCK_BASE_COLOR >> 8) & 0xff;
-            const baseB = STOCK_BASE_COLOR & 0xff;
-            for (let i = 0; i < texelCount; i++) {
-                colorData[i * 4] = baseR;
-                colorData[i * 4 + 1] = baseG;
-                colorData[i * 4 + 2] = baseB;
-                colorData[i * 4 + 3] = 255;
-            }
-            const colorTexture = new THREE.DataTexture(colorData, stock.nx, texRows, THREE.RGBAFormat);
-            // The whole point: no filtering between texels, so a cut edge is an edge.
-            colorTexture.magFilter = THREE.NearestFilter;
-            colorTexture.minFilter = THREE.NearestFilter;
-            colorTexture.generateMipmaps = false;
-            colorTexture.needsUpdate = true;
+            geometry.setAttribute('aKind', new THREE.BufferAttribute(kinds, 1));
 
             geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-            geometry.computeBoundingSphere();
 
             stock.geometry = geometry;
-            stock.skirt = skirt;
-            stock.topCount = topCount;
-            stock.total = total;
-            stock.colorData = colorData;
-            stock.colorTexture = colorTexture;
-            setStockMap(colorTexture);
 
             stockMesh = new THREE.Mesh(geometry, stockMaterial);
+            // The CPU no longer knows the heights, so any bounding volume computed from
+            // the position attribute describes an uncut block and would cull the mesh as
+            // soon as the camera got inside a deep pocket. The block is essentially always
+            // on screen anyway.
+            stockMesh.frustumCulled = false;
             scene.add(stockMesh);
         }
 
-        // --- Contour overlay ------------------------------------------------------------
+        // =================================================================================
+        // GPU stock simulation
+        // =================================================================================
+        //
+        // The whole height map lives in GPU textures and is produced by rasterising one
+        // instanced quad per toolpath move. Nothing about the stock crosses back to the CPU
+        // except a small tile bitmap and a 64x64 statistics reduction, both read
+        // asynchronously.
+        //
+        //   parsedSegments --(once, at rebuild)--> instance buffer [ax ay bx by | z tool slot _]
+        //                                                  |
+        //     three carve passes, each ONE instanced draw over moves [0, k)
+        //       A. height   depth24 = min height        + RGBA8 colour = cut slot
+        //       B. owner    depth24 = min rim height
+        //       C. phi      depth24 = min signed dist   (discards using B)
+        //                                                  |
+        //     D. cell pass (one full-screen quad over nx x ny)
+        //        RGBA8 = resolved colour + flags( hasStep, through )
+        //                                                  |
+        //          base mesh          GPU overlay          G. tile mask -> async readback
+        //          2 tris/cell        20 tris/cell,        -> active tile list
+        //          discards flagged   active tiles only
+        //
+        // Every carve output is a minimum over passes, and rather than blend for that, each
+        // pass writes the quantity to gl_FragDepth and lets the depth test do it with
+        // depthFunc(LEQUAL) against a buffer cleared to 1.0. Three things fall out:
+        //
+        //  - DEPTH_COMPONENT24 is enough and is core WebGL2. 24 bits over a 50 mm block is
+        //    3 nm, so there are no float render targets, no extensions and no compatibility
+        //    branches anywhere in here.
+        //  - Clamping is exactly the behaviour wanted. A cut below the block floor clamps to
+        //    0 and a tool above the stock clamps to 1, which is what max(target, bottom) and
+        //    the "tip above the top removes nothing" rule used to say in JS.
+        //  - The colour attachment gets the argmin for free. The fragment that survives the
+        //    depth test is the one that reached lowest, so writing the cut slot alongside
+        //    gives "the id of the pass that reached deepest" with no extra work. LEQUAL
+        //    rather than LESS hands ties to the later operation, matching the per-cell rule.
+        //
+        // Scrubbing to an arbitrary point is just `instanceCount = k`, so arriving anywhere
+        // costs the same forwards, backwards or by jumping. The full-re-carve-on-rewind that
+        // dominated backward scrubbing does not exist here.
+        //
+        // Two things to respect when touching this code:
+        //  - The grid-to-clip mapping in stockGpuView() must stay exact. Getting it wrong
+        //    shifts every wall by half a cell and looks almost right; only the Alt+V diff
+        //    against the CPU reference will catch it.
+        //  - three.js caches GL state aggressively. Every raw draw here is followed by
+        //    restoreStockGlState(), and render targets are bound through
+        //    renderer.setRenderTarget rather than raw bindFramebuffer.
+
+        // --- Program plumbing ------------------------------------------------------------
+
+        // Shared by all three carve passes. `t` is (radius, flatRadius, cornerRadius,
+        // invTanWall) and a positive w marks a cone -- exactly what toolHeightAt does in JS,
+        // and it has to keep matching it or the diff harness will say so.
+        const STOCK_GLSL_TOOL = `
+float toolHeightAt( vec4 t, float d ) {
+    if ( d <= t.y ) return 0.0;
+    float k = d - t.y;
+    if ( t.w > 0.0 ) return k * t.w;
+    return t.z - sqrt( max( t.z * t.z - k * k, 0.0 ) );
+}
+
+float distSqToSeg( vec2 p, vec2 a, vec2 b ) {
+    vec2 d = b - a;
+    float l2 = dot( d, d );
+    float t = l2 > 0.0 ? clamp( dot( p - a, d ) / l2, 0.0, 1.0 ) : 0.0;
+    vec2 e = p - ( a + t * d );
+    return dot( e, e );
+}
+`;
+
+        // One oriented box per instance, from A - rOut*dir to B + rOut*dir with half-width
+        // rOut. Deliberately not an axis-aligned bounding box: for a diagonal move that is
+        // several times the area, and gl_FragDepth has already cost us early-Z, so these
+        // passes are entirely fragment-bound.
+        //
+        // No vertex buffer at all -- the quad comes out of gl_VertexID, which is why the
+        // carve programs are #version 300 es while the two shaders patched into three.js
+        // materials are GLSL ES 1.00.
+        const STOCK_CARVE_VS = `#version 300 es
+precision highp float;
+layout( location = 0 ) in vec4 aSeg;    // ax, ay, bx, by
+layout( location = 1 ) in vec4 aInfo;   // tip z, tool index, cut slot, unused
+uniform vec4 uTools[ ${STOCK_MAX_TOOLS} ];
+uniform vec4 uView;     // left, bottom, width, height of the orthographic grid mapping
+uniform float uOuter;   // extra radius past the tool: phiBand for B and C, 0 for A
+uniform float uPad;
+out vec2 vWorld;
+flat out vec4 vSeg;
+flat out vec4 vTool;
+flat out float vZ;
+flat out float vSlot;
+void main() {
+    // Clamped rather than trusted: an out-of-range index into a uniform array is undefined
+    // behaviour, and on some drivers that means a crash rather than a wrong colour.
+    vec4 tool = uTools[ clamp( int( aInfo.y + 0.5 ), 0, ${STOCK_MAX_TOOLS - 1} ) ];
+    vSeg = aSeg;
+    vTool = tool;
+    vZ = aInfo.x;
+    vSlot = aInfo.z;
+
+    float rOut = max( tool.x, 0.0 ) + uOuter + uPad;
+    vec2 a = aSeg.xy;
+    vec2 b = aSeg.zw;
+    vec2 d = b - a;
+    float len = length( d );
+    vec2 u = len > 0.0 ? d / len : vec2( 1.0, 0.0 );
+    vec2 n = vec2( -u.y, u.x );
+
+    float sx = ( gl_VertexID == 1 || gl_VertexID == 3 ) ? 1.0 : -1.0;
+    float sy = gl_VertexID >= 2 ? 1.0 : -1.0;
+    vec2 p = ( sx > 0.0 ? b : a ) + u * ( sx * rOut ) + n * ( sy * rOut );
+
+    vWorld = p;
+    gl_Position = vec4( ( p - uView.xy ) / uView.zw * 2.0 - 1.0, 0.0, 1.0 );
+}
+`;
+
+        const STOCK_CARVE_FS_HEAD = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+in vec2 vWorld;
+flat in vec4 vSeg;
+flat in vec4 vTool;
+flat in float vZ;
+flat in float vSlot;
+uniform float uTop;
+uniform float uBottom;
+` + STOCK_GLSL_TOOL;
+
+        // Pass A. The discard at h >= uTop is load-bearing: the buffer is cleared to 1.0 and
+        // the test is LEQUAL, so a tool sitting at or above the stock top would otherwise
+        // pass the depth test and stamp its cut slot over untouched material.
+        const STOCK_FS_HEIGHT = STOCK_CARVE_FS_HEAD + `
+out vec4 oColor;
+void main() {
+    float r = vTool.x;
+    if ( r <= 0.0 ) discard;                        // no tool resolved for this move
+    if ( vZ >= uTop ) discard;                      // tip at or above the stock: cuts nothing
+    float d2 = distSqToSeg( vWorld, vSeg.xy, vSeg.zw );
+    if ( d2 > r * r ) discard;
+    float h = vZ + toolHeightAt( vTool, sqrt( d2 ) );
+    if ( h >= uTop ) discard;
+    gl_FragDepth = clamp( ( h - uBottom ) / ( uTop - uBottom ), 0.0, 1.0 );
+    oColor = vec4( mod( vSlot, 256.0 ) / 255.0, floor( vSlot / 256.0 ) / 255.0, 0.0, 1.0 );
+}
+`;
+
+        // Pass B. The rim is the highest point of the tool's cutting surface, and so the
+        // depth of the wall this pass leaves standing. Taking the min of it over every pass
+        // whose band touches a sample is what makes the distance field order-independent:
+        // see the note on pass C.
+        const STOCK_FS_OWNER = STOCK_CARVE_FS_HEAD + `
+uniform float uPhiBand;
+void main() {
+    float r = vTool.x;
+    if ( r <= 0.0 ) discard;
+    // The tip is the tool's lowest point for every profile, so a capsule at or above the
+    // stock top removes nothing and has no boundary. Excluding it here rather than letting
+    // the arithmetic work out is what keeps the distance field free of phantom bands around
+    // rapids at clearance height, and around a facing pass that runs exactly at the top.
+    if ( vZ >= uTop ) discard;
+    float rOut = r + uPhiBand;
+    float d2 = distSqToSeg( vWorld, vSeg.xy, vSeg.zw );
+    if ( d2 > rOut * rOut ) discard;
+    float rim = max( vZ + toolHeightAt( vTool, r ), uBottom );
+    // Clamps to the clear value, so writing it would change nothing.
+    if ( rim >= uTop ) discard;
+    gl_FragDepth = clamp( ( rim - uBottom ) / ( uTop - uBottom ), 0.0, 1.0 );
+}
+`;
+
+        // Pass C. The CPU rule was sequential -- a running phiOwner decided whether each
+        // pass replaced the record or unioned with it -- and that cannot be expressed as a
+        // minimum. Reformulated:
+        //
+        //   ownerFinal(s) = min over all passes touching s of rimBase          (pass B)
+        //   phi(s)        = min over passes with rimBase <= ownerFinal + levelTol of (d - r)
+        //
+        // which is both order-independent and a simplification: facing-then-pocket and
+        // pocket-then-facing now give the same answer, a ramp is still one region because
+        // ownerFinal is per sample, and a stepped pocket keeps both walls because the two
+        // levels' bands do not overlap. The phiOwner ratcheting the CPU version needed was a
+        // workaround for the running comparison and has no equivalent here.
+        //
+        // `rim` is compared unclamped against an owner that came back clamped to the block
+        // top, which is what reproduces the CPU's initial phiOwner = stock.top exactly.
+        const STOCK_FS_PHI = STOCK_CARVE_FS_HEAD + `
+uniform float uPhiBand;
+uniform float uLevelTol;
+uniform sampler2D uOwner;
+void main() {
+    float r = vTool.x;
+    if ( r <= 0.0 ) discard;
+    if ( vZ >= uTop ) discard;                      // see the note in the owner pass
+    float rOut = r + uPhiBand;
+    float d2 = distSqToSeg( vWorld, vSeg.xy, vSeg.zw );
+    if ( d2 > rOut * rOut ) discard;
+    float rim = max( vZ + toolHeightAt( vTool, r ), uBottom );
+    float owner = uBottom + texelFetch( uOwner, ivec2( gl_FragCoord.xy ), 0 ).r * ( uTop - uBottom );
+    if ( rim > owner + uLevelTol ) discard;
+    float sd = clamp( sqrt( d2 ) - r, -uPhiBand, uPhiBand );
+    gl_FragDepth = ( sd + uPhiBand ) / ( 2.0 * uPhiBand );
+}
+`;
+
+        const STOCK_FULLSCREEN_VS = `#version 300 es
+void main() {
+    gl_Position = vec4( ( gl_VertexID == 1 || gl_VertexID == 3 ) ? 1.0 : -1.0,
+                        gl_VertexID >= 2 ? 1.0 : -1.0, 0.0, 1.0 );
+}
+`;
+
+        // Pass D. The state textures are at sample resolution but colour has to resolve once
+        // per *cell*, because a wall quad reads a single texel and has to come out one flat
+        // colour -- see the UV setup in buildStockGeometry.
+        const STOCK_FS_CELL = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uHeight;
+uniform sampler2D uPhi;
+uniform sampler2D uIds;
+uniform sampler2D uPalette;
+uniform float uTop;
+uniform float uBottom;
+uniform float uPhiBand;
+uniform float uMinStep;
+uniform float uThroughLevel;
+uniform float uPaletteInvW;
+out vec4 oColor;
+
+float hAt( ivec2 c ) { return uBottom + texelFetch( uHeight, c, 0 ).r * ( uTop - uBottom ); }
+float pAt( ivec2 c ) { return texelFetch( uPhi, c, 0 ).r * 2.0 * uPhiBand - uPhiBand; }
+float sAt( ivec2 c ) { vec4 t = texelFetch( uIds, c, 0 ); return floor( t.r * 255.0 + 0.5 ) + 256.0 * floor( t.g * 255.0 + 0.5 ); }
+
+// Whether the boundary running along this edge is a step worth taking the cell over for.
+// A sign change alone is not enough: every pass boundary makes one, including the seam
+// between two passes of a 3D finishing job. Judged only on the four cell edges, never on
+// anything interior, so the two cells sharing an edge always agree -- which is what stops a
+// crossed edge having the overlay on one side and the base grid on the other.
+bool edgeIsStep( float pa, float pb, float ha, float hb ) {
+    bool ina = pa < 0.0;
+    if ( ina == ( pb < 0.0 ) ) return false;
+    return ( ina ? hb - ha : ha - hb ) > uMinStep;
+}
+
+void main() {
+    ivec2 c = ivec2( gl_FragCoord.xy );
+    ivec2 k0 = c, k1 = c + ivec2( 1, 0 ), k2 = c + ivec2( 1, 1 ), k3 = c + ivec2( 0, 1 );
+    float h0 = hAt( k0 ), h1 = hAt( k1 ), h2 = hAt( k2 ), h3 = hAt( k3 );
+    float p0 = pAt( k0 ), p1 = pAt( k1 ), p2 = pAt( k2 ), p3 = pAt( k3 );
+    float s0 = sAt( k0 ), s1 = sAt( k1 ), s2 = sAt( k2 ), s3 = sAt( k3 );
+
+    // A cell takes its deepest corner's cut. On a vertical wall that corner is the one at
+    // the foot of the wall, so the whole face carries the colour of the tool that made it;
+    // on flat ground all four sit at the same height and the tie goes to the later
+    // operation. "worst" is the highest corner, and so the one that decides whether
+    // anything is left standing.
+    float best = h0, bestSlot = s0, worst = h0;
+    if ( h1 > worst ) worst = h1;
+    if ( h1 < best || ( h1 == best && s1 > bestSlot ) ) { best = h1; bestSlot = s1; }
+    if ( h2 > worst ) worst = h2;
+    if ( h2 < best || ( h2 == best && s2 > bestSlot ) ) { best = h2; bestSlot = s2; }
+    if ( h3 > worst ) worst = h3;
+    if ( h3 < best || ( h3 == best && s3 > bestSlot ) ) { best = h3; bestSlot = s3; }
+
+    bool hasStep = edgeIsStep( p0, p1, h0, h1 ) || edgeIsStep( p1, p2, h1, h2 )
+                || edgeIsStep( p2, p3, h2, h3 ) || edgeIsStep( p3, p0, h3, h0 );
+    bool through = worst <= uThroughLevel;
+
+    vec3 rgb = texture( uPalette, vec2( ( bestSlot + 0.5 ) * uPaletteInvW, 0.5 ) ).rgb;
+    oColor = vec4( rgb, ( ( hasStep ? 1.0 : 0.0 ) + ( through ? 2.0 : 0.0 ) ) / 255.0 );
+}
+`;
+
+        // Pass G. Overlay geometry is per contour cell and contour cells are O(perimeter),
+        // so drawing the 60-vertex template for every cell in the grid would be absurd. This
+        // reduces the hasStep bit over 8x8 tiles; the result is read back asynchronously and
+        // becomes the overlay's instance list.
+        const STOCK_FS_TILE = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uCell;
+uniform ivec2 uCells;
+out vec4 oColor;
+void main() {
+    ivec2 base = ivec2( gl_FragCoord.xy ) * ${STOCK_TILE};
+    float m = 0.0;
+    for ( int j = 0; j < ${STOCK_TILE}; j++ ) {
+        for ( int i = 0; i < ${STOCK_TILE}; i++ ) {
+            ivec2 c = base + ivec2( i, j );
+            if ( c.x < uCells.x && c.y < uCells.y ) {
+                float f = floor( texelFetch( uCell, c, 0 ).a * 255.0 + 0.5 );
+                if ( mod( f, 2.0 ) >= 0.5 ) m = 1.0;
+            }
+        }
+    }
+    oColor = vec4( m, 0.0, 0.0, 1.0 );
+}
+`;
+
+        // Material removed, the gouge flag and the through flag were all CPU by-products of
+        // the carve loop. Each output texel walks its own strided slice of the grid and
+        // reports the *mean* removed fraction over it, in 16 bits across two bytes; the CPU
+        // weights each by how many samples it actually covered. Reporting a sum instead
+        // would put every texel down near the bottom of the 16-bit range and throw away the
+        // precision the percentage needs.
+        const STOCK_FS_STATS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uHeight;
+uniform sampler2D uIds;
+uniform ivec2 uSize;
+uniform float uThroughDepth;
+uniform float uRapidSlot;
+out vec4 oColor;
+void main() {
+    ivec2 o = ivec2( gl_FragCoord.xy );
+    float sum = 0.0, n = 0.0, through = 0.0, gouge = 0.0;
+    for ( int y = o.y; y < uSize.y; y += ${STOCK_STATS_SIZE} ) {
+        for ( int x = o.x; x < uSize.x; x += ${STOCK_STATS_SIZE} ) {
+            ivec2 c = ivec2( x, y );
+            float d = texelFetch( uHeight, c, 0 ).r;
+            sum += 1.0 - d;
+            n += 1.0;
+            if ( d <= uThroughDepth ) through = 1.0;
+            vec4 t = texelFetch( uIds, c, 0 );
+            if ( floor( t.r * 255.0 + 0.5 ) + 256.0 * floor( t.g * 255.0 + 0.5 ) == uRapidSlot ) gouge = 1.0;
+        }
+    }
+    float v = floor( clamp( n > 0.0 ? sum / n : 0.0, 0.0, 1.0 ) * 65535.0 + 0.5 );
+    float hi = floor( v / 256.0 );
+    oColor = vec4( hi / 255.0, ( v - hi * 256.0 ) / 255.0, ( through + 2.0 * gouge ) / 255.0, 1.0 );
+}
+`;
+
+        // Debug only. 24 bits of depth is exactly three bytes, so this is lossless and the
+        // Alt+V diff compares the GPU state against the CPU reference to the quantum.
+        const STOCK_FS_PACK = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uSrc;
+out vec4 oColor;
+void main() {
+    float v = floor( texelFetch( uSrc, ivec2( gl_FragCoord.xy ), 0 ).r * 16777215.0 + 0.5 );
+    float r = floor( v / 65536.0 );
+    float g = floor( ( v - r * 65536.0 ) / 256.0 );
+    oColor = vec4( r / 255.0, g / 255.0, ( v - r * 65536.0 - g * 256.0 ) / 255.0, 1.0 );
+}
+`;
+
+        function stockCompileShader(type, source) {
+            const sh = sgl.createShader(type);
+            sgl.shaderSource(sh, source);
+            sgl.compileShader(sh);
+            if (!sgl.getShaderParameter(sh, sgl.COMPILE_STATUS)) {
+                console.error('Stock shader failed to compile:\n' + sgl.getShaderInfoLog(sh));
+                sgl.deleteShader(sh);
+                return null;
+            }
+            return sh;
+        }
+
+        function stockLinkProgram(vsSource, fsSource, uniformNames) {
+            const vs = stockCompileShader(sgl.VERTEX_SHADER, vsSource);
+            const fs = stockCompileShader(sgl.FRAGMENT_SHADER, fsSource);
+            if (!vs || !fs) return null;
+
+            const program = sgl.createProgram();
+            sgl.attachShader(program, vs);
+            sgl.attachShader(program, fs);
+            sgl.linkProgram(program);
+            sgl.deleteShader(vs);
+            sgl.deleteShader(fs);
+
+            if (!sgl.getProgramParameter(program, sgl.LINK_STATUS)) {
+                console.error('Stock program failed to link:\n' + sgl.getProgramInfoLog(program));
+                sgl.deleteProgram(program);
+                return null;
+            }
+
+            // An unused uniform is optimised out and comes back null, which every gl.uniform*
+            // call silently ignores -- so nothing here has to know which pass uses what.
+            const u = {};
+            uniformNames.forEach(name => {
+                u[name] = sgl.getUniformLocation(program, name)
+                    || sgl.getUniformLocation(program, name + '[0]');
+            });
+            return { program, u };
+        }
+
+        const STOCK_CARVE_UNIFORMS = ['uTools', 'uView', 'uOuter', 'uPad', 'uTop', 'uBottom',
+            'uPhiBand', 'uLevelTol', 'uOwner'];
+
+        function ensureStockGpuPrograms() {
+            if (stockGpuPrograms) return true;
+            if (renderer.capabilities.isWebGL2 !== true) return false;
+            sgl = renderer.getContext();
+
+            const p = {
+                height: stockLinkProgram(STOCK_CARVE_VS, STOCK_FS_HEIGHT, STOCK_CARVE_UNIFORMS),
+                owner: stockLinkProgram(STOCK_CARVE_VS, STOCK_FS_OWNER, STOCK_CARVE_UNIFORMS),
+                phi: stockLinkProgram(STOCK_CARVE_VS, STOCK_FS_PHI, STOCK_CARVE_UNIFORMS),
+                cell: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_CELL,
+                    ['uHeight', 'uPhi', 'uIds', 'uPalette', 'uTop', 'uBottom', 'uPhiBand',
+                        'uMinStep', 'uThroughLevel', 'uPaletteInvW']),
+                tile: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_TILE, ['uCell', 'uCells']),
+                stats: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_STATS,
+                    ['uHeight', 'uIds', 'uSize', 'uThroughDepth', 'uRapidSlot']),
+                pack: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_PACK, ['uSrc'])
+            };
+
+            if (Object.keys(p).some(k => !p[k])) {
+                console.error('Stock GPU programs unavailable; the stock simulation is off.');
+                return false;
+            }
+            stockGpuPrograms = p;
+            // The state left behind by compilation is three's problem from here on.
+            restoreStockGlState();
+            return true;
+        }
+
+        // --- Resources -------------------------------------------------------------------
+
+        // The state textures are (nx+1) x (ny+1), one texel per *sample*, and texel centres
+        // have to land exactly on sample positions or every wall shifts half a cell. Texel i
+        // spans [i/W, (i+1)/W] of the mapping below, so its centre is at
+        // left + (i + 0.5) / W * width = minX + i * cellX, which is the sample position.
+        function stockGpuView() {
+            const left = stock.minX - 0.5 * stock.cellX;
+            const bottom = stock.minY - 0.5 * stock.cellY;
+            return [left, bottom, (stock.nx + 1) * stock.cellX, (stock.ny + 1) * stock.cellY];
+        }
+
+        function stockRapidSlot() {
+            // Real slots are operation index + 1, so this sits one past the last of them and
+            // therefore still wins every "ties to the larger id" tie-break, exactly as
+            // RAPID_CUT_ID did in the Uint16 range it was picked out of.
+            return Math.max(operations.length, 1) + 1;
+        }
+
+        function cutIdForSlot(slot) {
+            return slot === stockRapidSlot() ? RAPID_CUT_ID : slot;
+        }
+
+        // 1 KB of palette rebuilt on a colour-mode change, in place of the full-grid repaint
+        // the CPU version needed. Slot 0 is uncut stock and the last slot is the gouge red.
+        function rebuildStockPalette() {
+            const width = stockRapidSlot() + 1;
+            if (!stockPaletteTexture || stockPaletteWidth !== width) {
+                if (stockPaletteTexture) stockPaletteTexture.dispose();
+                stockPaletteWidth = width;
+                stockPaletteData = new Uint8Array(width * 4);
+                stockPaletteTexture = new THREE.DataTexture(stockPaletteData, width, 1, THREE.RGBAFormat);
+                stockPaletteTexture.magFilter = THREE.NearestFilter;
+                stockPaletteTexture.minFilter = THREE.NearestFilter;
+                stockPaletteTexture.generateMipmaps = false;
+            }
+
+            const mode = stockColorModeEl.value;
+            for (let s = 0; s < width; s++) {
+                const hex = stockColorForCutId(cutIdForSlot(s), mode);
+                stockPaletteData[s * 4] = (hex >> 16) & 0xff;
+                stockPaletteData[s * 4 + 1] = (hex >> 8) & 0xff;
+                stockPaletteData[s * 4 + 2] = hex & 0xff;
+                stockPaletteData[s * 4 + 3] = 255;
+            }
+            stockPaletteTexture.needsUpdate = true;
+            // The cell pass binds this texture raw rather than through three, so three has
+            // to be told to push the new bytes now instead of on its next own use of it.
+            renderer.initTexture(stockPaletteTexture);
+
+            stockOvUniforms.uPaletteTex.value = stockPaletteTexture;
+            stockOvUniforms.uPaletteInvW.value = 1 / width;
+            stockCellDirty = true;
+        }
+
+        // The GL name behind a three.js texture. Valid for a render target's textures once
+        // the target has been bound at least once, which buildStockGpu does deliberately.
+        function stockTexHandle(texture) {
+            const props = renderer.properties.get(texture);
+            return props ? props.__webglTexture : null;
+        }
+
+        function stockBindTexture(unit, texture, location) {
+            const handle = stockTexHandle(texture);
+            sgl.activeTexture(sgl.TEXTURE0 + unit);
+            sgl.bindTexture(sgl.TEXTURE_2D, handle || null);
+            sgl.uniform1i(location, unit);
+        }
+
+        function makeCarveVao(buffer) {
+            const gl = sgl;
+            const vao = gl.createVertexArray();
+            gl.bindVertexArray(vao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
+            gl.vertexAttribDivisor(0, 1);
+            gl.enableVertexAttribArray(1);
+            gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
+            gl.vertexAttribDivisor(1, 1);
+            gl.bindVertexArray(null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            return vao;
+        }
+
+        function buildStockGpu() {
+            if (!ensureStockGpuPrograms()) return;
+            const gl = sgl;
+            const W = stock.nx + 1;
+            const H = stock.ny + 1;
+            const tilesX = Math.ceil(stock.nx / STOCK_TILE);
+            const tilesY = Math.ceil(stock.ny / STOCK_TILE);
+
+            // three.js owns allocation and disposal of these, which is what keeps the
+            // resource bookkeeping honest across rebuilds. B and C get an RGBA8 colour
+            // attachment they never write -- WebGLRenderTarget always makes one -- and the
+            // passes mask it off rather than paying to fill it.
+            const depthTarget = () => new THREE.WebGLRenderTarget(W, H, {
+                minFilter: THREE.NearestFilter,
+                magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat,
+                type: THREE.UnsignedByteType,
+                depthBuffer: true,
+                stencilBuffer: false,
+                generateMipmaps: false,
+                depthTexture: new THREE.DepthTexture(W, H, THREE.UnsignedIntType)
+            });
+            const flatTarget = (w, h) => new THREE.WebGLRenderTarget(w, h, {
+                minFilter: THREE.NearestFilter,
+                magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat,
+                type: THREE.UnsignedByteType,
+                depthBuffer: false,
+                stencilBuffer: false,
+                generateMipmaps: false
+            });
+
+            const g = {
+                W, H, tilesX, tilesY,
+                view: stockGpuView(),
+                // One cell of slack on the instance quad, so a capsule that only grazes the
+                // outermost texel it should reach still covers that texel's centre. Cheaper
+                // to be generous here than to lose a row of the distance field.
+                pad: Math.max(stock.cellX, stock.cellY),
+                rtHeight: depthTarget(),
+                rtOwner: depthTarget(),
+                rtPhi: depthTarget(),
+                // Double-buffered so the generation the active-tile list was reduced from
+                // stays readable while the next one is being written.
+                cellA: flatTarget(stock.nx, stock.ny),
+                cellB: flatTarget(stock.nx, stock.ny),
+                rtTile: flatTarget(tilesX, tilesY),
+                rtStats: flatTarget(STOCK_STATS_SIZE, STOCK_STATS_SIZE),
+                instBuffer: gl.createBuffer(),
+                partialBuffer: gl.createBuffer(),
+                partialData: new Float32Array(8),
+                vao: null,
+                vaoPartial: null,
+                vaoEmpty: gl.createVertexArray(),
+                tileBytes: new Uint8Array(tilesX * tilesY * 4),
+                tileRowMax: new Uint8Array(tilesX * tilesY),
+                tileList: null,
+                tileCount: 0,
+                tilesPending: false,
+                tileRead: { pbo: gl.createBuffer(), sync: null },
+                statsBytes: new Uint8Array(STOCK_STATS_SIZE * STOCK_STATS_SIZE * 4),
+                statsPending: false,
+                statsAt: 0,
+                statsRead: { pbo: gl.createBuffer(), sync: null },
+                carveMs: 0
+            };
+            g.cellLive = g.cellA;
+            g.cellWrite = g.cellB;
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, g.partialBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, 32, gl.DYNAMIC_DRAW);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            g.vao = makeCarveVao(g.instBuffer);
+            g.vaoPartial = makeCarveVao(g.partialBuffer);
+
+            stockGpu = g;
+
+            // Force three to allocate each target now, so the raw passes can look their GL
+            // names up, and give every one a defined starting state. Depth 1.0 is the block
+            // top and colour 0 is cut slot 0, uncut. The two cell textures start as uncut
+            // stock with no flags rather than zeroed, because the base mesh samples one of
+            // them on the very first frame -- before the first cell pass has had its tile
+            // readback come back -- and black is a visible flash where tan is not.
+            const cellClear = [
+                ((STOCK_BASE_COLOR >> 16) & 0xff) / 255,
+                ((STOCK_BASE_COLOR >> 8) & 0xff) / 255,
+                (STOCK_BASE_COLOR & 0xff) / 255
+            ];
+            [g.rtHeight, g.rtOwner, g.rtPhi, g.cellA, g.cellB, g.rtTile, g.rtStats].forEach(rt => {
+                renderer.setRenderTarget(rt);
+                gl.colorMask(true, true, true, true);
+                gl.depthMask(true);
+                if (rt === g.cellA || rt === g.cellB) {
+                    gl.clearColor(cellClear[0], cellClear[1], cellClear[2], 0);
+                } else {
+                    gl.clearColor(0, 0, 0, 0);
+                }
+                gl.clearDepth(1);
+                gl.clear(gl.COLOR_BUFFER_BIT | (rt.depthTexture ? gl.DEPTH_BUFFER_BIT : 0));
+            });
+            restoreStockGlState();
+
+            rebuildStockPalette();
+            buildGpuOverlayMesh();
+            updateStockGpuUniforms();
+        }
+
+        function disposeStockGpu() {
+            const g = stockGpu;
+            if (!g) return;
+            const gl = sgl;
+
+            [g.rtHeight, g.rtOwner, g.rtPhi, g.cellA, g.cellB, g.rtTile, g.rtStats].forEach(rt => {
+                if (rt.depthTexture) rt.depthTexture.dispose();
+                rt.dispose();
+            });
+            [g.vao, g.vaoPartial, g.vaoEmpty].forEach(v => { if (v) gl.deleteVertexArray(v); });
+            [g.instBuffer, g.partialBuffer, g.tileRead.pbo, g.statsRead.pbo]
+                .forEach(b => { if (b) gl.deleteBuffer(b); });
+            [g.tileRead.sync, g.statsRead.sync].forEach(s => { if (s) gl.deleteSync(s); });
+
+            stockGpu = null;
+            carveInst = null;
+            stockCarveDirty = false;
+            stockCellDirty = false;
+            stockStatsDirty = false;
+
+            stockGpuUniforms.uHeightTex.value = null;
+            stockGpuUniforms.uCellTex.value = null;
+            stockOvUniforms.uHeightTex.value = null;
+            stockOvUniforms.uPhiTex.value = null;
+            stockOvUniforms.uIdTex.value = null;
+            stockOvUniforms.uCellTex.value = null;
+        }
+
+        function updateStockGpuUniforms() {
+            const g = stockGpu;
+            if (!g) return;
+            const cell = Math.max(stock.cellX, stock.cellY);
+            const span = stock.top - stock.bottom;
+
+            stockGpuUniforms.uHeightTex.value = g.rtHeight.depthTexture;
+            stockGpuUniforms.uCellTex.value = g.cellLive.texture;
+            stockGpuUniforms.uGridMin.value.set(stock.minX, stock.minY);
+            stockGpuUniforms.uInvCell.value.set(1 / stock.cellX, 1 / stock.cellY);
+            stockGpuUniforms.uSampleInv.value.set(1 / g.W, 1 / g.H);
+            stockGpuUniforms.uZTop.value = stock.top;
+            stockGpuUniforms.uZBottom.value = stock.bottom;
+
+            stockOvUniforms.uHeightTex.value = g.rtHeight.depthTexture;
+            stockOvUniforms.uPhiTex.value = g.rtPhi.depthTexture;
+            stockOvUniforms.uIdTex.value = g.rtHeight.texture;
+            stockOvUniforms.uCellTex.value = g.cellLive.texture;
+            stockOvUniforms.uGridMin.value.set(stock.minX, stock.minY);
+            stockOvUniforms.uCellSize.value.set(stock.cellX, stock.cellY);
+            stockOvUniforms.uSampleInv.value.set(1 / g.W, 1 / g.H);
+            stockOvUniforms.uCellInv.value.set(1 / stock.nx, 1 / stock.ny);
+            stockOvUniforms.uGridCells.value.set(stock.nx, stock.ny);
+            stockOvUniforms.uTilesX.value = g.tilesX;
+            stockOvUniforms.uZTop.value = stock.top;
+            stockOvUniforms.uZBottom.value = stock.bottom;
+            stockOvUniforms.uPhiBand.value = stock.phiBand;
+            stockOvUniforms.uWallLo.value = WALL_LO * cell;
+            stockOvUniforms.uWallSpan.value = (WALL_HI - WALL_LO) * cell;
+            stockOvUniforms.uThroughLevel.value = stock.bottom + Math.max(span * 1e-5, 1e-9);
+            stockOvUniforms.uFlatTol.value = span * 1e-6;
+        }
+
+        // A static template of one tile's worth of cells. Every vertex carries only which
+        // cell of the tile it belongs to and which of the 60 slots it fills; the vertex
+        // shader does the rest and collapses the slots it does not need.
+        function buildGpuOverlayMesh() {
+            const g = stockGpu;
+            const count = STOCK_TILE_CELLS * OVERLAY_VERTS_PER_CELL;
+            const positions = new Float32Array(count * 3);
+            for (let c = 0; c < STOCK_TILE_CELLS; c++) {
+                for (let s = 0; s < OVERLAY_VERTS_PER_CELL; s++) {
+                    const i = (c * OVERLAY_VERTS_PER_CELL + s) * 3;
+                    positions[i] = c;
+                    positions[i + 1] = s;
+                }
+            }
+
+            const geometry = new THREE.InstancedBufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            // Never read: the material is flat shaded, so the fragment shader derives the
+            // normal from screen-space derivatives. Present because three declares the
+            // attribute regardless.
+            geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+
+            const tiles = new Float32Array(g.tilesX * g.tilesY);
+            const tileAttr = new THREE.InstancedBufferAttribute(tiles, 1);
+            tileAttr.setUsage(THREE.DynamicDrawUsage);
+            geometry.setAttribute('aTile', tileAttr);
+            geometry.instanceCount = 0;
+            geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+            g.tileList = tiles;
+
+            stockGpuOverlayMesh = new THREE.Mesh(geometry, stockGpuOverlayMaterial);
+            // Nothing on the CPU knows where these vertices end up, and the overlay never
+            // leaves the block, which is always on screen.
+            stockGpuOverlayMesh.frustumCulled = false;
+            stockGpuOverlayMesh.visible = false;
+            scene.add(stockGpuOverlayMesh);
+        }
+
+        // --- The instance buffer ---------------------------------------------------------
+
+        // A stable table of the distinct tool keys the program uses, so that changing the
+        // tool -- typing a diameter, or flipping the file-tools checkbox -- only rewrites the
+        // 64-entry uniform array and never the instance buffer.
+        function buildCarveToolKeys() {
+            const keys = [null];
+            const index = new Map([[null, 0]]);
+            let overflow = false;
+
+            parsedSegments.forEach(seg => {
+                if (!seg.carve) return;
+                const key = seg.toolNum == null ? null : seg.toolNum;
+                if (index.has(key)) return;
+                if (keys.length >= STOCK_MAX_TOOLS) { overflow = true; return; }
+                index.set(key, keys.length);
+                keys.push(key);
+            });
+            if (overflow) {
+                console.warn(`More than ${STOCK_MAX_TOOLS} distinct tools; the extras carve with the sidebar tool.`);
+            }
+
+            carveTools = { keys, index, params: new Float32Array(STOCK_MAX_TOOLS * 4), resolved: [] };
+            resolveCarveTools();
+        }
+
+        // Same rule as toolForSegment: in file mode a T number missing from the header falls
+        // back to the sidebar inputs, and to nothing at all if those are empty too. A key
+        // that resolves to nothing gets a negative radius, which every carve pass discards
+        // on -- that move then simply removes no material.
+        function resolveCarveTools() {
+            if (!carveTools) return;
+            const p = carveTools.params;
+            p.fill(0);
+            carveTools.resolved.length = 0;
+
+            for (let i = 0; i < carveTools.keys.length; i++) {
+                const key = carveTools.keys[i];
+                const tool = (useFileToolsEl.checked && key != null)
+                    ? (fileTools.get(key) || currentTool)
+                    : currentTool;
+                carveTools.resolved[i] = tool || null;
+                if (!tool) { p[i * 4] = -1; continue; }
+                p[i * 4] = tool.radius;
+                p[i * 4 + 1] = tool.flatRadius;
+                p[i * 4 + 2] = tool.cornerRadius;
+                // buildTool leaves invTanWall at 1 for everything that is not a cone, so it
+                // has to be zeroed here or every flat end mill would read as a 45 degree one.
+                p[i * 4 + 3] = tool.isCone ? tool.invTanWall : 0;
+            }
+            for (let i = carveTools.keys.length; i < STOCK_MAX_TOOLS; i++) p[i * 4] = -1;
+        }
+
+        // A capsule covers the full XY sweep of a move exactly, however long it is, so
+        // slicing is only needed to follow a changing Z: ramps, plunges, helical arcs. One
+        // slice per cell-sized drop keeps the Z error at the model's resolution. The count
+        // depends on cell size, which is why the instance buffer is rebuilt whenever the
+        // stock is.
+        function carveSliceCount(seg, zTol) {
+            const dz = Math.abs(seg.end[2] - seg.start[2]);
+            if (dz <= zTol) return 1;
+            return Math.min(4000, Math.max(1, Math.ceil(dz / zTol)));
+        }
+
+        function buildCarveInstances() {
+            carveInst = null;
+            if (!stock || !stockGpu) return;
+            const gl = sgl;
+
+            buildCarveToolKeys();
+
+            const nSeg = parsedSegments.length;
+            const segFirst = new Int32Array(nSeg + 1);
+            const segSlices = new Int32Array(nSeg);
+            const zTol = Math.min(stock.cellX, stock.cellY);
+
+            let count = 0;
+            for (let i = 0; i < nSeg; i++) {
+                segFirst[i] = count;
+                const seg = parsedSegments[i];
+                if (!seg.carve) continue;
+                segSlices[i] = carveSliceCount(seg, zTol);
+                count += segSlices[i];
+            }
+            segFirst[nSeg] = count;
+
+            const data = new Float32Array(count * 8);
+            const rapid = stockRapidSlot();
+            let w = 0;
+            for (let i = 0; i < nSeg; i++) {
+                const n = segSlices[i];
+                if (n === 0) continue;
+                const seg = parsedSegments[i];
+                const key = seg.toolNum == null ? null : seg.toolNum;
+                const toolIdx = carveTools.index.has(key) ? carveTools.index.get(key) : 0;
+                // A rapid that carves is already past the preamble guard -- `carve` only
+                // goes true once its tool block has started cutting -- so it is travelling
+                // through material it has no business being in.
+                const slot = seg.motion === 'G0' ? rapid
+                    : (seg.opIndex != null ? seg.opIndex + 1 : 1);
+
+                const sx = seg.start[0], sy = seg.start[1], sz = seg.start[2];
+                const dx = seg.end[0] - sx, dy = seg.end[1] - sy, dz = seg.end[2] - sz;
+                for (let k = 0; k < n; k++) {
+                    const t0 = k / n, t1 = (k + 1) / n;
+                    data[w++] = sx + dx * t0;
+                    data[w++] = sy + dy * t0;
+                    data[w++] = sx + dx * t1;
+                    data[w++] = sy + dy * t1;
+                    data[w++] = Math.min(sz + dz * t0, sz + dz * t1);
+                    data[w++] = toolIdx;
+                    data[w++] = slot;
+                    data[w++] = 0;
+                }
+            }
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, stockGpu.instBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            restoreStockGlState();
+
+            carveInst = { data, count, segFirst, segSlices };
+            stockCarveDirty = true;
+        }
+
+        // How much of the instance buffer is covered at `dist`, plus the one move that is
+        // half done. Instances belonging to a segment are uniform in the segment's parameter
+        // and the segment is a straight line, so arc length is proportional to it and the
+        // split is exact -- no per-instance distance table needed.
+        const carvePartial = new Float32Array(8);
+
+        function carveRangeForDistance(dist) {
+            if (!carveInst || carveInst.count === 0) return { k: 0, partial: null };
+            if (dist >= totalPathLength) return { k: carveInst.count, partial: null };
+            if (dist <= 0) return { k: 0, partial: null };
+
+            const s = getCurrentSegmentIndex(dist);
+            const seg = parsedSegments[s];
+            const slices = carveInst.segSlices[s];
+            let k = carveInst.segFirst[s];
+            if (slices === 0) return { k, partial: null };
+
+            const f = clamp((dist - seg.startDist) / seg.length, 0, 1);
+            const x = f * slices;
+            const full = Math.min(Math.floor(x), slices);
+            k += full;
+            const frac = x - full;
+            if (full >= slices || frac <= 0) return { k, partial: null };
+
+            // The tail slice, truncated. Z is monotonic along a slice, so the minimum over
+            // the truncated range is still just the lower of its two ends.
+            const t0 = full / slices;
+            const t1 = t0 + frac / slices;
+            const sx = seg.start[0], sy = seg.start[1], sz = seg.start[2];
+            const dx = seg.end[0] - sx, dy = seg.end[1] - sy, dz = seg.end[2] - sz;
+            const key = seg.toolNum == null ? null : seg.toolNum;
+
+            carvePartial[0] = sx + dx * t0;
+            carvePartial[1] = sy + dy * t0;
+            carvePartial[2] = sx + dx * t1;
+            carvePartial[3] = sy + dy * t1;
+            carvePartial[4] = Math.min(sz + dz * t0, sz + dz * t1);
+            carvePartial[5] = carveTools.index.has(key) ? carveTools.index.get(key) : 0;
+            carvePartial[6] = seg.motion === 'G0' ? stockRapidSlot()
+                : (seg.opIndex != null ? seg.opIndex + 1 : 1);
+            carvePartial[7] = 0;
+            return { k, partial: carvePartial };
+        }
+
+        // --- The passes ------------------------------------------------------------------
+
+        function restoreStockGlState() {
+            const gl = sgl;
+            if (!gl) return;
+            gl.bindVertexArray(null);
+            gl.useProgram(null);
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+            gl.colorMask(true, true, true, true);
+            gl.depthMask(true);
+            gl.depthFunc(gl.LESS);
+            gl.disable(gl.DEPTH_TEST);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            renderer.setRenderTarget(null);
+            // The single most likely cause of "everything is black" if it is ever dropped:
+            // three caches GL state aggressively and has no idea what happened above.
+            renderer.resetState();
+        }
+
+        function setCarveUniforms(prog, outer) {
+            const gl = sgl;
+            const g = stockGpu;
+            gl.uniform4f(prog.u.uView, g.view[0], g.view[1], g.view[2], g.view[3]);
+            gl.uniform1f(prog.u.uOuter, outer);
+            gl.uniform1f(prog.u.uPad, g.pad);
+            gl.uniform4fv(prog.u.uTools, carveTools.params);
+            gl.uniform1f(prog.u.uTop, stock.top);
+            gl.uniform1f(prog.u.uBottom, stock.bottom);
+            gl.uniform1f(prog.u.uPhiBand, stock.phiBand);
+        }
+
+        function drawCarveInstances(k, hasPartial) {
+            const gl = sgl;
+            const g = stockGpu;
+            if (k > 0) {
+                gl.bindVertexArray(g.vao);
+                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, k);
+            }
+            if (hasPartial) {
+                gl.bindVertexArray(g.vaoPartial);
+                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
+            }
+            gl.bindVertexArray(null);
+        }
+
+        // Passes A and B would accumulate correctly under the depth test if only the new
+        // instances were drawn while playing forward, but pass C would not -- ownerFinal can
+        // change, which invalidates earlier contributions -- so all three replay in full.
+        // That is three draw calls, it is the simplest thing that is correct, and it makes
+        // forwards, backwards and jumping cost exactly the same.
+        function stockGpuRunCarvePasses() {
+            const gl = sgl;
+            const g = stockGpu;
+            const P = stockGpuPrograms;
+            const started = performance.now();
+
+            const range = carveRangeForDistance(stockCarveTarget);
+            if (range.partial) {
+                g.partialData.set(range.partial);
+                gl.bindBuffer(gl.ARRAY_BUFFER, g.partialBuffer);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.partialData);
+                gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            }
+            const hasPartial = range.partial !== null;
+
+            gl.disable(gl.BLEND);
+            gl.disable(gl.CULL_FACE);
+            gl.disable(gl.SCISSOR_TEST);
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.depthMask(true);
+
+            // A -- height, and the cut slot of whatever reached deepest.
+            renderer.setRenderTarget(g.rtHeight);
+            gl.viewport(0, 0, g.W, g.H);
+            gl.colorMask(true, true, true, true);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clearDepth(1);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.useProgram(P.height.program);
+            setCarveUniforms(P.height, 0);
+            drawCarveInstances(range.k, hasPartial);
+
+            // B -- the rim height that owns each sample's distance field.
+            renderer.setRenderTarget(g.rtOwner);
+            gl.viewport(0, 0, g.W, g.H);
+            gl.colorMask(false, false, false, false);
+            gl.clearDepth(1);
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+            gl.useProgram(P.owner.program);
+            setCarveUniforms(P.owner, stock.phiBand);
+            drawCarveInstances(range.k, hasPartial);
+
+            // C -- the signed distance field itself, discarding against B.
+            renderer.setRenderTarget(g.rtPhi);
+            gl.viewport(0, 0, g.W, g.H);
+            gl.colorMask(false, false, false, false);
+            gl.clearDepth(1);
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+            gl.useProgram(P.phi.program);
+            setCarveUniforms(P.phi, stock.phiBand);
+            // Two cut floors closer together than this are one level: a step the grid could
+            // not draw anyway. Same measure the overlay uses to decide whether a boundary is
+            // worth taking a cell over for, so the two never disagree.
+            gl.uniform1f(P.phi.u.uLevelTol, WALL_LO * Math.max(stock.cellX, stock.cellY));
+            stockBindTexture(0, g.rtOwner.depthTexture, P.phi.u.uOwner);
+            drawCarveInstances(range.k, hasPartial);
+
+            gl.colorMask(true, true, true, true);
+            g.carveMs = performance.now() - started;
+        }
+
+        function stockGpuFullscreen() {
+            const gl = sgl;
+            gl.bindVertexArray(stockGpu.vaoEmpty);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            gl.bindVertexArray(null);
+        }
+
+        function stockGpuRunCellPass() {
+            const gl = sgl;
+            const g = stockGpu;
+            const P = stockGpuPrograms;
+            const span = stock.top - stock.bottom;
+
+            renderer.setRenderTarget(g.cellWrite);
+            gl.viewport(0, 0, stock.nx, stock.ny);
+            gl.disable(gl.DEPTH_TEST);
+            gl.disable(gl.BLEND);
+            gl.depthMask(false);
+            // This pass can run on a frame where the carve passes did not -- a colour-mode
+            // change is exactly that -- so it cannot inherit their colour mask.
+            gl.colorMask(true, true, true, true);
+            gl.useProgram(P.cell.program);
+            stockBindTexture(0, g.rtHeight.depthTexture, P.cell.u.uHeight);
+            stockBindTexture(1, g.rtPhi.depthTexture, P.cell.u.uPhi);
+            stockBindTexture(2, g.rtHeight.texture, P.cell.u.uIds);
+            stockBindTexture(3, stockPaletteTexture, P.cell.u.uPalette);
+            gl.uniform1f(P.cell.u.uTop, stock.top);
+            gl.uniform1f(P.cell.u.uBottom, stock.bottom);
+            gl.uniform1f(P.cell.u.uPhiBand, stock.phiBand);
+            gl.uniform1f(P.cell.u.uMinStep, WALL_LO * Math.max(stock.cellX, stock.cellY));
+            // Compared against a hair above the floor: the depth quantisation is not exact
+            // and a cell one quantum off the bottom is still a void, not a floor.
+            gl.uniform1f(P.cell.u.uThroughLevel, stock.bottom + Math.max(span * 1e-5, 1e-9));
+            gl.uniform1f(P.cell.u.uPaletteInvW, 1 / stockPaletteWidth);
+            stockGpuFullscreen();
+        }
+
+        function stockGpuRunTilePass() {
+            const gl = sgl;
+            const g = stockGpu;
+            const P = stockGpuPrograms;
+            renderer.setRenderTarget(g.rtTile);
+            gl.viewport(0, 0, g.tilesX, g.tilesY);
+            gl.disable(gl.DEPTH_TEST);
+            gl.useProgram(P.tile.program);
+            stockBindTexture(0, g.cellWrite.texture, P.tile.u.uCell);
+            gl.uniform2i(P.tile.u.uCells, stock.nx, stock.ny);
+            stockGpuFullscreen();
+        }
+
+        function stockGpuRunStatsPass() {
+            const gl = sgl;
+            const g = stockGpu;
+            const P = stockGpuPrograms;
+            renderer.setRenderTarget(g.rtStats);
+            gl.viewport(0, 0, STOCK_STATS_SIZE, STOCK_STATS_SIZE);
+            gl.disable(gl.DEPTH_TEST);
+            gl.useProgram(P.stats.program);
+            stockBindTexture(0, g.rtHeight.depthTexture, P.stats.u.uHeight);
+            stockBindTexture(1, g.rtHeight.texture, P.stats.u.uIds);
+            gl.uniform2i(P.stats.u.uSize, g.W, g.H);
+            gl.uniform1f(P.stats.u.uThroughDepth, Math.max(1e-5, 1e-9 / (stock.top - stock.bottom)));
+            gl.uniform1f(P.stats.u.uRapidSlot, stockRapidSlot());
+            stockGpuFullscreen();
+        }
+
+        // --- Asynchronous readback -------------------------------------------------------
+        // Never a blocking read: readPixels lands in a pixel-pack buffer, a fence goes in
+        // behind it, and the bytes are collected on whichever later frame the fence has been
+        // signalled by.
+
+        function stockReadBegin(slot, rt, w, h) {
+            const gl = sgl;
+            renderer.setRenderTarget(rt);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
+            gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ);
+            gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+            slot.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            gl.flush();
+        }
+
+        function stockReadPoll(slot, out) {
+            const gl = sgl;
+            if (!slot.sync) return false;
+            const status = gl.clientWaitSync(slot.sync, 0, 0);
+            if (status === gl.TIMEOUT_EXPIRED) return false;
+            gl.deleteSync(slot.sync);
+            slot.sync = null;
+            if (status === gl.WAIT_FAILED) return false;
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo);
+            gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
+            gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+            return true;
+        }
+
+        // Dilated by one tile in every direction. The tile list and the cell texture the two
+        // consumers read are already the same generation, so this is not load-bearing -- it
+        // is cheap insurance against an off-by-one anywhere in the reduction.
+        function buildActiveTileList() {
+            const g = stockGpu;
+            const tw = g.tilesX, th = g.tilesY;
+            const src = g.tileBytes;
+            const row = g.tileRowMax;
+
+            for (let y = 0; y < th; y++) {
+                const o = y * tw;
+                for (let x = 0; x < tw; x++) {
+                    let m = src[(o + x) * 4];
+                    if (x > 0 && src[(o + x - 1) * 4] > m) m = src[(o + x - 1) * 4];
+                    if (x + 1 < tw && src[(o + x + 1) * 4] > m) m = src[(o + x + 1) * 4];
+                    row[o + x] = m;
+                }
+            }
+
+            const list = g.tileList;
+            let n = 0;
+            for (let y = 0; y < th; y++) {
+                const o = y * tw;
+                for (let x = 0; x < tw; x++) {
+                    let m = row[o + x];
+                    if (y > 0 && row[o - tw + x] > m) m = row[o - tw + x];
+                    if (y + 1 < th && row[o + tw + x] > m) m = row[o + tw + x];
+                    if (m > 0) list[n++] = o + x;
+                }
+            }
+            g.tileCount = n;
+
+            if (!stockGpuOverlayMesh) return;
+            const attr = stockGpuOverlayMesh.geometry.getAttribute('aTile');
+            if (n > 0) {
+                // r128 resets updateRange.count to -1 after every upload, so this has to be
+                // set again each time rather than once at construction.
+                attr.updateRange.offset = 0;
+                attr.updateRange.count = n;
+                attr.needsUpdate = true;
+            }
+            stockGpuOverlayMesh.geometry.instanceCount = n;
+            stockGpuOverlayMesh.visible = n > 0 && stockOverlaySource !== 'cpu';
+        }
+
+        function applyStockStats() {
+            const g = stockGpu;
+            const b = g.statsBytes;
+            const W = g.W, H = g.H;
+            let total = 0;
+            let flags = 0;
+
+            for (let j = 0; j < STOCK_STATS_SIZE; j++) {
+                if (j >= H) break;
+                const rows = Math.floor((H - 1 - j) / STOCK_STATS_SIZE) + 1;
+                for (let i = 0; i < STOCK_STATS_SIZE; i++) {
+                    if (i >= W) break;
+                    const cols = Math.floor((W - 1 - i) / STOCK_STATS_SIZE) + 1;
+                    const o = (j * STOCK_STATS_SIZE + i) * 4;
+                    total += ((b[o] * 256 + b[o + 1]) / 65535) * cols * rows;
+                    flags |= b[o + 2];
+                }
+            }
+
+            document.getElementById('stock-removed').innerText = `${((total / (W * H)) * 100).toFixed(1)} %`;
+
+            // The key for red only appears once there is red to explain. This now follows
+            // what is actually on screen rather than what once happened: a gouge that a
+            // later operation cut away no longer keeps the legend key alive.
+            const gouge = (flags & 2) !== 0;
+            if (gouge !== stockHasGouge) {
+                stockHasGouge = gouge;
+                updateToolLegend();
+            }
+        }
+
+        // Called once per frame, before the scene is rendered.
+        function stockGpuUpdate() {
+            if (!stock || !stockGpu || !stockGpuPrograms || !carveInst) return;
+            const g = stockGpu;
+            let touched = false;
+
+            // setRenderTarget re-applies the renderer's scissor state on every bind, and the
+            // view cube renders into a scissored corner. It always turns the test back off,
+            // but a pass silently clipped to a 96 px square is a bad enough failure to be
+            // worth one line of insurance.
+            renderer.setScissorTest(false);
+
+            if (stockCarveDirty) {
+                stockGpuRunCarvePasses();
+                stockCarveDirty = false;
+                stockCellDirty = true;
+                stockStatsDirty = true;
+                touched = true;
+            }
+
+            // The cell pass and the tile reduction only run while no tile readback is in
+            // flight, which is what keeps the cell texture both consumers read and the
+            // active-tile list on the same generation. Free-running them cannot: the list
+            // would describe a texture that had already moved on, and a cell hidden by the
+            // base mesh with no overlay tile over it is a hole straight through the part.
+            if (stockCellDirty && !g.tilesPending) {
+                stockGpuRunCellPass();
+                stockGpuRunTilePass();
+                stockReadBegin(g.tileRead, g.rtTile, g.tilesX, g.tilesY);
+                g.tilesPending = true;
+                stockCellDirty = false;
+                touched = true;
+            }
+
+            if (g.tilesPending) {
+                if (stockReadPoll(g.tileRead, g.tileBytes)) {
+                    g.tilesPending = false;
+                    buildActiveTileList();
+                    const swap = g.cellLive;
+                    g.cellLive = g.cellWrite;
+                    g.cellWrite = swap;
+                    stockGpuUniforms.uCellTex.value = g.cellLive.texture;
+                    stockOvUniforms.uCellTex.value = g.cellLive.texture;
+                    touched = true;
+                } else if (!g.tileRead.sync) {
+                    // The fence failed outright. Drop it and try the whole thing again.
+                    g.tilesPending = false;
+                    stockCellDirty = true;
+                }
+            }
+
+            const now = performance.now();
+            if (stockStatsDirty && !g.statsPending && now - g.statsAt > 250) {
+                stockGpuRunStatsPass();
+                stockReadBegin(g.statsRead, g.rtStats, STOCK_STATS_SIZE, STOCK_STATS_SIZE);
+                g.statsPending = true;
+                g.statsAt = now;
+                stockStatsDirty = false;
+                touched = true;
+            }
+            if (g.statsPending) {
+                if (stockReadPoll(g.statsRead, g.statsBytes)) {
+                    g.statsPending = false;
+                    applyStockStats();
+                    touched = true;
+                } else if (!g.statsRead.sync) {
+                    g.statsPending = false;
+                }
+            }
+
+            if (touched) restoreStockGlState();
+        }
+
+        // --- Debug harness ---------------------------------------------------------------
+        // Alt+D runs the old CPU carve alongside the GPU one, Alt+V diffs the two, Alt+O
+        // cycles which overlay is in the scene. None of this is reachable without the keys
+        // and none of it costs anything while it is off.
+
+        function ensureCpuRefArrays() {
+            if (!stock || stock.heights) return;
+            const samples = (stock.nx + 1) * (stock.ny + 1);
+            stock.heights = new Float32Array(samples);
+            stock.cutIds = new Uint16Array(samples);
+            stock.phi = new Float32Array(samples);
+            stock.phiOwner = new Float32Array(samples);
+            stock.contour = new Uint8Array(stock.nx * stock.ny);
+            stock.contourList = new Int32Array(4096);
+            stock.contourLen = 0;
+            // stock.overlay and stockOverlayMesh are created and dropped together, so either
+            // one answers "does the CPU overlay exist for this grid".
+            if (!stock.overlay) buildStockOverlay();
+            // buildStockOverlay adds a visible mesh; which of the two overlays is actually
+            // in the picture is the Alt+O setting's business.
+            refreshOverlayVisibility();
+        }
+
+        // A full CPU replay of exactly the instances the GPU is drawing, so the two are
+        // comparable sample for sample rather than only at segment boundaries.
+        function cpuReferenceCarve(dist) {
+            if (!stock || !stock.heights || !carveInst) return;
+            const started = performance.now();
+
+            stock.heights.fill(stock.top);
+            stock.cutIds.fill(0);
+            stock.phi.fill(stock.phiBand);
+            stock.phiOwner.fill(stock.top);
+            for (let i = 0; i < stock.contourLen; i++) stock.contour[stock.contourList[i]] = 0;
+            stock.contourLen = 0;
+            stock.dirtyX1 = -1;
+
+            const range = carveRangeForDistance(dist);
+            const data = carveInst.data;
+            for (let i = 0; i < range.k; i++) {
+                const o = i * 8;
+                const tool = carveTools.resolved[data[o + 5]];
+                if (!tool) continue;
+                carveCapsule(tool, data[o + 6], data[o], data[o + 1], data[o + 2], data[o + 3], data[o + 4]);
+            }
+            if (range.partial) {
+                const p = range.partial;
+                const tool = carveTools.resolved[p[5]];
+                if (tool) carveCapsule(tool, p[6], p[0], p[1], p[2], p[3], p[4]);
+            }
+
+            scanContourCells();
+            rebuildStockOverlay();
+            stock.cpuMs = performance.now() - started;
+        }
+
+        function setStockStatus(text) {
+            document.getElementById('status').innerText = text;
+            console.log(text);
+        }
+
+        function toggleCpuReference() {
+            debugCpuRef = !debugCpuRef;
+            if (debugCpuRef) {
+                ensureCpuRefArrays();
+                cpuReferenceCarve(stockCarveTarget);
+                setStockStatus('CPU reference carve ON (Alt+V to diff, Alt+O for overlay source)');
+            } else {
+                setStockStatus('CPU reference carve OFF');
+            }
+            refreshOverlayVisibility();
+        }
+
+        function refreshOverlayVisibility() {
+            if (stockOverlayMesh) {
+                stockOverlayMesh.visible = debugCpuRef
+                    && (stockOverlaySource === 'cpu' || stockOverlaySource === 'both');
+            }
+            if (stockGpuOverlayMesh) {
+                stockGpuOverlayMesh.visible = stockOverlaySource !== 'cpu' && stockGpu !== null
+                    && stockGpu.tileCount > 0;
+            }
+        }
+
+        function cycleOverlaySource() {
+            stockOverlaySource = stockOverlaySource === 'gpu' ? 'cpu'
+                : (stockOverlaySource === 'cpu' ? 'both' : 'gpu');
+            if (stockOverlaySource !== 'gpu' && !debugCpuRef) {
+                debugCpuRef = true;
+                ensureCpuRefArrays();
+                cpuReferenceCarve(stockCarveTarget);
+            }
+            refreshOverlayVisibility();
+            setStockStatus(`Contour overlay: ${stockOverlaySource}`);
+        }
+
+        // Packs a 24-bit depth texture into RGBA8 -- lossless, three bytes for three bytes --
+        // and reads it back synchronously. Blocking is fine here: nothing else is waiting.
+        function readStockDepth(depthTexture) {
+            const gl = sgl;
+            const g = stockGpu;
+            const rt = new THREE.WebGLRenderTarget(g.W, g.H, {
+                minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+                depthBuffer: false, stencilBuffer: false, generateMipmaps: false
+            });
+            renderer.setRenderTarget(rt);
+            gl.viewport(0, 0, g.W, g.H);
+            gl.disable(gl.DEPTH_TEST);
+            gl.useProgram(stockGpuPrograms.pack.program);
+            stockBindTexture(0, depthTexture, stockGpuPrograms.pack.u.uSrc);
+            stockGpuFullscreen();
+
+            const bytes = new Uint8Array(g.W * g.H * 4);
+            gl.readPixels(0, 0, g.W, g.H, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
+            restoreStockGlState();
+            rt.dispose();
+
+            const out = new Float32Array(g.W * g.H);
+            for (let i = 0; i < out.length; i++) {
+                out[i] = (bytes[i * 4] * 65536 + bytes[i * 4 + 1] * 256 + bytes[i * 4 + 2]) / 16777215;
+            }
+            return out;
+        }
+
+        function stockGpuDebugDiff() {
+            if (!stock || !stockGpu) { setStockStatus('No stock to diff.'); return; }
+            if (!debugCpuRef || !stock.heights) {
+                setStockStatus('Turn the CPU reference on with Alt+D first.');
+                return;
+            }
+            // Both sides have to be at the same distance, and the GPU one may still be a
+            // frame behind if the target moved since the last update.
+            if (stockCarveDirty) {
+                stockGpuRunCarvePasses();
+                stockCarveDirty = false;
+                stockCellDirty = true;
+                stockStatsDirty = true;
+            }
+            cpuReferenceCarve(stockCarveTarget);
+
+            const g = stockGpu;
+            const span = stock.top - stock.bottom;
+            const hQuantum = span / 16777215;
+            const pQuantum = 2 * stock.phiBand / 16777215;
+
+            const gh = readStockDepth(g.rtHeight.depthTexture);
+            const gp = readStockDepth(g.rtPhi.depthTexture);
+
+            let hMax = 0, hBad = 0, pMax = 0, pBad = 0;
+            for (let i = 0; i < gh.length; i++) {
+                const dh = Math.abs((stock.bottom + gh[i] * span) - stock.heights[i]);
+                if (dh > hMax) hMax = dh;
+                // Four quanta of slack: the CPU side is Float32 and the two arrive at the
+                // same number by different arithmetic.
+                if (dh > 4 * hQuantum) hBad++;
+                const dp = Math.abs((gp[i] * 2 * stock.phiBand - stock.phiBand) - stock.phi[i]);
+                if (dp > pMax) pMax = dp;
+                if (dp > 4 * pQuantum) pBad++;
+            }
+
+            const n = gh.length;
+            const msg = `Stock diff at ${stockCarveTarget.toFixed(3)} mm over ${n} samples -- `
+                + `height: max ${hMax.toExponential(2)} mm (${(hMax / hQuantum).toFixed(1)} quanta), `
+                + `${hBad} over tolerance; phi: max ${pMax.toExponential(2)} mm `
+                + `(${(pMax / pQuantum).toFixed(1)} quanta), ${pBad} over tolerance. `
+                + `GPU carve ${g.carveMs.toFixed(1)} ms, CPU ${(stock.cpuMs || 0).toFixed(0)} ms.`;
+            setStockStatus(msg);
+            // Height has to agree outright. The distance field does not: the GPU rule is
+            // order-independent (owner = min rim over every pass that touches a sample,
+            // then phi = min over the passes within levelTol of it) where the CPU one is a
+            // running comparison, so the two legitimately differ wherever more than one cut
+            // level competes for the same sample -- a facing pass over an existing pocket,
+            // most obviously. A non-zero phi count is a thing to look at, not a failure;
+            // what matters is that the walls land in the same place, which is what Alt+O
+            // is for.
+            console.log('Height must agree to the quantum. Phi differences are expected '
+                + 'where two cut levels compete for a sample -- see the order-independent '
+                + 'phi note on the pass C shader.');
+        }
+
+        window.addEventListener('keydown', e => {
+            if (!e.altKey || e.ctrlKey || e.metaKey) return;
+            const tag = (e.target && e.target.tagName) || '';
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+            const key = (e.key || '').toLowerCase();
+            if (key === 'd') { e.preventDefault(); toggleCpuReference(); }
+            else if (key === 'v') { e.preventDefault(); stockGpuDebugDiff(); }
+            else if (key === 'o') { e.preventDefault(); cycleOverlaySource(); }
+        });
+
+        // --- Contour overlay: the CPU reference -----------------------------------------
+        //
+        // What the GPU overlay's vertex shader is a port of, kept as the thing to A/B
+        // against with Alt+O. Nothing below this point runs unless the debug harness has
+        // been switched on.
         //
         // The base mesh can only put a wall on a cell boundary, because that is where its
         // vertices are. `phi` knows where the wall really is, to a fraction of a cell, so
@@ -2951,11 +4833,13 @@
             let outLen = 0;
 
             const cache = new Map();
-            function rgb(id) {
-                let c = cache.get(id);
+            function rgb(slot) {
+                let c = cache.get(slot);
                 if (c === undefined) {
-                    c = stockColorForCutId(id, mode);
-                    cache.set(id, c);
+                    // The reference carve stores the same dense slots the GPU passes do, so
+                    // the gouge sentinel has to be mapped back before the palette sees it.
+                    c = stockColorForCutId(cutIdForSlot(slot), mode);
+                    cache.set(slot, c);
                 }
                 return c;
             }
@@ -3141,194 +5025,47 @@
             return suppressChanged;
         }
 
+        // Throws the carve away and asks for it again from t = 0. On the GPU that is not a
+        // reset at all -- the three passes are a full replay every time the target moves --
+        // so this only has to say "the answer has changed", which is why a backward scrub
+        // now costs exactly what a forward one does.
         function resetStockHeights() {
             if (!stock) return;
-            stock.heights.fill(stock.top);
-            // cutIds is a shadow of heights, not an accumulator. This is also the
-            // backward-scrub path, so missing it would leave uncut stock fully coloured.
-            stock.cutIds.fill(0);
+            stockCarveDirty = true;
+            stockCellDirty = true;
+            stockStatsDirty = true;
 
+            // The rest is the debug reference's bookkeeping, and its arrays only exist while
+            // Alt+D has it switched on.
+            if (!stock.heights) return;
+            stock.heights.fill(stock.top);
+            // cutIds is a shadow of heights, not an accumulator.
+            stock.cutIds.fill(0);
             // The walls go with the material. `phi` back to "no boundary anywhere near",
             // and its owner back to the top of the block so the first pass to reach a
             // sample always takes it.
             stock.phi.fill(stock.phiBand);
             stock.phiOwner.fill(stock.top);
-            // Only the listed cells are cleared, not the whole map: `contour` is 1.4 MB at
-            // Ultra and this runs once per frame for as long as the scrubber is dragged
-            // backwards.
-            const hadContour = stock.contourLen > 0;
             for (let i = 0; i < stock.contourLen; i++) stock.contour[stock.contourList[i]] = 0;
             stock.contourLen = 0;
             stock.dirtyX1 = -1;
-            stock.overlay.geometry.setDrawRange(0, 0);
+            if (stock.overlay) stock.overlay.geometry.setDrawRange(0, 0);
             stockPhiDirty = false;
-            // Hidden cells carry alpha 0 and nothing else will put it back -- the same
-            // argument the stockAnyThroughCut block below makes.
-            if (hadContour) {
-                stockSuppressDirty = true;
-                stockColorDirty = true;
-            }
-
-            carvedDistance = 0;
-            carveSegIndex = 0;
-            stockGeomDirty = true;
-            // In Uniform mode the colour texture is already all base colour and nothing
-            // has written over it, so a repaint would be pure cost. Backward scrubbing
-            // lands here once per frame. A gouge is the exception: it painted red even in
-            // Uniform mode, and scrubbing back before it has to take that red away again.
-            if (stockHasGouge) {
-                stockHasGouge = false;
-                stockColorDirty = true;
-                updateToolLegend();
-            }
-            // Holes have to close again. The flag is cleared here, so the alpha pass would
-            // not run on its own -- force one last full pass to put the alpha back to
-            // opaque before it goes quiet.
-            if (stockAnyThroughCut) {
-                stockAnyThroughCut = false;
-                stockColorDirty = true;
-            }
-            if (stockColorModeEl.value !== 'off') stockColorDirty = true;
+            stockAnyThroughCut = false;
         }
 
-        // Pushes the current height map into the mesh's vertex positions, and the cut-id
-        // map into the colour texture. The two are uploaded independently: heights change
-        // on every carve, colours only when the cut set or the colour mode changes, and
-        // re-uploading a megabyte of colour every frame for nothing is the whole reason
-        // the flags are separate.
-        function refreshStockGeometry(doPositions, doColors) {
-            if (!stock) return;
-            const attr = stock.geometry.getAttribute('position');
-            const pos = attr.array;
-            const heights = stock.heights;
-            const skirt = stock.skirt;
-
-            if (doPositions) {
-                for (let i = 0; i < stock.topCount; i++) {
-                    pos[i * 3 + 2] = heights[i];
-                }
-                for (let k = 0; k < skirt.length; k += 2) {
-                    pos[skirt[k] * 3 + 2] = heights[skirt[k + 1]];
-                }
-                attr.needsUpdate = true;
-            }
-
-            // The overlay has to be settled before the alpha pass, because that pass is
-            // what actually hides the cells the overlay has taken over.
-            scanContourCells();
-            const suppressChanged = (doPositions || doColors || stockSuppressDirty)
-                ? rebuildStockOverlay()
-                : false;
-
-            // The alpha half of this pass follows the height map and the hidden set, not
-            // the cut ids, so it has to run whenever either moves -- but not before one of
-            // them can matter. Until something reaches the underside and until the boundary
-            // first moves, there is nothing to punch and Uniform mode costs what it always
-            // did.
-            const doAlpha = (doPositions && stockAnyThroughCut) || suppressChanged;
-
-            if (doColors || doAlpha) {
-                const col = stock.colorData;
-                const cutIds = stock.cutIds;
-                const mode = stockColorModeEl.value;
-
-                // Cut clean through: every corner of the cell is on the floor of the block,
-                // so no material spans it. Compared against a hair above the bottom because
-                // the heights are Float32 and stock.bottom is not.
-                const throughLevel = stock.bottom + Math.max((stock.top - stock.bottom) * 1e-5, 1e-9);
-
-                // Cache one RGB triple per distinct id so the palette lookup runs a
-                // handful of times rather than once per vertex.
-                const cache = new Map();
-                function rgb(id) {
-                    let c = cache.get(id);
-                    if (c === undefined) {
-                        const hex = stockColorForCutId(id, mode);
-                        c = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
-                        cache.set(id, c);
-                    }
-                    return c;
-                }
-
-                // A cell takes its deepest corner's cut. On a vertical wall that corner is
-                // the one at the foot of the wall -- the sample the cut actually reached --
-                // so the whole face carries the colour of the tool that made it. On flat
-                // ground all four corners sit at the same height, and the tie goes to the
-                // later operation, which keeps a boundary between two passes from drifting
-                // into whichever corner the scan happened to visit first.
-                //
-                // One pass covers the whole mesh: the walls read these same texels through
-                // their UVs, so there is no separate skirt pass, and the bottom's shadow
-                // block is a second alpha write a fixed distance along the same buffer.
-                const nxv = stock.nx + 1;
-                const bottomOffset = stock.nx * stock.ny * 4;
-                const contour = stock.contour;
-                for (let cy = 0; cy < stock.ny; cy++) {
-                    for (let cx = 0; cx < stock.nx; cx++) {
-                        const corner = cy * nxv + cx;
-                        const n1 = corner + 1;
-                        const n2 = corner + nxv;
-                        const n3 = n2 + 1;
-
-                        // Unrolled: this runs once per cell, which is over a million
-                        // iterations at the top resolutions. `worstH` is the highest corner,
-                        // and so the one that decides whether anything is left standing.
-                        let bestH = heights[corner];
-                        let bestId = cutIds[corner];
-                        let worstH = bestH;
-                        let h = heights[n1], id = cutIds[n1];
-                        if (h > worstH) worstH = h;
-                        if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
-                        h = heights[n2]; id = cutIds[n2];
-                        if (h > worstH) worstH = h;
-                        if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
-                        h = heights[n3]; id = cutIds[n3];
-                        if (h > worstH) worstH = h;
-                        if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
-
-                        const ci = (cy * stock.nx + cx) * 4;
-                        if (doColors) {
-                            const c = rgb(bestId);
-                            col[ci] = c[0];
-                            col[ci + 1] = c[1];
-                            col[ci + 2] = c[2];
-                        }
-                        // Discarded by the material's alphaTest, which is the only way a
-                        // height map can show a hole rather than a membrane lying on the
-                        // floor of the block. The underside opens with it, or the hole
-                        // would be visible from above and closed from below.
-                        const through = worstH <= throughLevel;
-                        // The same discard is what hides a cell the contour overlay has
-                        // taken over. Editing the index buffer instead would be far worse:
-                        // updateRange is a single contiguous span and boundary cells are
-                        // scattered across nearly every row, so the touched span is the
-                        // whole 6-35 MB buffer, every frame.
-                        col[ci + 3] = (through || contour[cy * stock.nx + cx]) ? 0 : 255;
-                        // Not the overlay's business: it draws the top of the hole, and the
-                        // underside stays closed until the whole cell is through.
-                        col[bottomOffset + ci + 3] = through ? 0 : 255;
-                    }
-                }
-                stock.colorTexture.needsUpdate = true;
-            }
-
-            // Only the height map moves the needle here, so a colour-only refresh skips
-            // this full scan and its DOM write.
-            if (doPositions) {
-                let removed = 0;
-                const span = stock.top - stock.bottom;
-                for (let i = 0; i < heights.length; i++) removed += stock.top - heights[i];
-                const pct = (removed / (heights.length * span)) * 100;
-                document.getElementById('stock-removed').innerText = `${pct.toFixed(1)} %`;
-            }
-        }
-
+        // The reference carve, and the only thing left of the CPU height map. Kept as the
+        // thing the GPU passes are diffed against by the Alt+V harness -- it is not on any
+        // path the viewer takes on its own, and the arrays it writes are only allocated
+        // while Alt+D has it switched on.
+        //
         // Removes material under the swept tool travelling from (x0,y0) to (x1,y1) with
         // its tip at height z. Each sample is cut to the height of the tool's surface at
         // that sample's distance from the tool axis. That distance is the sample's closest
         // approach to the swept axis: the tool is rotationally symmetric and its profile
         // rises monotonically outward, so the closest approach is where the tool reaches
-        // lowest over the sweep. Exact for a constant-Z move; carveSweep slices the rest.
+        // lowest over the sweep. Exact for a constant-Z move, which is all it is ever
+        // handed: the instance buffer has already sliced every Z-varying move.
         function carveCapsule(tool, cutId, x0, y0, x1, y1, z) {
             const r = tool.radius;
 
@@ -3482,100 +5219,20 @@
             return changed;
         }
 
-        // A capsule covers the full XY sweep of a move exactly, however long it is, so
-        // slicing is only needed to follow a changing Z (ramps, plunges, helical arcs).
-        // One slice per cell-sized drop keeps the Z error at the model's resolution.
-        function carveSweep(tool, cutId, ax, ay, az, bx, by, bz) {
-            const zTol = Math.min(stock.cellX, stock.cellY);
-            if (Math.abs(az - bz) <= zTol) return carveCapsule(tool, cutId, ax, ay, bx, by, Math.min(az, bz));
-
-            const slices = Math.min(4000, Math.max(1, Math.ceil(Math.abs(bz - az) / zTol)));
-            let changed = false;
-
-            for (let k = 0; k < slices; k++) {
-                const t0 = k / slices;
-                const t1 = (k + 1) / slices;
-                const z0 = az + (bz - az) * t0;
-                const z1 = az + (bz - az) * t1;
-                if (carveCapsule(
-                    tool, cutId,
-                    ax + (bx - ax) * t0, ay + (by - ay) * t0,
-                    ax + (bx - ax) * t1, ay + (by - ay) * t1,
-                    Math.min(z0, z1)
-                )) changed = true;
-            }
-            return changed;
-        }
-
         function requestCarve(dist) {
             pendingCarve = dist;
         }
 
+        // Nothing but "the carve target moved". The three passes replay the whole instance
+        // buffer from the start, so there is no resume point to advance, no dirty rect to
+        // union and no difference at all between arriving at a distance forwards, backwards
+        // or by dropping the scrubber on it.
         function carveTo(dist) {
-            // currentTool may legitimately be null in file-tool mode; the per-segment
-            // lookup below decides whether anything can cut.
             if (!stock) return;
-            if (dist < carvedDistance - 1e-9) resetStockHeights();
-            if (dist <= carvedDistance) return;
-
-            let changed = false;
-            let gouged = false;
-            // Only the material-removed answer decides whether a rapid was a gouge, so the
-            // boundary having moved is tracked separately. A pass can shift a wall inside a
-            // cell without lowering any sample, and that still has to redraw.
-            stockPhiDirty = false;
-            for (let i = carveSegIndex; i < parsedSegments.length; i++) {
-                const seg = parsedSegments[i];
-                if (seg.startDist >= dist) break;
-
-                const segEnd = seg.startDist + seg.length;
-                const a = Math.max(carvedDistance, seg.startDist);
-                const b = Math.min(dist, segEnd);
-                const tool = seg.carve ? toolForSegment(seg) : null;
-
-                if (b > a && tool) {
-                    const t0 = (a - seg.startDist) / seg.length;
-                    const t1 = (b - seg.startDist) / seg.length;
-                    const dxs = seg.end[0] - seg.start[0];
-                    const dys = seg.end[1] - seg.start[1];
-                    const dzs = seg.end[2] - seg.start[2];
-                    // A rapid that gets here is already past the preamble guard -- `carve`
-                    // only goes true once its tool block has started cutting -- so it is
-                    // travelling through material it has no business being in.
-                    const isRapid = seg.motion === 'G0';
-                    const cutId = isRapid ? RAPID_CUT_ID
-                        : (seg.opIndex != null ? seg.opIndex + 1 : 1);
-                    if (carveSweep(
-                        tool, cutId,
-                        seg.start[0] + dxs * t0, seg.start[1] + dys * t0, seg.start[2] + dzs * t0,
-                        seg.start[0] + dxs * t1, seg.start[1] + dys * t1, seg.start[2] + dzs * t1
-                    )) {
-                        changed = true;
-                        if (isRapid) gouged = true;
-                    }
-                }
-
-                if (segEnd <= dist) carveSegIndex = i + 1;
-                else break;
-            }
-
-            carvedDistance = dist;
-
-            // The key for red only appears once there is red to explain.
-            if (gouged && !stockHasGouge) {
-                stockHasGouge = true;
-                updateToolLegend();
-            }
-
-            if (changed || stockPhiDirty) {
-                stockGeomDirty = true;
-                // Only worth re-uploading the colour texture if it is actually being
-                // looked at. In Uniform mode every cell already holds the base colour, so
-                // playback costs exactly what it did before colouring existed -- unless a
-                // gouge has painted something red, which Uniform mode still has to show,
-                // and which later cuts can paint back over.
-                if (stockColorModeEl.value !== 'off' || stockHasGouge) stockColorDirty = true;
-            }
+            if (dist === stockCarveTarget && !stockCarveDirty) return;
+            stockCarveTarget = dist;
+            stockCarveDirty = true;
+            if (debugCpuRef) cpuReferenceCarve(dist);
         }
 
         // --- G-Code Parser ---
