@@ -1420,50 +1420,36 @@ if ( vKind < 0.5 ) {
 
         // The program cache key is built from the material's parameters *before*
         // onBeforeCompile runs, so two MeshStandardMaterials configured identically would
-        // otherwise be handed the same compiled program -- and the base mesh and the GPU
+        // otherwise be handed the same compiled program -- and the base mesh and the contour
         // overlay are configured identically. r128 defaults this to the source text of
         // onBeforeCompile, which would also separate them, but saying it outright is
         // cheaper than depending on that.
         stockMaterial.customProgramCacheKey = () => 'stock-base';
 
-        // The contour overlay. A height map pins every wall to a cell boundary, which is
-        // what makes a curved wall a staircase. The cells the cut boundary actually passes
-        // through are dropped from the base mesh and redrawn here, split along the boundary
-        // at its true sub-cell position with a real vertical face between the two halves.
-        // See buildStockOverlay / rebuildStockOverlay.
+        // --- The contour overlay --------------------------------------------------------
+        // A height map pins every wall to a cell boundary, which is what makes a curved wall
+        // a staircase. The cells the cut boundary actually passes through are dropped from
+        // the base mesh and redrawn here, split along the boundary at its true sub-cell
+        // position with a real vertical face between the two halves.
         //
-        // Its faces are unshared, so the flat per-face colour comes from a vertex attribute
-        // rather than the per-cell texture -- the texel those faces would have read is the
-        // transparent one that hid the base quad they replaced. The note above about r128
-        // and ColorManagement applies here too: outputEncoding is left at LinearEncoding and
-        // DataTexture defaults to it, so a normalized byte in this attribute and the same
-        // byte in the texture land on the same pixel. Do not convert either.
+        // The geometry is a static template -- 64 cells of one 8x8 tile, 60 vertices each --
+        // instanced once per *active* tile, so the cost follows the boundary rather than the
+        // grid. Every vertex works out for itself which cell and which of the 20 triangles
+        // it belongs to, reads the cell's four corner samples, and either places itself or
+        // collapses onto the cell's first corner so its triangle is degenerate and culled.
         //
-        // No alphaTest: a through cut is drawn by omitting the floor polygon, not by
-        // discarding it, so the overlay never needs a hole.
-        const stockOverlayMaterial = new THREE.MeshStandardMaterial({
-            color: 0xffffff,
-            roughness: 0.62,
-            metalness: 0.08,
-            flatShading: true,
-            vertexColors: true
-        });
-
-        // --- The GPU contour overlay ----------------------------------------------------
-        // A direct port of rebuildStockOverlay into a vertex shader. The geometry is a
-        // static template -- 64 cells of one 8x8 tile, 60 vertices each -- instanced once
-        // per *active* tile, so the cost follows the boundary rather than the grid. Every
-        // vertex works out for itself which cell and which of the 20 triangles it belongs
-        // to, reads the same four corner samples the CPU version reads, and either places
-        // itself or collapses onto the cell's first corner so its triangle is degenerate
-        // and gets culled.
+        // Colour is per-face and flat, carried in a varying the vertex shader writes rather
+        // than in the per-cell texture: the texel those faces would read is the flagged one
+        // that hid the base quad they replaced. No discard either -- a through cut is drawn
+        // by omitting the floor polygon, not by punching a hole in it.
         //
-        // Two properties make the CPU version watertight and both are preserved here
-        // deliberately, because losing either opens cracks that only show at grazing
-        // angles: every crossing is a function of the two samples it lies between and
+        // Two properties are what make this watertight, and both have to be preserved by
+        // anything that touches it -- losing either opens cracks that only show at grazing
+        // angles. Every crossing is a function of the two samples it lies between and
         // nothing else, so two cells sharing an edge agree to the bit; and cell membership
         // is judged only on the four cell edges, so a crossed edge can never have the
-        // overlay on one side and the base grid on the other.
+        // overlay on one side and the base grid on the other. There is no case analysis and
+        // no fallback anywhere below: a cell either has a sign change or it does not.
         //
         // Membership is read from the same cell texture the base mesh discards on -- the
         // one generation the active-tile list was built from -- so the two can never
@@ -1490,14 +1476,14 @@ if ( vKind < 0.5 ) {
             uPaletteInvW:  { value: 1 }
         };
 
-        const stockGpuOverlayMaterial = new THREE.MeshStandardMaterial({
+        const stockOverlayMaterial = new THREE.MeshStandardMaterial({
             color: 0xffffff,
             roughness: 0.62,
             metalness: 0.08,
             flatShading: true
         });
 
-        stockGpuOverlayMaterial.onBeforeCompile = shader => {
+        stockOverlayMaterial.onBeforeCompile = shader => {
             Object.assign(shader.uniforms, stockOvUniforms);
 
             shader.vertexShader = shader.vertexShader
@@ -1748,13 +1734,13 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
                 .replace('#include <common>', '#include <common>\nvarying vec3 vOvColor;')
                 .replace('#include <map_fragment>', 'diffuseColor.rgb *= vOvColor;');
 
-            assertStockPatched('stockGpuOverlayMaterial', shader,
+            assertStockPatched('stockOverlayMaterial', shader,
                 ['ovCrossing', 'ovLive', 'transformed = ovPos'],
                 ['varying vec3 vOvColor', 'diffuseColor.rgb *= vOvColor']);
         };
 
         // See the note on stockMaterial.customProgramCacheKey.
-        stockGpuOverlayMaterial.customProgramCacheKey = () => 'stock-gpu-overlay';
+        stockOverlayMaterial.customProgramCacheKey = () => 'stock-overlay';
 
         // How far a boundary has to drop across one cell before it counts as a wall, as a
         // multiple of the cell size. Below WALL_LO the overlay leaves the cell to the base
@@ -1771,24 +1757,17 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
         const WALL_LO = 1.25;
         const WALL_HI = 2.5;
 
-        // { nx, ny, minX, minY, cellX, cellY, top, bottom, phiBand, geometry, topCount,
-        //   total, overlay, + the debug reference arrays: heights, cutIds, phi, phiOwner,
-        //   contour, contourList, contourLen }
+        // Just the grid's dimensions now: { nx, ny, minX, minY, cellX, cellY, top, bottom,
+        // phiBand }. Everything the carve produces lives in GPU textures on `stockGpu`, and
+        // the meshes that read them are `stockMesh` and `stockOverlayMesh`.
         let stock = null;
         let stockMesh = null;
-        let stockOverlayMesh = null;
         // Whether any rapid has removed material in the cut so far. Drives the legend key.
-        // Now derived from the statistics reduction over the finished height map rather than
+        // Derived from the statistics reduction over the finished height map rather than
         // recorded as the carve runs, so it follows what is actually on screen: a gouge a
         // later operation cut away no longer keeps the key alive.
         let stockHasGouge = false;
         let pendingCarve = null;   // coalesces carve requests to one per animation frame
-
-        // All three belong to the debug reference carve alone; nothing on the GPU path reads
-        // any of them. See the section on the debug harness.
-        let stockPhiDirty = false;
-        let stockSuppressDirty = false;
-        let stockAnyThroughCut = false;
 
         // --- GPU stock state ------------------------------------------------------------
         // Declared here rather than beside the code that uses it: animate() runs once during
@@ -1798,11 +1777,15 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
         const STOCK_TILE_CELLS = STOCK_TILE * STOCK_TILE;
         const STOCK_MAX_TOOLS = 64;                 // size of the uTools uniform array
         const STOCK_STATS_SIZE = 64;                // side of the statistics reduction target
+        // Four split sub-triangles per cell, each 3 surface triangles plus a 2-triangle
+        // wall: 20 triangles, 60 vertices. The fixed budget is what lets the overlay be a
+        // static template rather than a rebuilt vertex pool.
+        const OVERLAY_VERTS_PER_CELL = 60;
 
         let sgl = null;                 // the raw WebGL2 context, shared with three.js
         let stockGpu = null;            // per-grid GPU resources
         let stockGpuPrograms = null;    // compiled once per context, reused across rebuilds
-        let stockGpuOverlayMesh = null;
+        let stockOverlayMesh = null;
         let carveInst = null;           // { data, count, segFirst, segSlices }
         let carveTools = null;          // { keys, index, params, resolved }
 
@@ -1817,12 +1800,6 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
         let stockCarveDirty = false;
         let stockCellDirty = false;
         let stockStatsDirty = false;
-
-        // Debug affordances, driven by the Alt+D / Alt+V / Alt+O keys at the end of the GPU
-        // section. Off by default: the CPU reference costs exactly the time this change
-        // exists to remove, and its arrays are ~60 MB at the top resolution.
-        let debugCpuRef = false;
-        let stockOverlaySource = 'gpu';   // 'gpu' | 'cpu' | 'both'
 
         const stockEnabledEl = document.getElementById('stock-enabled');
         const stockMarginEl = document.getElementById('stock-margin');
@@ -2264,7 +2241,7 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
             // cutter. Only the 64-entry tool table is rewritten.
             if (stock) {
                 resolveCarveTools();
-                resetStockHeights();
+                invalidateStockCarve();
                 requestCarve(currentDistance);
             }
             if (parsedSegments.length > 0) {
@@ -2860,15 +2837,10 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
                 stockOverlayMesh.geometry.dispose();
                 stockOverlayMesh = null;
             }
-            if (stockGpuOverlayMesh) {
-                scene.remove(stockGpuOverlayMesh);
-                stockGpuOverlayMesh.geometry.dispose();
-                stockGpuOverlayMesh = null;
-            }
             disposeStockGpu();
             stock = null;
-            // Nothing is cut any more, so nothing is gouged. Matters for the path where
-            // the stock is switched off entirely and resetStockHeights never runs.
+            // Nothing is cut any more, so nothing is gouged. The statistics reduction would
+            // normally clear this, but with no stock there is nothing left to reduce.
             if (stockHasGouge) {
                 stockHasGouge = false;
                 updateToolLegend();
@@ -2955,23 +2927,7 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
                 // Truncation radius of the distance field. Wider than a cell so that any
                 // grid edge with a true crossing has both endpoints unsaturated, which is
                 // what lets the crossing be located by interpolation rather than guessed at.
-                phiBand: 1.5 * Math.max(cellX, cellY),
-
-                // The CPU height map and everything hanging off it is now a debug-only
-                // reference, allocated by ensureCpuRefArrays() when the diff harness is
-                // switched on and left null otherwise. At 2048 it is ~60 MB of arrays that
-                // the GPU path never reads.
-                heights: null,
-                cutIds: null,
-                phi: null,
-                phiOwner: null,
-                contour: null,
-                contourList: null,
-                contourLen: 0,
-                dirtyX0: 0, dirtyY0: 0, dirtyX1: -1, dirtyY1: -1,
-
-                geometry: null,
-                overlay: null
+                phiBand: 1.5 * Math.max(cellX, cellY)
             };
 
             buildStockGeometry();
@@ -2984,8 +2940,7 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
                 return;
             }
             buildCarveInstances();
-            if (debugCpuRef) ensureCpuRefArrays();
-            resetStockHeights();
+            invalidateStockCarve();
             requestCarve(currentDistance);
             updateGridPlacement();
         }
@@ -3170,8 +3125,6 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
 
             geometry.setIndex(new THREE.BufferAttribute(indices, 1));
 
-            stock.geometry = geometry;
-
             stockMesh = new THREE.Mesh(geometry, stockMaterial);
             // The CPU no longer knows the heights, so any bounding volume computed from
             // the position attribute describes an uncut block and would cull the mesh as
@@ -3200,7 +3153,7 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
         //     D. cell pass (one full-screen quad over nx x ny)
         //        RGBA8 = resolved colour + flags( hasStep, through )
         //                                                  |
-        //          base mesh          GPU overlay          G. tile mask -> async readback
+        //          base mesh          contour overlay      G. tile mask -> async readback
         //          2 tris/cell        20 tris/cell,        -> active tile list
         //          discards flagged   active tiles only
         //
@@ -3225,8 +3178,8 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
         //
         // Two things to respect when touching this code:
         //  - The grid-to-clip mapping in stockGpuView() must stay exact. Getting it wrong
-        //    shifts every wall by half a cell and looks almost right; only the Alt+V diff
-        //    against the CPU reference will catch it.
+        //    shifts every wall by half a cell, which looks almost right and is invisible
+        //    without something to diff against -- see the note there for how to check it.
         //  - three.js caches GL state aggressively. Every raw draw here is followed by
         //    restoreStockGlState(), and render targets are bound through
         //    renderer.setRenderTarget rather than raw bindFramebuffer.
@@ -3234,8 +3187,9 @@ vec4 ovCrossing( vec2 axy, float ap, float ah, vec2 bxy, float bp, float bh ) {
         // --- Program plumbing ------------------------------------------------------------
 
         // Shared by all three carve passes. `t` is (radius, flatRadius, cornerRadius,
-        // invTanWall) and a positive w marks a cone -- exactly what toolHeightAt does in JS,
-        // and it has to keep matching it or the diff harness will say so.
+        // invTanWall) and a positive w marks a cone. This has to stay the exact equivalent
+        // of toolHeightAt() in JS, which is still what the displayed cutter is lathed from:
+        // if the two drift, the tool on screen stops being the tool being simulated.
         const STOCK_GLSL_TOOL = `
 float toolHeightAt( vec4 t, float d ) {
     if ( d <= t.y ) return 0.0;
@@ -3522,22 +3476,6 @@ void main() {
 }
 `;
 
-        // Debug only. 24 bits of depth is exactly three bytes, so this is lossless and the
-        // Alt+V diff compares the GPU state against the CPU reference to the quantum.
-        const STOCK_FS_PACK = `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-uniform sampler2D uSrc;
-out vec4 oColor;
-void main() {
-    float v = floor( texelFetch( uSrc, ivec2( gl_FragCoord.xy ), 0 ).r * 16777215.0 + 0.5 );
-    float r = floor( v / 65536.0 );
-    float g = floor( ( v - r * 65536.0 ) / 256.0 );
-    oColor = vec4( r / 255.0, g / 255.0, ( v - r * 65536.0 - g * 256.0 ) / 255.0, 1.0 );
-}
-`;
-
         function stockCompileShader(type, source) {
             const sh = sgl.createShader(type);
             sgl.shaderSource(sh, source);
@@ -3595,8 +3533,7 @@ void main() {
                         'uMinStep', 'uThroughLevel', 'uPaletteInvW']),
                 tile: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_TILE, ['uCell', 'uCells']),
                 stats: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_STATS,
-                    ['uHeight', 'uIds', 'uSize', 'uThroughDepth', 'uRapidSlot']),
-                pack: stockLinkProgram(STOCK_FULLSCREEN_VS, STOCK_FS_PACK, ['uSrc'])
+                    ['uHeight', 'uIds', 'uSize', 'uThroughDepth', 'uRapidSlot'])
             };
 
             if (Object.keys(p).some(k => !p[k])) {
@@ -3615,6 +3552,13 @@ void main() {
         // have to land exactly on sample positions or every wall shifts half a cell. Texel i
         // spans [i/W, (i+1)/W] of the mapping below, so its centre is at
         // left + (i + 0.5) / W * width = minX + i * cellX, which is the sample position.
+        //
+        // Three places have to agree on this and none of them can be changed alone: this
+        // mapping, the sample uv the base mesh's vertex shader builds from position.xy, and
+        // the corner uvs the overlay's vertex shader builds from a cell index. The way to
+        // check it is a single axis-aligned capsule over a known cell range -- the cut has
+        // to span exactly the samples it covers in XY, with no half-cell lead or lag on
+        // either end.
         function stockGpuView() {
             const left = stock.minX - 0.5 * stock.cellX;
             const bottom = stock.minY - 0.5 * stock.cellY;
@@ -3797,7 +3741,7 @@ void main() {
             restoreStockGlState();
 
             rebuildStockPalette();
-            buildGpuOverlayMesh();
+            buildStockOverlay();
             updateStockGpuUniforms();
         }
 
@@ -3865,7 +3809,7 @@ void main() {
         // A static template of one tile's worth of cells. Every vertex carries only which
         // cell of the tile it belongs to and which of the 60 slots it fills; the vertex
         // shader does the rest and collapses the slots it does not need.
-        function buildGpuOverlayMesh() {
+        function buildStockOverlay() {
             const g = stockGpu;
             const count = STOCK_TILE_CELLS * OVERLAY_VERTS_PER_CELL;
             const positions = new Float32Array(count * 3);
@@ -3892,12 +3836,12 @@ void main() {
             geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
             g.tileList = tiles;
 
-            stockGpuOverlayMesh = new THREE.Mesh(geometry, stockGpuOverlayMaterial);
+            stockOverlayMesh = new THREE.Mesh(geometry, stockOverlayMaterial);
             // Nothing on the CPU knows where these vertices end up, and the overlay never
             // leaves the block, which is always on screen.
-            stockGpuOverlayMesh.frustumCulled = false;
-            stockGpuOverlayMesh.visible = false;
-            scene.add(stockGpuOverlayMesh);
+            stockOverlayMesh.frustumCulled = false;
+            stockOverlayMesh.visible = false;
+            scene.add(stockOverlayMesh);
         }
 
         // --- The instance buffer ---------------------------------------------------------
@@ -4311,8 +4255,8 @@ void main() {
             }
             g.tileCount = n;
 
-            if (!stockGpuOverlayMesh) return;
-            const attr = stockGpuOverlayMesh.geometry.getAttribute('aTile');
+            if (!stockOverlayMesh) return;
+            const attr = stockOverlayMesh.geometry.getAttribute('aTile');
             if (n > 0) {
                 // r128 resets updateRange.count to -1 after every upload, so this has to be
                 // set again each time rather than once at construction.
@@ -4320,8 +4264,8 @@ void main() {
                 attr.updateRange.count = n;
                 attr.needsUpdate = true;
             }
-            stockGpuOverlayMesh.geometry.instanceCount = n;
-            stockGpuOverlayMesh.visible = n > 0 && stockOverlaySource !== 'cpu';
+            stockOverlayMesh.geometry.instanceCount = n;
+            stockOverlayMesh.visible = n > 0;
         }
 
         function applyStockStats() {
@@ -4428,795 +4372,16 @@ void main() {
             if (touched) restoreStockGlState();
         }
 
-        // --- Debug harness ---------------------------------------------------------------
-        // Alt+D runs the old CPU carve alongside the GPU one, Alt+V diffs the two, Alt+O
-        // cycles which overlay is in the scene. None of this is reachable without the keys
-        // and none of it costs anything while it is off.
-
-        function ensureCpuRefArrays() {
-            if (!stock || stock.heights) return;
-            const samples = (stock.nx + 1) * (stock.ny + 1);
-            stock.heights = new Float32Array(samples);
-            stock.cutIds = new Uint16Array(samples);
-            stock.phi = new Float32Array(samples);
-            stock.phiOwner = new Float32Array(samples);
-            stock.contour = new Uint8Array(stock.nx * stock.ny);
-            stock.contourList = new Int32Array(4096);
-            stock.contourLen = 0;
-            // stock.overlay and stockOverlayMesh are created and dropped together, so either
-            // one answers "does the CPU overlay exist for this grid".
-            if (!stock.overlay) buildStockOverlay();
-            // buildStockOverlay adds a visible mesh; which of the two overlays is actually
-            // in the picture is the Alt+O setting's business.
-            refreshOverlayVisibility();
-        }
-
-        // A full CPU replay of exactly the instances the GPU is drawing, so the two are
-        // comparable sample for sample rather than only at segment boundaries.
-        function cpuReferenceCarve(dist) {
-            if (!stock || !stock.heights || !carveInst) return;
-            const started = performance.now();
-
-            stock.heights.fill(stock.top);
-            stock.cutIds.fill(0);
-            stock.phi.fill(stock.phiBand);
-            stock.phiOwner.fill(stock.top);
-            for (let i = 0; i < stock.contourLen; i++) stock.contour[stock.contourList[i]] = 0;
-            stock.contourLen = 0;
-            stock.dirtyX1 = -1;
-
-            const range = carveRangeForDistance(dist);
-            const data = carveInst.data;
-            for (let i = 0; i < range.k; i++) {
-                const o = i * 8;
-                const tool = carveTools.resolved[data[o + 5]];
-                if (!tool) continue;
-                carveCapsule(tool, data[o + 6], data[o], data[o + 1], data[o + 2], data[o + 3], data[o + 4]);
-            }
-            if (range.partial) {
-                const p = range.partial;
-                const tool = carveTools.resolved[p[5]];
-                if (tool) carveCapsule(tool, p[6], p[0], p[1], p[2], p[3], p[4]);
-            }
-
-            scanContourCells();
-            rebuildStockOverlay();
-            stock.cpuMs = performance.now() - started;
-        }
-
-        function setStockStatus(text) {
-            document.getElementById('status').innerText = text;
-            console.log(text);
-        }
-
-        function toggleCpuReference() {
-            debugCpuRef = !debugCpuRef;
-            if (debugCpuRef) {
-                ensureCpuRefArrays();
-                cpuReferenceCarve(stockCarveTarget);
-                setStockStatus('CPU reference carve ON (Alt+V to diff, Alt+O for overlay source)');
-            } else {
-                setStockStatus('CPU reference carve OFF');
-            }
-            refreshOverlayVisibility();
-        }
-
-        function refreshOverlayVisibility() {
-            if (stockOverlayMesh) {
-                stockOverlayMesh.visible = debugCpuRef
-                    && (stockOverlaySource === 'cpu' || stockOverlaySource === 'both');
-            }
-            if (stockGpuOverlayMesh) {
-                stockGpuOverlayMesh.visible = stockOverlaySource !== 'cpu' && stockGpu !== null
-                    && stockGpu.tileCount > 0;
-            }
-        }
-
-        function cycleOverlaySource() {
-            stockOverlaySource = stockOverlaySource === 'gpu' ? 'cpu'
-                : (stockOverlaySource === 'cpu' ? 'both' : 'gpu');
-            if (stockOverlaySource !== 'gpu' && !debugCpuRef) {
-                debugCpuRef = true;
-                ensureCpuRefArrays();
-                cpuReferenceCarve(stockCarveTarget);
-            }
-            refreshOverlayVisibility();
-            setStockStatus(`Contour overlay: ${stockOverlaySource}`);
-        }
-
-        // Packs a 24-bit depth texture into RGBA8 -- lossless, three bytes for three bytes --
-        // and reads it back synchronously. Blocking is fine here: nothing else is waiting.
-        function readStockDepth(depthTexture) {
-            const gl = sgl;
-            const g = stockGpu;
-            const rt = new THREE.WebGLRenderTarget(g.W, g.H, {
-                minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-                format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-                depthBuffer: false, stencilBuffer: false, generateMipmaps: false
-            });
-            renderer.setRenderTarget(rt);
-            gl.viewport(0, 0, g.W, g.H);
-            gl.disable(gl.DEPTH_TEST);
-            gl.useProgram(stockGpuPrograms.pack.program);
-            stockBindTexture(0, depthTexture, stockGpuPrograms.pack.u.uSrc);
-            stockGpuFullscreen();
-
-            const bytes = new Uint8Array(g.W * g.H * 4);
-            gl.readPixels(0, 0, g.W, g.H, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
-            restoreStockGlState();
-            rt.dispose();
-
-            const out = new Float32Array(g.W * g.H);
-            for (let i = 0; i < out.length; i++) {
-                out[i] = (bytes[i * 4] * 65536 + bytes[i * 4 + 1] * 256 + bytes[i * 4 + 2]) / 16777215;
-            }
-            return out;
-        }
-
-        function stockGpuDebugDiff() {
-            if (!stock || !stockGpu) { setStockStatus('No stock to diff.'); return; }
-            if (!debugCpuRef || !stock.heights) {
-                setStockStatus('Turn the CPU reference on with Alt+D first.');
-                return;
-            }
-            // Both sides have to be at the same distance, and the GPU one may still be a
-            // frame behind if the target moved since the last update.
-            if (stockCarveDirty) {
-                stockGpuRunCarvePasses();
-                stockCarveDirty = false;
-                stockCellDirty = true;
-                stockStatsDirty = true;
-            }
-            cpuReferenceCarve(stockCarveTarget);
-
-            const g = stockGpu;
-            const span = stock.top - stock.bottom;
-            const hQuantum = span / 16777215;
-            const pQuantum = 2 * stock.phiBand / 16777215;
-
-            const gh = readStockDepth(g.rtHeight.depthTexture);
-            const gp = readStockDepth(g.rtPhi.depthTexture);
-
-            let hMax = 0, hBad = 0, pMax = 0, pBad = 0;
-            for (let i = 0; i < gh.length; i++) {
-                const dh = Math.abs((stock.bottom + gh[i] * span) - stock.heights[i]);
-                if (dh > hMax) hMax = dh;
-                // Four quanta of slack: the CPU side is Float32 and the two arrive at the
-                // same number by different arithmetic.
-                if (dh > 4 * hQuantum) hBad++;
-                const dp = Math.abs((gp[i] * 2 * stock.phiBand - stock.phiBand) - stock.phi[i]);
-                if (dp > pMax) pMax = dp;
-                if (dp > 4 * pQuantum) pBad++;
-            }
-
-            const n = gh.length;
-            const msg = `Stock diff at ${stockCarveTarget.toFixed(3)} mm over ${n} samples -- `
-                + `height: max ${hMax.toExponential(2)} mm (${(hMax / hQuantum).toFixed(1)} quanta), `
-                + `${hBad} over tolerance; phi: max ${pMax.toExponential(2)} mm `
-                + `(${(pMax / pQuantum).toFixed(1)} quanta), ${pBad} over tolerance. `
-                + `GPU carve ${g.carveMs.toFixed(1)} ms, CPU ${(stock.cpuMs || 0).toFixed(0)} ms.`;
-            setStockStatus(msg);
-            // Height has to agree outright. The distance field does not: the GPU rule is
-            // order-independent (owner = min rim over every pass that touches a sample,
-            // then phi = min over the passes within levelTol of it) where the CPU one is a
-            // running comparison, so the two legitimately differ wherever more than one cut
-            // level competes for the same sample -- a facing pass over an existing pocket,
-            // most obviously. A non-zero phi count is a thing to look at, not a failure;
-            // what matters is that the walls land in the same place, which is what Alt+O
-            // is for.
-            console.log('Height must agree to the quantum. Phi differences are expected '
-                + 'where two cut levels compete for a sample -- see the order-independent '
-                + 'phi note on the pass C shader.');
-        }
-
-        window.addEventListener('keydown', e => {
-            if (!e.altKey || e.ctrlKey || e.metaKey) return;
-            const tag = (e.target && e.target.tagName) || '';
-            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-            const key = (e.key || '').toLowerCase();
-            if (key === 'd') { e.preventDefault(); toggleCpuReference(); }
-            else if (key === 'v') { e.preventDefault(); stockGpuDebugDiff(); }
-            else if (key === 'o') { e.preventDefault(); cycleOverlaySource(); }
-        });
-
-        // --- Contour overlay: the CPU reference -----------------------------------------
-        //
-        // What the GPU overlay's vertex shader is a port of, kept as the thing to A/B
-        // against with Alt+O. Nothing below this point runs unless the debug harness has
-        // been switched on.
-        //
-        // The base mesh can only put a wall on a cell boundary, because that is where its
-        // vertices are. `phi` knows where the wall really is, to a fraction of a cell, so
-        // the cells the boundary passes through are taken away from the base mesh and
-        // redrawn here: each is split along the boundary, the two halves sit at their own
-        // heights, and a real vertical face joins them.
-        //
-        // Everything about a crossing is a function of the two samples it lies between, so
-        // the two cells sharing a grid edge compute it identically and the overlay is
-        // watertight -- against itself, and against the base grid along the cell edges the
-        // boundary does not cross. There is no case analysis and no fallback: a cell either
-        // has a sign change or it does not.
-
-        // Four split sub-triangles, each 3 surface triangles plus a 2-triangle wall.
-        const OVERLAY_VERTS_PER_CELL = 60;
-
-        // One cell's samples: four corners in CCW order seen from +Z, then the centre.
-        const ovX = new Float64Array(5);
-        const ovY = new Float64Array(5);
-        const ovP = new Float64Array(5);
-        const ovH = new Float64Array(5);
-        const ovI = new Int32Array(4);
-        const ovC0 = new Float64Array(4);   // x, y, topZ, botZ
-        const ovC1 = new Float64Array(4);
-        // Live write cursor into the overlay buffers, so the emit helpers stay flat.
-        let ovPos = null, ovCol = null, ovN = 0;
-
-        function makeOverlayGeometry(capacity, keep) {
-            const geometry = new THREE.BufferGeometry();
-            const position = new THREE.BufferAttribute(new Float32Array(capacity * 3), 3);
-            position.setUsage(THREE.DynamicDrawUsage);
-            const color = new THREE.BufferAttribute(new Uint8Array(capacity * 3), 3, true);
-            color.setUsage(THREE.DynamicDrawUsage);
-            if (keep > 0) {
-                position.array.set(ovPos.subarray(0, keep * 3));
-                color.array.set(ovCol.subarray(0, keep * 3));
-            }
-            geometry.setAttribute('position', position);
-            geometry.setAttribute('color', color);
-            // Never read: the material is flat shaded, so the fragment shader derives the
-            // normal from screen-space derivatives. Present because the attribute is
-            // declared in the shader regardless. Same placeholder as the base mesh.
-            geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
-            geometry.setDrawRange(0, keep);
-            ovPos = position.array;
-            ovCol = color.array;
-            return geometry;
-        }
-
-        function buildStockOverlay() {
-            const capacity = OVERLAY_VERTS_PER_CELL * 4096;
-            const geometry = makeOverlayGeometry(capacity, 0);
-
-            stockOverlayMesh = new THREE.Mesh(geometry, stockOverlayMaterial);
-            // The overlay never leaves the block and the block is always on screen, so a
-            // bounding sphere recomputed every frame over a few hundred thousand vertices
-            // would be the most expensive thing the rebuild does, to learn nothing.
-            stockOverlayMesh.frustumCulled = false;
-            scene.add(stockOverlayMesh);
-
-            stock.overlay = { geometry, capacity };
-        }
-
-        // Doubles the pool, mid-rebuild. A whole new geometry rather than new attributes on
-        // the old one: swapping an attribute leaves its GL buffer alive until the geometry
-        // itself is disposed, and this can run several times in a session.
-        function growStockOverlay() {
-            const ov = stock.overlay;
-            const capacity = ov.capacity * 2;
-            const geometry = makeOverlayGeometry(capacity, ovN);
-            ov.geometry.dispose();
-            stockOverlayMesh.geometry = geometry;
-            ov.geometry = geometry;
-            ov.capacity = capacity;
-        }
-
-        function growContourList() {
-            const next = new Int32Array(stock.contourList.length * 2);
-            next.set(stock.contourList);
-            stock.contourList = next;
-        }
-
-        // Whether the boundary running through a cell is a step worth taking the cell over
-        // for, rather than just a change of surface. A sign change on its own is not enough:
-        // every pass boundary makes one, including the seam between two passes of a 3D
-        // finishing job, and there the two halves of a split cell meet at the interpolated
-        // height anyway -- the overlay would draw the base grid's own surface a slower way,
-        // fanned around a centre vertex that does not quite sit on it. Scattered over a
-        // sloped surface that reads as grain.
-        //
-        // Judged only on the four cell edges, never on anything interior, so the two cells
-        // sharing an edge always agree. Either both take over or neither does, and a crossed
-        // edge can never have the overlay on one side and the base grid on the other -- which
-        // is what would open a crack.
-        function edgeIsStep(phi, h, a, b, minStep) {
-            const ina = phi[a] < 0;
-            if (ina === (phi[b] < 0)) return false;
-            // The uncut side is the positive one, and there is only a wall if it stands
-            // above the cut one. Exactly the test overlayCrossing's wallness makes, so a
-            // cell is taken over if and only if one of its edges would open a face.
-            return (ina ? h[b] - h[a] : h[a] - h[b]) > minStep;
-        }
-
-        function cellHasStep(phi, h, i0, i1, i2, i3, minStep) {
-            return edgeIsStep(phi, h, i0, i1, minStep)
-                || edgeIsStep(phi, h, i1, i2, minStep)
-                || edgeIsStep(phi, h, i2, i3, minStep)
-                || edgeIsStep(phi, h, i3, i0, minStep);
-        }
-
-        // Adds every cell in the region just carved that now holds a step. Only the carved
-        // region is walked: neither `phi` nor `heights` can have changed anywhere else, so
-        // neither can membership. Cells leave the set in rebuildStockOverlay, which has to
-        // re-read all of them anyway.
-        function scanContourCells() {
-            if (stock.dirtyX1 < stock.dirtyX0) return;
-            const nx = stock.nx, nxv = nx + 1;
-            const phi = stock.phi, heights = stock.heights, contour = stock.contour;
-            const minStep = WALL_LO * Math.max(stock.cellX, stock.cellY);
-            const cx0 = stock.dirtyX0, cx1 = stock.dirtyX1;
-            const cy0 = stock.dirtyY0, cy1 = stock.dirtyY1;
-
-            for (let cy = cy0; cy <= cy1; cy++) {
-                const row = cy * nxv;
-                const cellRow = cy * nx;
-                for (let cx = cx0; cx <= cx1; cx++) {
-                    const ci = cellRow + cx;
-                    if (contour[ci]) continue;
-                    const i0 = row + cx;
-                    if (!cellHasStep(phi, heights, i0, i0 + 1, i0 + nxv + 1, i0 + nxv, minStep)) continue;
-
-                    contour[ci] = 1;
-                    if (stock.contourLen === stock.contourList.length) growContourList();
-                    stock.contourList[stock.contourLen++] = ci;
-                    stockSuppressDirty = true;
-                }
-            }
-            stock.dirtyX1 = -1;
-        }
-
-        // Where the boundary crosses the segment between samples `a` and `b`, and the two
-        // heights the face takes there. Writes [x, y, topZ, botZ].
-        function overlayCrossing(a, b, wallLo, wallSpan, out) {
-            const pa = ovP[a], pb = ovP[b];
-            const den = pa - pb;
-            let t = den !== 0 ? pa / den : 0.5;
-            if (t < 0) t = 0; else if (t > 1) t = 1;
-
-            out[0] = ovX[a] + t * (ovX[b] - ovX[a]);
-            out[1] = ovY[a] + t * (ovY[b] - ovY[a]);
-
-            const hLerp = ovH[a] + t * (ovH[b] - ovH[a]);
-            const hOut = pa > 0 ? ovH[a] : ovH[b];   // the side that still has material
-            const hIn = pa > 0 ? ovH[b] : ovH[a];
-
-            // Wallness. At 0 both heights collapse onto the interpolated one and the
-            // surface stays continuous, which is the right answer for a chamfer flank, a
-            // ball-nose fillet or a ramp -- the sign change is real there, but the step is
-            // not. At 1 the face is fully vertical. Blending between them is what stops
-            // the transition from reading as a line of crisp cells beside a line of soft
-            // ones, which is worse to look at than uniform aliasing.
-            let w = (hOut - hIn - wallLo) / wallSpan;
-            if (w <= 0) w = 0;
-            else if (w >= 1) w = 1;
-            else w = w * w * (3 - 2 * w);
-
-            out[2] = hLerp + (hOut - hLerp) * w;
-            out[3] = hLerp + (hIn - hLerp) * w;
-        }
-
-        function ovVert(x, y, z, hex) {
-            const i = ovN * 3;
-            ovPos[i] = x;
-            ovPos[i + 1] = y;
-            ovPos[i + 2] = z;
-            ovCol[i] = (hex >> 16) & 0xff;
-            ovCol[i + 1] = (hex >> 8) & 0xff;
-            ovCol[i + 2] = hex & 0xff;
-            ovN++;
-        }
-
-        // Redraws every boundary cell and compacts the ones the boundary has left out of
-        // the list. Returns true if the hidden set changed, which is what tells the colour
-        // pass it has alpha to rewrite.
-        function rebuildStockOverlay() {
-            const nx = stock.nx, nxv = nx + 1;
-            const heights = stock.heights, phi = stock.phi, cutIds = stock.cutIds;
-            const contour = stock.contour, list = stock.contourList;
-            const cellX = stock.cellX, cellY = stock.cellY;
-            const minX = stock.minX, minY = stock.minY;
-            const cell = Math.max(cellX, cellY);
-            const wallLo = WALL_LO * cell;
-            const minStep = wallLo;
-            const wallSpan = (WALL_HI - WALL_LO) * cell;
-            const mode = stockColorModeEl.value;
-            // Same constant the base mesh's alpha pass uses: at or below this a column is
-            // a void, not a floor.
-            const throughLevel = stock.bottom + Math.max((stock.top - stock.bottom) * 1e-5, 1e-9);
-            const flatTol = (stock.top - stock.bottom) * 1e-6;
-
-            const ov = stock.overlay;
-            ovPos = ov.geometry.getAttribute('position').array;
-            ovCol = ov.geometry.getAttribute('color').array;
-            ovN = 0;
-
-            let suppressChanged = stockSuppressDirty;
-            let outLen = 0;
-
-            const cache = new Map();
-            function rgb(slot) {
-                let c = cache.get(slot);
-                if (c === undefined) {
-                    // The reference carve stores the same dense slots the GPU passes do, so
-                    // the gouge sentinel has to be mapped back before the palette sees it.
-                    c = stockColorForCutId(cutIdForSlot(slot), mode);
-                    cache.set(slot, c);
-                }
-                return c;
-            }
-
-            for (let li = 0; li < stock.contourLen; li++) {
-                const ci = list[li];
-                const cx = ci % nx;
-                const cy = (ci - cx) / nx;
-
-                const i0 = cy * nxv + cx;
-                const i1 = i0 + 1;
-                const i3 = i0 + nxv;
-                const i2 = i3 + 1;
-
-                const p0 = phi[i0], p1 = phi[i1], p2 = phi[i2], p3 = phi[i3];
-                // Re-tested every rebuild, not just on entry: the step can shrink back below
-                // the threshold when a later pass lowers the standing side of it.
-                if (!cellHasStep(phi, heights, i0, i1, i2, i3, minStep)) {
-                    // No step here any more. Hand the cell back to the base mesh.
-                    contour[ci] = 0;
-                    suppressChanged = true;
-                    continue;
-                }
-                list[outLen++] = ci;
-
-                if (ovN + OVERLAY_VERTS_PER_CELL > ov.capacity) growStockOverlay();
-
-                const px0 = minX + cx * cellX, px1 = px0 + cellX;
-                const py0 = minY + cy * cellY, py1 = py0 + cellY;
-                ovX[0] = px0; ovY[0] = py0; ovP[0] = p0; ovH[0] = heights[i0]; ovI[0] = i0;
-                ovX[1] = px1; ovY[1] = py0; ovP[1] = p1; ovH[1] = heights[i1]; ovI[1] = i1;
-                ovX[2] = px1; ovY[2] = py1; ovP[2] = p2; ovH[2] = heights[i2]; ovI[2] = i2;
-                ovX[3] = px0; ovY[3] = py1; ovP[3] = p3; ovH[3] = heights[i3]; ovI[3] = i3;
-
-                // The cut that made each half. Deepest corner wins, ties to the later
-                // operation -- the base mesh's per-cell rule, but applied to each side of
-                // the boundary separately, so the sliver of old surface left standing above
-                // a wall keeps its own colour instead of being repainted by the cut below.
-                let hIn = Infinity, idIn = 0, hOut = Infinity, idOut = 0;
-                let inCount = 0, inThrough = true;
-                for (let k = 0; k < 4; k++) {
-                    const h = ovH[k], id = cutIds[ovI[k]];
-                    if (ovP[k] < 0) {
-                        inCount++;
-                        if (h > throughLevel) inThrough = false;
-                        if (h < hIn || (h === hIn && id > idIn)) { hIn = h; idIn = id; }
-                    } else if (h < hOut || (h === hOut && id > idOut)) {
-                        hOut = h;
-                        idOut = id;
-                    }
-                }
-                const colIn = rgb(idIn);
-                const colOut = rgb(idOut);
-                // Cut clean through on the inside: there is no floor to draw, and a polygon
-                // at the underside would be exactly the membrane alphaTest exists to delete.
-                // The wall still runs the full depth, so the bore keeps its true radius.
-                const skipFloor = inThrough && inCount > 0;
-
-                // The centre sample. It has to sit on the surface of its own side of the
-                // boundary: the mean of all four corners would hang it in mid-air halfway
-                // down the wall, and the mean of the corners on its side is only right when
-                // that side is level. Get it wrong on a slope and the fan bulges, which flat
-                // shading turns into a speck of grain.
-                //
-                // On a plane, opposite corners average to the centre. Any three corners
-                // contain a diagonal pair, so that covers every case but two adjacent
-                // corners or one, where there is nothing to extrapolate from and the mean is
-                // the best available answer.
-                const pc = (p0 + p1 + p2 + p3) * 0.25;
-                const cIn = pc < 0;
-                const k0 = (p0 < 0) === cIn, k1 = (p1 < 0) === cIn;
-                const k2 = (p2 < 0) === cIn, k3 = (p3 < 0) === cIn;
-                let hc;
-                if (k0 && k2) hc = (ovH[0] + ovH[2]) * 0.5;
-                else if (k1 && k3) hc = (ovH[1] + ovH[3]) * 0.5;
-                else {
-                    let hSum = 0, hCount = 0;
-                    if (k0) { hSum += ovH[0]; hCount++; }
-                    if (k1) { hSum += ovH[1]; hCount++; }
-                    if (k2) { hSum += ovH[2]; hCount++; }
-                    if (k3) { hSum += ovH[3]; hCount++; }
-                    hc = hCount > 0 ? hSum / hCount : (ovH[0] + ovH[1] + ovH[2] + ovH[3]) * 0.25;
-                }
-                ovX[4] = (px0 + px1) * 0.5;
-                ovY[4] = (py0 + py1) * 0.5;
-                ovP[4] = pc;
-                ovH[4] = hc;
-
-                // Fan into four sub-triangles and contour each one. A triangle is never
-                // ambiguous -- it has 0 or exactly 1 chord -- so saddles, pinch points and
-                // islands all come out right with no special cases.
-                for (let k = 0; k < 4; k++) {
-                    const a = k, b = (k + 1) & 3, c = 4;
-                    const ia = ovP[a] < 0, ib = ovP[b] < 0, ic = ovP[c] < 0;
-
-                    if (ia === ib && ib === ic) {
-                        if (ia && skipFloor) continue;
-                        const hex = ia ? colIn : colOut;
-                        ovVert(ovX[a], ovY[a], ovH[a], hex);
-                        ovVert(ovX[b], ovY[b], ovH[b], hex);
-                        ovVert(ovX[c], ovY[c], ovH[c], hex);
-                        continue;
-                    }
-
-                    // One vertex is alone on its side, and the chord crosses the two edges
-                    // that touch it. Rotate so the lone vertex leads and the CCW winding of
-                    // (a, b, c) is preserved.
-                    let L, M, N;
-                    if (ia !== ib && ia !== ic) { L = a; M = b; N = c; }
-                    else if (ib !== ia && ib !== ic) { L = b; M = c; N = a; }
-                    else { L = c; M = a; N = b; }
-
-                    overlayCrossing(L, M, wallLo, wallSpan, ovC0);
-                    overlayCrossing(N, L, wallLo, wallSpan, ovC1);
-
-                    const lIn = ovP[L] < 0;
-                    // out[2] is the height on the material side, out[3] on the cut side.
-                    const lz0 = lIn ? ovC0[3] : ovC0[2];
-                    const lz1 = lIn ? ovC1[3] : ovC1[2];
-                    const mz0 = lIn ? ovC0[2] : ovC0[3];
-                    const mz1 = lIn ? ovC1[2] : ovC1[3];
-
-                    // The corner at L.
-                    if (!(lIn && skipFloor)) {
-                        const hex = lIn ? colIn : colOut;
-                        ovVert(ovX[L], ovY[L], ovH[L], hex);
-                        ovVert(ovC0[0], ovC0[1], lz0, hex);
-                        ovVert(ovC1[0], ovC1[1], lz1, hex);
-                    }
-
-                    // The quad left over, fanned from the first crossing. Convex: it is a
-                    // triangle with one corner clipped off.
-                    if (!(!lIn && skipFloor)) {
-                        const hex = lIn ? colOut : colIn;
-                        ovVert(ovC0[0], ovC0[1], mz0, hex);
-                        ovVert(ovX[M], ovY[M], ovH[M], hex);
-                        ovVert(ovX[N], ovY[N], ovH[N], hex);
-                        ovVert(ovC0[0], ovC0[1], mz0, hex);
-                        ovVert(ovX[N], ovY[N], ovH[N], hex);
-                        ovVert(ovC1[0], ovC1[1], mz1, hex);
-                    }
-
-                    // The wall. Walking C0 -> C1 keeps L's half on the left, so the face is
-                    // wound to look at whichever half is the cut one -- the winding is
-                    // load-bearing, because a flat-shaded back face is lit as if it were a
-                    // front face and DoubleSide does not flip the derived normal in r128.
-                    const t0 = ovC0[2], b0 = ovC0[3], t1 = ovC1[2], b1 = ovC1[3];
-                    if (t0 - b0 > flatTol || t1 - b1 > flatTol) {
-                        if (lIn) {
-                            ovVert(ovC0[0], ovC0[1], t0, colIn);
-                            ovVert(ovC1[0], ovC1[1], b1, colIn);
-                            ovVert(ovC0[0], ovC0[1], b0, colIn);
-                            ovVert(ovC0[0], ovC0[1], t0, colIn);
-                            ovVert(ovC1[0], ovC1[1], t1, colIn);
-                            ovVert(ovC1[0], ovC1[1], b1, colIn);
-                        } else {
-                            ovVert(ovC0[0], ovC0[1], t0, colIn);
-                            ovVert(ovC0[0], ovC0[1], b0, colIn);
-                            ovVert(ovC1[0], ovC1[1], b1, colIn);
-                            ovVert(ovC0[0], ovC0[1], t0, colIn);
-                            ovVert(ovC1[0], ovC1[1], b1, colIn);
-                            ovVert(ovC1[0], ovC1[1], t1, colIn);
-                        }
-                    }
-                }
-            }
-
-            stock.contourLen = outLen;
-            stockSuppressDirty = false;
-
-            const posAttr = ov.geometry.getAttribute('position');
-            const colAttr = ov.geometry.getAttribute('color');
-            // r128 resets updateRange.count to -1 after every upload, so this has to be
-            // set again each time rather than once at construction.
-            posAttr.updateRange.offset = 0;
-            posAttr.updateRange.count = ovN * 3;
-            posAttr.needsUpdate = true;
-            colAttr.updateRange.offset = 0;
-            colAttr.updateRange.count = ovN * 3;
-            colAttr.needsUpdate = true;
-            ov.geometry.setDrawRange(0, ovN);
-
-            return suppressChanged;
-        }
-
-        // Throws the carve away and asks for it again from t = 0. On the GPU that is not a
-        // reset at all -- the three passes are a full replay every time the target moves --
-        // so this only has to say "the answer has changed", which is why a backward scrub
-        // now costs exactly what a forward one does.
-        function resetStockHeights() {
+        // Says "everything about the cut has changed" -- a new tool, a new grid. There is no
+        // state to clear: the three passes are a full replay from the start of the program
+        // every time, so throwing the answer away is just asking for it again. This used to
+        // be resetStockHeights(), and the several megabytes of array fills it did are the
+        // reason a backward scrub cost more than a forward one.
+        function invalidateStockCarve() {
             if (!stock) return;
             stockCarveDirty = true;
             stockCellDirty = true;
             stockStatsDirty = true;
-
-            // The rest is the debug reference's bookkeeping, and its arrays only exist while
-            // Alt+D has it switched on.
-            if (!stock.heights) return;
-            stock.heights.fill(stock.top);
-            // cutIds is a shadow of heights, not an accumulator.
-            stock.cutIds.fill(0);
-            // The walls go with the material. `phi` back to "no boundary anywhere near",
-            // and its owner back to the top of the block so the first pass to reach a
-            // sample always takes it.
-            stock.phi.fill(stock.phiBand);
-            stock.phiOwner.fill(stock.top);
-            for (let i = 0; i < stock.contourLen; i++) stock.contour[stock.contourList[i]] = 0;
-            stock.contourLen = 0;
-            stock.dirtyX1 = -1;
-            if (stock.overlay) stock.overlay.geometry.setDrawRange(0, 0);
-            stockPhiDirty = false;
-            stockAnyThroughCut = false;
-        }
-
-        // The reference carve, and the only thing left of the CPU height map. Kept as the
-        // thing the GPU passes are diffed against by the Alt+V harness -- it is not on any
-        // path the viewer takes on its own, and the arrays it writes are only allocated
-        // while Alt+D has it switched on.
-        //
-        // Removes material under the swept tool travelling from (x0,y0) to (x1,y1) with
-        // its tip at height z. Each sample is cut to the height of the tool's surface at
-        // that sample's distance from the tool axis. That distance is the sample's closest
-        // approach to the swept axis: the tool is rotationally symmetric and its profile
-        // rises monotonically outward, so the closest approach is where the tool reaches
-        // lowest over the sweep. Exact for a constant-Z move, which is all it is ever
-        // handed: the instance buffer has already sliced every Z-varying move.
-        function carveCapsule(tool, cutId, x0, y0, x1, y1, z) {
-            const r = tool.radius;
-
-            // toolHeightAt(0) is 0 for every profile, so the tip is the tool's lowest
-            // point: nothing at all is removed once it sits above the stock.
-            if (z >= stock.top) return false;
-
-            const minX = stock.minX;
-            const minY = stock.minY;
-            const cellX = stock.cellX;
-            const cellY = stock.cellY;
-
-            // The scan runs a band wider than the tool so the distance field gets written
-            // on both sides of the boundary. A wall can only be placed between two samples
-            // that both know how far away it is; a sample that was never visited still
-            // holds the truncated value and would put the crossing at the wrong fraction.
-            const phiBand = stock.phiBand;
-            const rOut = r + phiBand;
-            const rOut2 = rOut * rOut;
-
-            const gx0 = Math.max(0, Math.floor((Math.min(x0, x1) - rOut - minX) / cellX));
-            const gx1 = Math.min(stock.nx, Math.ceil((Math.max(x0, x1) + rOut - minX) / cellX));
-            const gy0 = Math.max(0, Math.floor((Math.min(y0, y1) - rOut - minY) / cellY));
-            const gy1 = Math.min(stock.ny, Math.ceil((Math.max(y0, y1) + rOut - minY) / cellY));
-            if (gx1 < gx0 || gy1 < gy0) return false;
-
-            const dx = x1 - x0;
-            const dy = y1 - y0;
-            const lenSq = dx * dx + dy * dy;
-            const r2 = tool.r2;
-            const flatSq = tool.flatSq;
-            const stockBottom = stock.bottom;
-            // The highest point of the tool's cutting surface, and so the depth of the wall
-            // this pass leaves standing. Constant for the call, and the depth on which
-            // ownership of the distance field is decided.
-            const rimBase = Math.max(z + toolHeightAt(tool, r), stockBottom);
-            // Two cut floors closer together than this are one level: a step the grid could
-            // not draw as a step anyway. Same measure the overlay uses to decide whether a
-            // boundary is worth taking a cell over for, so the two never disagree.
-            const levelTol = WALL_LO * Math.max(cellX, cellY);
-            const nxv = stock.nx + 1;
-            const heights = stock.heights;
-            const cutIds = stock.cutIds;
-            const phi = stock.phi;
-            const phiOwner = stock.phiOwner;
-            let changed = false;
-            let touched = false;
-
-            for (let gy = gy0; gy <= gy1; gy++) {
-                const py = minY + gy * cellY;
-                const rowBase = gy * nxv;
-                for (let gx = gx0; gx <= gx1; gx++) {
-                    const px = minX + gx * cellX;
-
-                    let t = lenSq > 0 ? ((px - x0) * dx + (py - y0) * dy) / lenSq : 0;
-                    if (t < 0) t = 0; else if (t > 1) t = 1;
-
-                    const ex = px - (x0 + t * dx);
-                    const ey = py - (y0 + t * dy);
-                    const distSq = ex * ex + ey * ey;
-                    if (distSq > rOut2) continue;
-
-                    const hi = rowBase + gx;
-
-                    // --- Distance field ---------------------------------------------
-                    // Where this sample sits relative to the pass's boundary, signed and
-                    // truncated to the band. This is the sub-cell fact point sampling
-                    // throws away, and the whole reason a wall can be drawn anywhere but
-                    // on a cell boundary.
-                    //
-                    // A sample can lie beside more than one boundary, and the one that
-                    // matters is the deepest -- that is the wall left standing. So a pass
-                    // that reaches meaningfully below the current owner replaces the
-                    // record, and a meaningfully shallower one leaves it alone. Without
-                    // that a facing pass run after a pocket would flood the field and erase
-                    // the pocket wall, and the answer would depend on program order.
-                    //
-                    // "Meaningfully" is `levelTol`, not an exact comparison, and the size of
-                    // it is what keeps sloped surfaces clean. Two passes whose floors differ
-                    // by less than the grid can resolve are one cut region, not two levels,
-                    // so they union -- and `min` is the exact union of two distance fields,
-                    // which is why a chorded arc, a sliced plunge, a ramp and a helix
-                    // sweeping the same wall every revolution all give the same answer as a
-                    // single pass. Comparing exactly instead made every neighbouring pair of
-                    // 3D finishing passes a separate level, so the deeper one took the
-                    // record and its rim showed up as a boundary in the middle of a surface
-                    // that is in fact continuously machined. On a flat floor the passes all
-                    // share a depth and union, which is why only slopes went grainy.
-                    const owner = phiOwner[hi];
-                    if (rimBase < owner + levelTol) {
-                        let sd = Math.sqrt(distSq) - r;
-                        if (sd > phiBand) sd = phiBand;
-                        else if (sd < -phiBand) sd = -phiBand;
-                        if (rimBase < owner - levelTol || sd < phi[hi]) {
-                            phi[hi] = sd;
-                            touched = true;
-                        }
-                        // Track the deepest rim seen, even when unioning, so a run of small
-                        // steps -- a ramp, a helix -- ratchets down as one region instead of
-                        // eventually tripping the replace test against a stale first slice.
-                        if (rimBase < owner) phiOwner[hi] = rimBase;
-                    }
-
-                    if (distSq > r2) continue;
-
-                    // Under the tool. Its profile rises monotonically outward, so the
-                    // sample's closest approach to the swept axis is where the tool reaches
-                    // lowest over it. A flat end mill has flatSq === r2, so it never
-                    // reaches the sqrt.
-                    let target = distSq <= flatSq ? z : z + toolHeightAt(tool, Math.sqrt(distSq));
-                    if (target < stockBottom) {
-                        target = stockBottom;
-                        // Reaching the underside is what the alpha pass looks for; noting
-                        // it here saves that pass from running at all until it can matter.
-                        stockAnyThroughCut = true;
-                    }
-                    if (heights[hi] > target) {
-                        heights[hi] = target;
-                        // cutIds stays a strict shadow of heights. Leaving a stale id on a
-                        // lowered sample would hand its cell to the wrong operation in the
-                        // colour pass.
-                        cutIds[hi] = cutId;
-                        changed = true;
-                    }
-                }
-            }
-
-            // Heights as well as the field: whether a boundary is a step depends on both, so
-            // lowering the standing side of one can take a cell out of the overlay without
-            // the field moving at all.
-            if (touched || changed) {
-                // The cells this call could have changed the boundary of: a sample belongs
-                // to the cell on either side of it along each axis.
-                const cx0 = gx0 > 0 ? gx0 - 1 : 0;
-                const cy0 = gy0 > 0 ? gy0 - 1 : 0;
-                const cx1 = Math.min(gx1, stock.nx - 1);
-                const cy1 = Math.min(gy1, stock.ny - 1);
-                if (cx1 >= cx0 && cy1 >= cy0) {
-                    if (stock.dirtyX1 < stock.dirtyX0) {
-                        stock.dirtyX0 = cx0; stock.dirtyX1 = cx1;
-                        stock.dirtyY0 = cy0; stock.dirtyY1 = cy1;
-                    } else {
-                        if (cx0 < stock.dirtyX0) stock.dirtyX0 = cx0;
-                        if (cx1 > stock.dirtyX1) stock.dirtyX1 = cx1;
-                        if (cy0 < stock.dirtyY0) stock.dirtyY0 = cy0;
-                        if (cy1 > stock.dirtyY1) stock.dirtyY1 = cy1;
-                    }
-                }
-                stockPhiDirty = true;
-            }
-            return changed;
         }
 
         function requestCarve(dist) {
@@ -5232,7 +4397,6 @@ void main() {
             if (dist === stockCarveTarget && !stockCarveDirty) return;
             stockCarveTarget = dist;
             stockCarveDirty = true;
-            if (debugCpuRef) cpuReferenceCarve(dist);
         }
 
         // --- G-Code Parser ---
