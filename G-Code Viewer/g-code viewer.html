@@ -2451,16 +2451,21 @@
             // the top edge where the wall meets the surface above it.
             const uvs = new Float32Array(total * 2);
 
-            // The texture is two blocks of cells stacked: rows [0, ny) are the surface, and
-            // rows [ny, 2ny) shadow them for the flat bottom. The bottom is one quad
-            // spanning the whole footprint, so it cannot take a single texel -- a hole cut
-            // through the block has to open in the underside too, and that means the quad
-            // needs per-fragment alpha across the same grid. Its own block, rather than
-            // sampling the surface's, keeps the underside from being painted in the colours
-            // of cuts that only ever touched the top.
-            const texRows = stock.ny * 2;
+            // The texture is three blocks of cells stacked: rows [0, ny) are the surface,
+            // rows [ny, 2ny) shadow them for the flat bottom, and row 2ny is a single spare
+            // row the four side walls share. The bottom is one quad spanning the whole
+            // footprint, so it cannot take a single texel -- a hole cut through the block
+            // has to open in the underside too, and that means the quad needs per-fragment
+            // alpha across the same grid. Its own block, rather than sampling the surface's,
+            // keeps the underside from being painted in the colours of cuts that only ever
+            // touched the top.
+            const texRows = stock.ny * 2 + 1;
             const BOTTOM_V0 = stock.ny / texRows;
-            const BOTTOM_V1 = 1;
+            const BOTTOM_V1 = stock.ny * 2 / texRows;
+            // Centre of the first texel of the spare row. Nothing ever writes to that row,
+            // so it stays uncut stock for the life of the mesh.
+            const SKIRT_U = 0.5 / stock.nx;
+            const SKIRT_V = (stock.ny * 2 + 0.5) / texRows;
 
             // Height-map vertices: cell-corner aligned.
             function setSurfaceUV(vertexIndex, gx, gy) {
@@ -2468,14 +2473,18 @@
                 uvs[vertexIndex * 2 + 1] = gy / texRows;
             }
 
-            // Skirt vertices have no cell of their own, so they take the centre of the cell
-            // their sample borders -- clamped, since the last sample row and column lie on
-            // the far edge of the last cell.
-            function setSampleUV(vertexIndex, hi) {
-                const gx = hi % nxv;
-                const gy = (hi - gx) / nxv;
-                uvs[vertexIndex * 2] = (Math.min(gx, stock.nx - 1) + 0.5) / stock.nx;
-                uvs[vertexIndex * 2 + 1] = (Math.min(gy, stock.ny - 1) + 0.5) / texRows;
+            // The four side walls are the original outside of the block. No tool can ever
+            // face them: a height map holds one height per sample, so a cut that reaches the
+            // boundary only drops that sample -- the material below it, which is what the
+            // wall actually shows, is never touched. Borrowing the boundary sample's texel
+            // painted the whole outside face in the colour of that cut, from the cut depth
+            // down to the underside, whenever a pass ran along or past the edge. So every
+            // wall vertex reads the spare row instead and stays uncut stock. The wall the
+            // cut really made is the steep surface quad just inboard of it, and that one is
+            // coloured by the pass below like any other.
+            function setSkirtUV(vertexIndex) {
+                uvs[vertexIndex * 2] = SKIRT_U;
+                uvs[vertexIndex * 2 + 1] = SKIRT_V;
             }
 
             // Preallocated rather than a growing JS array: the count is known exactly --
@@ -2526,7 +2535,7 @@
                     positions[v * 3] = px;
                     positions[v * 3 + 1] = py;
                     positions[v * 3 + 2] = stock.top;
-                    setSampleUV(v, hi);
+                    setSkirtUV(v);
                     skirt[skirtLen++] = v;
                     skirt[skirtLen++] = hi;
                     v++;
@@ -2534,9 +2543,7 @@
                     positions[v * 3] = px;
                     positions[v * 3 + 1] = py;
                     positions[v * 3 + 2] = stock.bottom;
-                    // Same texel as the vertex above it, so a wall is a solid stripe of
-                    // its sample's colour rather than a vertical fade.
-                    setSampleUV(v, hi);
+                    setSkirtUV(v);
                     v++;
                 }
                 for (let k = 0; k < heightIndices.length - 1; k++) {
@@ -2592,10 +2599,11 @@
 
             geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-            // Two texels per cell: one for the surface, one for the bottom's shadow of it.
-            // RGBA rather than RGB so each row is 4-byte aligned, which is what WebGL's
-            // default unpack alignment expects. Everything starts as opaque uncut stock --
-            // the bottom block keeps that colour for good and only its alpha ever moves.
+            // Two texels per cell -- one for the surface, one for the bottom's shadow of it
+            // -- plus the spare row the side walls read. RGBA rather than RGB so each row is
+            // 4-byte aligned, which is what WebGL's default unpack alignment expects.
+            // Everything starts as opaque uncut stock -- the bottom block keeps that colour
+            // for good and only its alpha ever moves, and the spare row never moves at all.
             const texelCount = stock.nx * texRows;
             const colorData = new Uint8Array(texelCount * 4);
             const baseR = (STOCK_BASE_COLOR >> 16) & 0xff;

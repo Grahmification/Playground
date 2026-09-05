@@ -1,0 +1,1240 @@
+<title>Carving the Block</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Palette is lifted from the simulator itself: the tan is STOCK_BASE_COLOR,
+   the blue is PALETTE[0], the orange is TOOL_COLOR_DEFAULT, the red is
+   RAPID_GOUGE_COLOR. Text-weight variants are darkened for the light ground.
+   Neutrals carry a cool bias so they sit next to the viewer's own dark UI.
+--------------------------------------------------------------------------- */
+:root {
+  --ground:      #ebeef1;
+  --surface:     #f7f8fa;
+  --surface-2:   #dfe4e9;
+  --ink:         #14191e;
+  --ink-2:       #4d5862;
+  --ink-3:       #737f8a;
+  --rule:        #ccd3da;
+  --rule-strong: #a8b3bd;
+
+  --cut:         #1f6fb8;   /* operation blue, text weight */
+  --cut-fill:    #4e9de6;   /* operation blue, as the app draws it */
+  --cut-wash:    #dceaf8;
+  --stock:       #8a7e66;   /* uncut stock, text weight */
+  --stock-fill:  #cbc0a8;
+  --tool:        #9c5a00;   /* cutter orange, text weight */
+  --tool-fill:   #ffa500;
+  --alarm:       #bf2a1e;
+
+  --serif: "Source Serif 4", Charter, Georgia, "Times New Roman", serif;
+  --sans:  "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono:  "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #12161a;
+    --surface:     #1a1f25;
+    --surface-2:   #232b33;
+    --ink:         #e0e6ec;
+    --ink-2:       #9daab5;
+    --ink-3:       #7a8792;
+    --rule:        #2c353e;
+    --rule-strong: #45525d;
+
+    --cut:         #74b6ee;
+    --cut-fill:    #4e9de6;
+    --cut-wash:    #16293a;
+    --stock:       #c9bda2;
+    --stock-fill:  #7d735e;
+    --tool:        #ffb133;
+    --tool-fill:   #ffa500;
+    --alarm:       #ff7263;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #12161a;
+  --surface:     #1a1f25;
+  --surface-2:   #232b33;
+  --ink:         #e0e6ec;
+  --ink-2:       #9daab5;
+  --ink-3:       #7a8792;
+  --rule:        #2c353e;
+  --rule-strong: #45525d;
+
+  --cut:         #74b6ee;
+  --cut-fill:    #4e9de6;
+  --cut-wash:    #16293a;
+  --stock:       #c9bda2;
+  --stock-fill:  #7d735e;
+  --tool:        #ffb133;
+  --tool-fill:   #ffa500;
+  --alarm:       #ff7263;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Reading column, with a full-bleed track for figures and tables.
+   The same track set is declared on the sections too, so a `.wide` child of a
+   section can break out -- a grid only places its own direct children. */
+.doc,
+.doc > section {
+  display: grid;
+  grid-template-columns:
+    [full-start] 1fr
+    [main-start] min(68ch, calc(100% - 2.5rem)) [main-end]
+    1fr [full-end];
+  row-gap: 0;
+}
+.doc { padding-bottom: 6rem; }
+
+.doc > *,
+.doc > section > * { grid-column: main; }
+.doc > section { grid-column: full; }
+
+.doc > .wide,
+.doc > section > .wide {
+  grid-column: full;
+  width: min(1060px, calc(100% - 2.5rem));
+  margin-inline: auto;
+}
+
+/* --- Masthead ------------------------------------------------------------ */
+.masthead {
+  padding: clamp(2.5rem, 7vw, 4.5rem) 0 2rem;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 2.5rem;
+}
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--cut);
+  margin: 0 0 1rem;
+}
+.masthead h1 {
+  font-family: var(--sans);
+  font-weight: 700;
+  font-size: clamp(2.3rem, 6.5vw, 3.5rem);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin: 0 0 1rem;
+}
+.standfirst {
+  font-size: 1.16rem;
+  line-height: 1.55;
+  color: var(--ink-2);
+  margin: 0 0 1.75rem;
+  max-width: 54ch;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--ink-3);
+}
+.meta b {
+  display: block;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  color: var(--ink-3);
+  opacity: 0.75;
+}
+.meta span { color: var(--ink-2); }
+
+/* --- Contents ------------------------------------------------------------ */
+.toc {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  padding: 1.25rem 1.5rem 1.4rem;
+  margin-bottom: 3rem;
+}
+.toc h2 {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 0.9rem;
+}
+.toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+  counter-reset: toc;
+}
+.toc li { counter-increment: toc; }
+.toc a {
+  display: flex;
+  gap: 0.85rem;
+  align-items: baseline;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.95rem;
+  border-bottom: 1px solid transparent;
+}
+.toc a::before {
+  content: counter(toc, decimal-leading-zero);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--cut);
+  flex: none;
+}
+.toc a:hover { border-bottom-color: var(--rule-strong); }
+
+/* --- Sections ------------------------------------------------------------ */
+/* Grid items do not collapse margins, so the section heads carry a smaller
+   top margin than they would in normal flow. */
+h2.sec {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: clamp(1.5rem, 3.6vw, 1.95rem);
+  line-height: 1.14;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin: 2.6rem 0 0.35rem;
+  scroll-margin-top: 1.5rem;
+}
+.sec-num {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--cut);
+  margin-bottom: 0.55rem;
+}
+h3 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 1.06rem;
+  letter-spacing: -0.005em;
+  margin: 2.25rem 0 0.5rem;
+}
+p { margin: 0 0 1.1rem; }
+p + h3 { margin-top: 2rem; }
+
+ul, ol.body-list {
+  margin: 0 0 1.2rem;
+  padding-left: 1.35rem;
+}
+li { margin-bottom: 0.45rem; }
+
+strong { font-weight: 600; }
+em { font-style: italic; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--surface-2);
+  padding: 0.08em 0.34em;
+  border-radius: 2px;
+  word-break: break-word;
+}
+
+/* --- Equations ----------------------------------------------------------- */
+.eq {
+  font-family: var(--mono);
+  font-size: 0.92rem;
+  line-height: 1.9;
+  background: var(--surface);
+  border-left: 2px solid var(--cut-fill);
+  padding: 0.9rem 1.2rem;
+  margin: 0 0 1.3rem;
+  overflow-x: auto;
+  color: var(--ink);
+}
+.eq .cmt { color: var(--ink-3); }
+.eq div { white-space: pre; }
+
+/* --- Code ---------------------------------------------------------------- */
+pre {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  padding: 1rem 1.2rem;
+  margin: 0 0 1.4rem;
+  overflow-x: auto;
+  tab-size: 4;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .cm { color: var(--ink-3); font-style: italic; }
+.src {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: -1.1rem 0 1.4rem;
+}
+
+/* --- Figures ------------------------------------------------------------- */
+figure {
+  margin: 2rem 0 2.2rem;
+  padding: 1.4rem 1.5rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+}
+figure svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  color: var(--ink-2);
+}
+figcaption {
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--rule);
+}
+figcaption b {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cut);
+  margin-right: 0.6rem;
+}
+.svg-scroll { overflow-x: auto; }
+
+/* SVG semantic marks */
+.s-stock  { fill: var(--stock-fill); }
+.s-cut    { stroke: var(--cut-fill); }
+.s-cutf   { fill: var(--cut-fill); }
+.s-tool   { stroke: var(--tool-fill); }
+.s-toolf  { fill: var(--tool-fill); }
+.s-lbl    { font-family: "JetBrains Mono", monospace; font-size: 12px; fill: currentColor; }
+.s-lbl-sm { font-family: "JetBrains Mono", monospace; font-size: 10.5px; fill: currentColor; opacity: 0.8; }
+.s-lbl-b  { font-family: "Archivo", sans-serif; font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+.s-cut-lbl { fill: var(--cut); }
+.s-tool-lbl { fill: var(--tool); }
+
+/* --- Tables -------------------------------------------------------------- */
+.table-wrap { overflow-x: auto; margin: 0 0 1.5rem; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+th, td {
+  text-align: left;
+  padding: 0.55rem 0.9rem 0.55rem 0;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+th {
+  font-weight: 500;
+  font-size: 0.66rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-bottom-color: var(--rule-strong);
+}
+td.num { text-align: right; padding-right: 1.6rem; }
+th.num { text-align: right; padding-right: 1.6rem; }
+tbody tr:last-child td { border-bottom: none; }
+
+/* --- Callouts ------------------------------------------------------------ */
+.note {
+  border-left: 2px solid var(--rule-strong);
+  padding: 0.15rem 0 0.15rem 1.15rem;
+  margin: 0 0 1.4rem;
+  color: var(--ink-2);
+  font-size: 0.95rem;
+}
+.note.fix { border-left-color: var(--alarm); }
+.note.fix .tag { color: var(--alarm); }
+.note .tag {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+/* --- Key ----------------------------------------------------------------- */
+.key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.5rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-2);
+  margin: 0 0 0.2rem;
+}
+.key span { display: flex; align-items: center; gap: 0.45rem; }
+.key i {
+  width: 14px; height: 10px;
+  display: inline-block;
+  border-radius: 1px;
+}
+
+/* --- Footer -------------------------------------------------------------- */
+footer {
+  margin-top: 4rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--ink-3);
+  line-height: 1.7;
+}
+
+a { color: var(--cut); }
+a:focus-visible, .toc a:focus-visible {
+  outline: 2px solid var(--cut-fill);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  figure { padding: 1rem 1rem 0.85rem; }
+}
+</style>
+
+<article class="doc">
+
+  <header class="masthead">
+    <p class="eyebrow">G-Code Viewer &middot; Engineering note</p>
+    <h1>Carving the Block</h1>
+    <p class="standfirst">How the stock simulation removes material: a Z-height map, a swept-capsule
+      distance test, and one fixed-topology mesh whose vertices move but whose triangles never do.</p>
+    <div class="meta">
+      <div><b>Source</b><span>g-code viewer.html</span></div>
+      <div><b>Model</b><span>2.5D height map</span></div>
+      <div><b>Renderer</b><span>three.js r128</span></div>
+      <div><b>Grid</b><span>221&sup2; &ndash; 1201&sup2; samples</span></div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#model">The model, and what it cannot hold</a></li>
+      <li><a href="#block">Sizing the block</a></li>
+      <li><a href="#tool">The cutter as one function</a></li>
+      <li><a href="#capsule">The capsule sweep</a></li>
+      <li><a href="#slicing">Following a changing Z</a></li>
+      <li><a href="#mesh">One mesh, moving vertices</a></li>
+      <li><a href="#colour">Colour, and the hole problem</a></li>
+      <li><a href="#loop">The frame loop</a></li>
+      <li><a href="#limits">Where the model runs out</a></li>
+    </ol>
+  </nav>
+
+  <!-- ==================================================================== -->
+  <section id="model">
+    <h2 class="sec"><span class="sec-num">01</span>The model, and what it cannot hold</h2>
+
+    <p>The stock is not a solid. It is a rectangular grid of <strong>height samples</strong> — one
+      number per grid vertex, saying how far down the material has been cut at that exact
+      <code>(x, y)</code>. Two typed arrays hold everything:</p>
+
+<pre><code>heights: new Float32Array((nx + 1) * (ny + 1)),
+<span class="cm">// Strict shadow of `heights`: operation index + 1, 0 for uncut.</span>
+cutIds:  new Uint16Array((nx + 1) * (ny + 1)),</code></pre>
+    <span class="src">rebuildStock()</span>
+
+    <p>A sample's index is <code>hi = gy * (nx + 1) + gx</code>, and its world position is
+      <code>(minX + gx·cellX, minY + gy·cellY)</code>. Everything else in the simulation — the mesh,
+      the colours, the material-removed readout — is derived from those two arrays.</p>
+
+    <p>Cutting only ever <em>lowers</em> a height. That single property is what makes the whole thing
+      cheap: playing the program forward is incremental, because a new move can only push samples
+      further down. It is also why scrubbing <em>backwards</em> cannot be undone move by move — the
+      height map has forgotten what used to be there, so the only way back is to refill the block and
+      re-cut from the start.</p>
+
+    <p>The cost is expressive: one height per column means <strong>no undercuts, no overhangs, and no
+      side-facing walls</strong>. A vertical wall in the model is not a wall at all — it is a steep
+      quad spanning one cell, between a sample that got cut and its neighbour that did not.</p>
+
+    <figure class="wide">
+      <div class="key">
+        <span><i style="background: var(--stock-fill)"></i>remaining material</span>
+        <span><i style="background: var(--cut-fill)"></i>the quad that reads as a wall</span>
+      </div>
+      <div class="svg-scroll">
+      <svg viewBox="0 0 720 320" role="img" aria-label="Section through the height map: seven samples, six cells, and a pocket whose walls are single steep quads spanning one cell each.">
+        <defs>
+          <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- material -->
+        <polygon class="s-stock" points="40,60 130,60 220,60 310,168 400,168 490,168 580,60 580,240 40,240"/>
+
+        <!-- stock top / bottom guides -->
+        <line x1="40" y1="60" x2="584" y2="60" stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.55"/>
+        <line x1="40" y1="240" x2="584" y2="240" stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.55"/>
+        <text class="s-lbl-sm" x="590" y="63">stock.top</text>
+        <text class="s-lbl-sm" x="590" y="243">stock.bottom</text>
+
+        <!-- surface polyline -->
+        <polyline points="40,60 130,60 220,60 310,168 400,168 490,168 580,60"
+                  fill="none" stroke="currentColor" stroke-width="2"/>
+        <!-- the two wall quads -->
+        <line class="s-cut" x1="220" y1="60" x2="310" y2="168" stroke-width="3.5"/>
+        <line class="s-cut" x1="490" y1="168" x2="580" y2="60" stroke-width="3.5"/>
+
+        <!-- outer faces -->
+        <line x1="40" y1="60" x2="40" y2="240" stroke="currentColor" stroke-width="2"/>
+        <line x1="580" y1="60" x2="580" y2="240" stroke="currentColor" stroke-width="2"/>
+
+        <!-- samples -->
+        <g fill="currentColor">
+          <circle cx="40" cy="60" r="4"/><circle cx="130" cy="60" r="4"/><circle cx="220" cy="60" r="4"/>
+          <circle cx="310" cy="168" r="4"/><circle cx="400" cy="168" r="4"/><circle cx="490" cy="168" r="4"/>
+          <circle cx="580" cy="60" r="4"/>
+        </g>
+
+        <!-- sample ticks + labels -->
+        <g stroke="currentColor" stroke-width="1" opacity="0.28">
+          <line x1="40" y1="60" x2="40" y2="258"/><line x1="130" y1="60" x2="130" y2="258"/>
+          <line x1="220" y1="60" x2="220" y2="258"/><line x1="310" y1="168" x2="310" y2="258"/>
+          <line x1="400" y1="168" x2="400" y2="258"/><line x1="490" y1="168" x2="490" y2="258"/>
+          <line x1="580" y1="60" x2="580" y2="258"/>
+        </g>
+        <g class="s-lbl-sm" text-anchor="middle">
+          <text x="40" y="274">s0</text><text x="130" y="274">s1</text><text x="220" y="274">s2</text>
+          <text x="310" y="274">s3</text><text x="400" y="274">s4</text><text x="490" y="274">s5</text>
+          <text x="580" y="274">s6</text>
+        </g>
+
+        <!-- cell bracket -->
+        <path d="M222,284 L222,291 L308,291 L308,284" fill="none" stroke="var(--cut-fill)" stroke-width="1.5"/>
+        <text class="s-lbl-sm s-cut-lbl" x="265" y="308" text-anchor="middle">cell 2 &rarr; one texel</text>
+
+        <!-- annotation, placed in the pocket void -->
+        <text class="s-lbl-b" x="445" y="110" text-anchor="middle">a &ldquo;wall&rdquo; is one steep quad</text>
+        <text class="s-lbl-sm" x="445" y="126" text-anchor="middle">between a high sample and a low one</text>
+        <line x1="360" y1="138" x2="310" y2="154" stroke="currentColor" stroke-width="1" marker-end="url(#ar1)" opacity="0.7"/>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 1</b>A section through the grid. Samples sit on cell corners; the surface
+        between them is linear. A pocket wall is a single cell wide, so the model's smallest
+        representable feature is one cell — which is what sets both the XY resolution and, later, the
+        Z slicing tolerance.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="block">
+    <h2 class="sec"><span class="sec-num">02</span>Sizing the block</h2>
+
+    <p>Three things fix the block: its Z extent, its XY footprint, and how finely that footprint is
+      sampled.</p>
+
+    <h3>Top and bottom</h3>
+    <p>The suggested top is the <em>shallowest depth a cutting move actually reaches</em>: for each
+      non-rapid segment, take the lower of its two Z values, then take the maximum across segments.
+      Purely vertical feed moves are excluded, because a lead-in plunge descends through free air and
+      lands wherever its operation happens to start — on a multi-tool file the deepest-starting tool
+      would otherwise set the top and invent a layer of material that was never there.</p>
+
+    <h3>Footprint</h3>
+    <p>The XY comes from <code>cutFootprint</code> — the extent of cutting moves only, not rapids —
+      expanded by the margin on each side. The margin may be negative, meaning the block starts inside
+      the toolpath and the outer passes machine its sides away. The only thing not honoured literally
+      is a margin deep enough to invert the footprint:</p>
+
+    <div class="eq">
+      <div>shortest = min(sizeX, sizeY)</div>
+      <div>floor    = −0.5·shortest + max(0.01·shortest, 1e−3)</div>
+      <div>margin   = max(typed, floor)              <span class="cmt">// leaves a sliver</span></div>
+    </div>
+
+    <h3>Grid</h3>
+    <p>The resolution setting is a count of cells along the <em>longest</em> side. Both axes then take
+      the same target cell size, so cells come out square-ish rather than stretched:</p>
+
+    <div class="eq">
+      <div>target = max(sizeX, sizeY) / cells</div>
+      <div>nx     = clamp(round(sizeX / target), 1, 1600)</div>
+      <div>ny     = clamp(round(sizeY / target), 1, 1600)</div>
+      <div>cellX  = sizeX / nx        cellY = sizeY / ny</div>
+    </div>
+
+    <p>The 1600 cap is a backstop against a malformed value in the select, not a working limit —
+      <code>target</code> is set from the longest side, so neither axis can exceed <code>cells</code>
+      on its own.</p>
+
+    <div class="table-wrap wide">
+      <table>
+        <thead>
+          <tr>
+            <th>Setting</th><th class="num">Cells (long axis)</th><th class="num">Samples (square job)</th>
+            <th class="num">heights + cutIds</th><th class="num">All buffers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Low</td><td class="num">220</td><td class="num">48,841</td><td class="num">0.29 MB</td><td class="num">≈ 3 MB</td></tr>
+          <tr><td>High</td><td class="num">360</td><td class="num">130,321</td><td class="num">0.78 MB</td><td class="num">≈ 9 MB</td></tr>
+          <tr><td>Very High</td><td class="num">500</td><td class="num">251,001</td><td class="num">1.51 MB</td><td class="num">≈ 18 MB</td></tr>
+          <tr><td>Ultra</td><td class="num">1200</td><td class="num">1,442,401</td><td class="num">8.65 MB</td><td class="num">≈ 101 MB</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note"><span class="tag">Where the memory goes</span>
+      At Ultra on a square job the height map itself is the small part. Positions and normals are
+      17.4&nbsp;MB each, the index buffer is 34.7&nbsp;MB, UVs are 11.6&nbsp;MB, and the colour texture
+      is 11.5&nbsp;MB. That index buffer is written once at build time and never touched again, which
+      is exactly the trade the fixed-topology mesh in §6 is making.</p>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="tool">
+    <h2 class="sec"><span class="sec-num">03</span>The cutter as one function</h2>
+
+    <p>Every tool the simulation supports is a solid of revolution, so its whole geometry collapses to
+      a single scalar function: <strong>the height of the cutting surface above the tip, at radial
+      distance <code>d</code> from the axis</strong>.</p>
+
+<pre><code>function toolHeightAt(tool, d) {
+    if (d &lt;= tool.flatRadius) return 0;
+    const k = d - tool.flatRadius;
+    if (tool.isCone) return k * tool.invTanWall;
+    return tool.cornerRadius - Math.sqrt(Math.max(tool.cr2 - k * k, 0));
+}</code></pre>
+
+    <p><code>flatRadius</code> (written <em>f</em> below) is what unifies the four profiles: it is the
+      radius of the tool's flat bottom. The full radius for a flat end mill, zero for a ball nose,
+      <code>r − cornerRadius</code> for a bull nose, and the tip flat for a cone.</p>
+
+    <div class="eq">
+      <div>h(d) = 0                                for d ≤ f</div>
+      <div>h(d) = (d − f)·cot θ                    cone, θ measured from the axis</div>
+      <div>h(d) = R<sub>c</sub> − √(R<sub>c</sub>² − (d − f)²)          ball / bull, corner radius R<sub>c</sub></div>
+    </div>
+
+    <p>Two properties of <em>h</em> matter downstream, and everything in §4 leans on them:</p>
+    <ul>
+      <li><strong>h(0) = 0 for every profile.</strong> The tip is the tool's lowest point, so the
+        G-code Z <em>is</em> the tip — no per-profile offset anywhere in the carve.</li>
+      <li><strong>h is continuous and non-decreasing.</strong> The profile only ever rises as you move
+        outward from the axis. This is the property that lets a whole swept move be resolved with one
+        evaluation per sample.</li>
+    </ul>
+
+    <figure class="wide">
+      <div class="svg-scroll">
+      <svg viewBox="0 0 760 246" role="img" aria-label="Four tool profiles — flat end mill, ball nose, bull nose and chamfer cone — drawn as half cross-sections of the same function h of d, differing only in the flat radius f and the shape of the rise past it.">
+        <defs>
+          <marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- FLAT: f = r -->
+        <g transform="translate(15,0)">
+          <text class="s-lbl-b" x="56" y="24" text-anchor="middle">Flat end mill</text>
+          <text class="s-lbl-sm" x="56" y="40" text-anchor="middle">f = r</text>
+          <path d="M16,184 L96,184 L96,60 L16,60 Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <line class="s-cut" x1="16" y1="184" x2="96" y2="184" stroke-width="3.5"/>
+          <line x1="16" y1="56" x2="16" y2="196" stroke="currentColor" stroke-width="1" stroke-dasharray="7 3 2 3" opacity="0.6"/>
+          <text class="s-lbl-sm" x="16" y="208" text-anchor="middle">0</text>
+          <line x1="24" y1="204" x2="92" y2="204" stroke="currentColor" stroke-width="1" opacity="0.6" marker-end="url(#arp)"/>
+          <text class="s-lbl-sm" x="100" y="208">d</text>
+          <text class="s-lbl-sm" x="16" y="232">h = 0 for all d</text>
+        </g>
+
+        <!-- BALL: f = 0, Rc = r -->
+        <g transform="translate(200,0)">
+          <text class="s-lbl-b" x="56" y="24" text-anchor="middle">Ball nose</text>
+          <text class="s-lbl-sm" x="56" y="40" text-anchor="middle">f = 0</text>
+          <path d="M16,60 L96,60 L96,104 A80,80 0 0 1 16,184 Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M16,184 A80,80 0 0 0 96,104" fill="none" class="s-cut" stroke-width="3.5"/>
+          <line x1="16" y1="56" x2="16" y2="196" stroke="currentColor" stroke-width="1" stroke-dasharray="7 3 2 3" opacity="0.6"/>
+          <text class="s-lbl-sm" x="16" y="232">h = R − √(R² − d²)</text>
+        </g>
+
+        <!-- BULL: f = r - Rc -->
+        <g transform="translate(385,0)">
+          <text class="s-lbl-b" x="56" y="24" text-anchor="middle">Bull nose</text>
+          <text class="s-lbl-sm" x="56" y="40" text-anchor="middle">f = r − R</text>
+          <path d="M16,60 L96,60 L96,144 A40,40 0 0 1 56,184 L16,184 Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M16,184 L56,184 A40,40 0 0 0 96,144" fill="none" class="s-cut" stroke-width="3.5"/>
+          <line x1="16" y1="56" x2="16" y2="196" stroke="currentColor" stroke-width="1" stroke-dasharray="7 3 2 3" opacity="0.6"/>
+          <path d="M16,196 L16,190 L56,190 L56,196" fill="none" stroke="var(--cut-fill)" stroke-width="1.3"/>
+          <text class="s-lbl-sm s-cut-lbl" x="36" y="210" text-anchor="middle">f</text>
+          <text class="s-lbl-sm" x="16" y="232">h = R − √(R² − (d−f)²)</text>
+        </g>
+
+        <!-- CONE -->
+        <g transform="translate(570,0)">
+          <text class="s-lbl-b" x="56" y="24" text-anchor="middle">Chamfer / V-bit</text>
+          <text class="s-lbl-sm" x="56" y="40" text-anchor="middle">f = tip flat</text>
+          <path d="M16,60 L96,60 L96,104 L32,184 L16,184 Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M16,184 L32,184 L96,104" fill="none" class="s-cut" stroke-width="3.5"/>
+          <line x1="16" y1="56" x2="16" y2="196" stroke="currentColor" stroke-width="1" stroke-dasharray="7 3 2 3" opacity="0.6"/>
+          <path d="M16,196 L16,190 L32,190 L32,196" fill="none" stroke="var(--cut-fill)" stroke-width="1.3"/>
+          <text class="s-lbl-sm s-cut-lbl" x="24" y="210" text-anchor="middle">f</text>
+          <path d="M32,158 A26,26 0 0 1 48.3,163.7" fill="none" stroke="var(--tool-fill)" stroke-width="1.5"/>
+          <text class="s-lbl-sm s-tool-lbl" x="42" y="152">θ</text>
+          <text class="s-lbl-sm" x="16" y="232">h = (d − f)·cot θ</text>
+        </g>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 2</b>Four profiles, one function. Only <em>f</em> and the shape of the rise
+        past it differ. A flat end mill has <code>f = r</code>, which is why the carve loop's
+        <code>distSq &lt;= flatSq</code> test means it never reaches a square root at all.</figcaption>
+    </figure>
+
+    <p class="note"><span class="tag">One trap in the file format</span>
+      CAM posts write <code>TAPER=</code> under two different conventions. A drill's 118° and a spot
+      drill's 90° are <em>included</em> tip angles and must be halved; a chamfer mill's 45° is measured
+      <em>from the axis</em> and is already the half angle. <code>coneHalfAngle()</code> resolves which
+      by family — read a 90° spot drill as a half angle and you get a tip with no height at all.</p>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="capsule">
+    <h2 class="sec"><span class="sec-num">04</span>The capsule sweep</h2>
+
+    <p>This is the core of the simulation. Arcs have already been flattened into chords upstream (to a
+      0.005&nbsp;mm sagitta tolerance), so the carve only ever sees straight moves.</p>
+
+    <p>Take a move from <strong>A</strong> to <strong>B</strong> with the tip held at height
+      <code>z</code>. In plan view, the region the tool passes over is a <strong>capsule</strong>: every
+      point within <code>r</code> of segment AB. For each height sample <em>p</em> inside it, we need
+      the lowest the tool's surface ever gets above that sample over the whole move.</p>
+
+    <h3>Closest approach</h3>
+    <p>Project <em>p</em> onto the axis and clamp to the segment:</p>
+
+    <div class="eq">
+      <div>d  = B − A</div>
+      <div>t  = clamp( ((p − A)·d) / |d|², 0, 1 )     <span class="cmt">// t = 0 if |d|² = 0</span></div>
+      <div>e  = p − (A + t·d)</div>
+      <div>dist² = e·e                                <span class="cmt">// skip the sample if dist² &gt; r²</span></div>
+    </div>
+
+    <p>Clamping <code>t</code> to <code>[0, 1]</code> is what turns the infinite line into a segment and
+      the slab into a capsule: outside the ends, the nearest point on the axis is an endpoint, which
+      gives exactly the rounded caps.</p>
+
+    <h3>Why one evaluation is enough</h3>
+    <p>Over the sweep, the tool's surface sits at height <code>z + h(dist(t))</code> above the sample.
+      We want the minimum over <code>t</code>. Because <em>h</em> is non-decreasing (§3), minimising
+      <code>h(dist(t))</code> is the same as minimising <code>dist(t)</code> — so:</p>
+
+    <div class="eq">
+      <div>min<sub>t</sub> [ z + h(dist(t)) ]  =  z + h( min<sub>t</sub> dist(t) )  =  z + h(dist<sub>min</sub>)</div>
+    </div>
+
+    <p>The closest approach is the whole answer. For a constant-Z move this is <strong>exact</strong>,
+      however long the move is — there is no stepping along the path, no accumulated error, and the cost
+      per sample is one dot product, one clamp, one distance and one profile evaluation.</p>
+
+    <figure class="wide">
+      <div class="key">
+        <span><i style="background: var(--cut-fill)"></i>capsule (swept footprint)</span>
+        <span><i style="background: var(--ink-3)"></i>scanned bounding box</span>
+      </div>
+      <div class="svg-scroll">
+      <svg viewBox="0 0 720 340" role="img" aria-label="Plan view of a swept tool: the axis segment A to B, the capsule of radius r around it, the rectangular grid window scanned, and three sample points showing t clamped below zero, inside the segment, and rejected outside the radius.">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+          <marker id="ar2c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--cut-fill)"/>
+          </marker>
+        </defs>
+
+        <!-- scanned bounding box: exactly the capsule's extent -->
+        <rect x="130" y="60" width="400" height="220" fill="none" stroke="currentColor"
+              stroke-width="1.2" stroke-dasharray="5 4" opacity="0.55"/>
+        <text class="s-lbl-sm" x="130" y="52">gx0..gx1 × gy0..gy1 — the scanned window</text>
+
+        <!-- capsule around A=(190,220) B=(470,120), r=60: two straight flanks, two caps -->
+        <path d="M 169.8,163.5 L 449.8,63.5 A 60,60 0 0 1 490.2,176.5 L 210.2,276.5 A 60,60 0 0 1 169.8,163.5 Z"
+              fill="var(--cut-fill)" fill-opacity="0.13" stroke="var(--cut-fill)" stroke-width="1.6"/>
+
+        <!-- axis -->
+        <line x1="190" y1="220" x2="462" y2="123" stroke="var(--cut-fill)" stroke-width="2.5" marker-end="url(#ar2c)"/>
+        <circle cx="190" cy="220" r="4.5" class="s-cutf"/>
+        <circle cx="470" cy="120" r="4.5" class="s-cutf"/>
+        <text class="s-lbl s-cut-lbl" x="178" y="240" text-anchor="end">A</text>
+        <text class="s-lbl s-cut-lbl" x="478" y="112">B</text>
+
+        <!-- radius marker on the B cap -->
+        <line x1="470" y1="120" x2="490.2" y2="176.5" stroke="var(--cut-fill)" stroke-width="1" stroke-dasharray="3 3"/>
+        <text class="s-lbl-sm s-cut-lbl" x="488" y="154">r</text>
+
+        <!-- sample 1: interior, foot at t = 0.50 -->
+        <circle cx="316" cy="132" r="4" fill="currentColor"/>
+        <line x1="316" y1="132" x2="326" y2="162" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <circle cx="330" cy="170" r="3.5" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text class="s-lbl" x="308" y="124" text-anchor="end">p₁</text>
+        <text class="s-lbl-sm" x="336" y="140">dist</text>
+        <text class="s-lbl-sm" x="344" y="188">foot at t ≈ 0.5</text>
+        <line x1="340" y1="180" x2="334" y2="174" stroke="currentColor" stroke-width="1" opacity="0.6"/>
+
+        <!-- sample 2: past the A end, t clamps to 0 -->
+        <circle cx="150" cy="262" r="4" fill="currentColor"/>
+        <line x1="153" y1="259" x2="185" y2="225" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+        <text class="s-lbl" x="142" y="266" text-anchor="end">p₂</text>
+        <text class="s-lbl-sm" x="146" y="288">t clamps to 0 → distance measured to A</text>
+
+        <!-- sample 3: inside the box, outside the capsule -->
+        <circle cx="512" cy="252" r="4" fill="currentColor" opacity="0.5"/>
+        <text class="s-lbl" x="504" y="248" text-anchor="end">p₃</text>
+        <text class="s-lbl-sm" x="416" y="268" text-anchor="end">dist² &gt; r² → skipped</text>
+        <line x1="420" y1="264" x2="504" y2="254" stroke="currentColor" stroke-width="1" opacity="0.45"/>
+
+        <text class="s-lbl-sm" x="130" y="322">The box is what gets scanned; the radius test is what makes the region a capsule.</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 3</b>The grid window is a plain axis-aligned box around the swept extent,
+        widened by <code>r</code>. Its corners fall outside the capsule and are rejected by the
+        <code>dist² &gt; r²</code> test — one comparison, cheaper than any tighter traversal.</figcaption>
+    </figure>
+
+    <h3>The inner loop</h3>
+
+<pre><code>let t = lenSq &gt; 0 ? ((px - x0) * dx + (py - y0) * dy) / lenSq : 0;
+if (t &lt; 0) t = 0; else if (t &gt; 1) t = 1;
+
+const ex = px - (x0 + t * dx);
+const ey = py - (y0 + t * dy);
+const distSq = ex * ex + ey * ey;
+if (distSq &gt; r2) continue;
+
+<span class="cm">// A flat end mill has flatSq === r2, so it never reaches the sqrt.</span>
+let target = distSq &lt;= flatSq ? z : z + toolHeightAt(tool, Math.sqrt(distSq));
+if (target &lt; stockBottom) {
+    target = stockBottom;
+    stockAnyThroughCut = true;
+}
+
+const hi = rowBase + gx;
+if (heights[hi] &gt; target) {
+    heights[hi] = target;
+    cutIds[hi] = cutId;
+    changed = true;
+}</code></pre>
+    <span class="src">carveCapsule()</span>
+
+    <p>Three details worth keeping:</p>
+    <ul>
+      <li><code>if (z &gt;= stock.top) return false</code> guards the whole function. Since
+        <code>h(0) = 0</code>, the tip is the lowest point of the tool, so a tip above the stock top
+        cannot remove anything.</li>
+      <li>Everything stays squared until the last possible moment. A flat end mill never takes a square
+        root, because <code>flatSq === r2</code> makes the first branch always true.</li>
+      <li>Reaching the floor sets <code>stockAnyThroughCut</code>. That flag gates an entire per-cell
+        pass later (§7) — until something goes clean through, there is no hole to open and the pass is
+        skipped.</li>
+    </ul>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="slicing">
+    <h2 class="sec"><span class="sec-num">05</span>Following a changing Z</h2>
+
+    <p>A capsule covers the full XY sweep of a move exactly, however long it is. Slicing is therefore
+      needed for one reason only: <strong>a move whose Z changes</strong> — a ramp, a plunge, a helical
+      arc. The tolerance is the model's own resolution:</p>
+
+    <div class="eq">
+      <div>zTol   = min(cellX, cellY)</div>
+      <div>slices = clamp( ceil(|Δz| / zTol), 1, 4000 )</div>
+    </div>
+
+    <p>If <code>|Δz| ≤ zTol</code> the move is carved as a single capsule and no slicing happens at all.
+      Otherwise each slice is a capsule over its own sub-segment, cut at
+      <code>min(z₀, z₁)</code> — the <em>deepest</em> Z the slice reaches.</p>
+
+    <p>Taking the minimum is deliberately conservative: within a slice, the simulation removes slightly
+      <em>more</em> than the real cutter would, never less, and the over-removal is bounded by
+      <code>zTol</code> — one cell. So the Z error and the XY error are the same size, both set by the
+      resolution slider, and neither can be tightened without the other.</p>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="mesh">
+    <h2 class="sec"><span class="sec-num">06</span>One mesh, moving vertices</h2>
+
+    <p>The mesh is built once per stock rebuild and never rebuilt while cutting. Its topology is
+      fixed — <strong>only vertex Z values change</strong> — so the index buffer, the UVs and the
+      normals attribute are all written a single time.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Part</th><th>Vertices</th><th>Triangles</th></tr></thead>
+        <tbody>
+          <tr><td>Height-map surface</td><td>(nx+1)(ny+1)</td><td>2·nx·ny</td></tr>
+          <tr><td>Four side walls</td><td>4(nx+ny+2)</td><td>4(nx+ny)</td></tr>
+          <tr><td>Flat bottom</td><td>4</td><td>2</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The walls — the <em>skirt</em> — hang from the boundary samples. Each wall vertex pair is stored
+      alongside the height sample it follows, so a refresh is two flat loops with no arithmetic:</p>
+
+<pre><code>for (let i = 0; i &lt; stock.topCount; i++) {
+    pos[i * 3 + 2] = heights[i];
+}
+for (let k = 0; k &lt; skirt.length; k += 2) {
+    pos[skirt[k] * 3 + 2] = heights[skirt[k + 1]];
+}
+attr.needsUpdate = true;</code></pre>
+    <span class="src">refreshStockGeometry()</span>
+
+    <p>The position attribute is marked <code>DynamicDrawUsage</code>, since it is re-uploaded on every
+      carve. Nothing else in the geometry is.</p>
+
+    <h3>Material removed</h3>
+    <p>The readout is the mean drop across all samples, as a fraction of the block's Z span:</p>
+
+    <div class="eq">
+      <div>removed % = 100 · Σ(top − h<sub>i</sub>) / ( N · (top − bottom) )</div>
+    </div>
+
+    <p>This weights every sample equally, which slightly over-weights the boundary rows compared with a
+      true volume integral over cells. At 500 cells the discrepancy is a fraction of a percent — it is a
+      progress indicator, not a metrology result.</p>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="colour">
+    <h2 class="sec"><span class="sec-num">07</span>Colour, and the hole problem</h2>
+
+    <p>Every surface in the block is tinted by the operation or tool that made it. The obvious
+      implementation — a vertex colour attribute — is wrong here: colours interpolate across a triangle,
+      so every boundary between two operations came out as a gradient smeared over a whole cell.
+      Duplicating vertices per face would fix that, but at six vertices per cell the position buffer,
+      rewritten on every carve, grows sixfold.</p>
+
+    <p>The answer is a nearest-filtered <strong>texture with one texel per cell</strong>. Surface vertex
+      <code>(gx, gy)</code> gets UV <code>(gx/nx, gy/texRows)</code> — exactly on the texel boundary —
+      so every fragment of a cell's quad reads the same texel and the quad is one flat colour, with
+      colour changes landing precisely on cell edges.</p>
+
+    <h3>Three bands</h3>
+    <p>The texture is <code>nx</code> wide and <code>2·ny + 1</code> tall, in three bands that exist for
+      three different reasons:</p>
+
+    <figure class="wide">
+      <div class="svg-scroll">
+      <svg viewBox="0 0 720 350" role="img" aria-label="The colour texture split into three horizontal bands — surface cells, the bottom quad's alpha shadow, and one spare row read by the four side walls — with arrows to the mesh parts that sample each band.">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- texture -->
+        <g>
+          <rect x="60" y="40" width="210" height="120" fill="var(--cut-fill)" fill-opacity="0.16" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="60" y="160" width="210" height="120" fill="var(--stock-fill)" fill-opacity="0.35" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="60" y="280" width="210" height="26" fill="var(--stock-fill)" fill-opacity="0.7" stroke="currentColor" stroke-width="1.5"/>
+
+          <!-- cell grid hint -->
+          <g stroke="currentColor" stroke-width="0.6" opacity="0.28">
+            <line x1="102" y1="40" x2="102" y2="280"/><line x1="144" y1="40" x2="144" y2="280"/>
+            <line x1="186" y1="40" x2="186" y2="280"/><line x1="228" y1="40" x2="228" y2="280"/>
+            <line x1="60" y1="70" x2="270" y2="70"/><line x1="60" y1="100" x2="270" y2="100"/>
+            <line x1="60" y1="130" x2="270" y2="130"/>
+            <line x1="60" y1="190" x2="270" y2="190"/><line x1="60" y1="220" x2="270" y2="220"/>
+            <line x1="60" y1="250" x2="270" y2="250"/>
+          </g>
+
+          <text class="s-lbl-b" x="165" y="26" text-anchor="middle">colour texture &mdash; nx wide</text>
+          <text class="s-lbl-sm" x="54" y="46" text-anchor="end">row 0</text>
+          <text class="s-lbl-sm" x="54" y="166" text-anchor="end">row ny</text>
+          <text class="s-lbl-sm" x="54" y="286" text-anchor="end">row 2ny</text>
+        </g>
+
+        <!-- arrows -->
+        <line x1="278" y1="100" x2="392" y2="100" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar3)"/>
+        <line x1="278" y1="220" x2="392" y2="220" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar3)"/>
+        <line x1="278" y1="293" x2="392" y2="293" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar3)"/>
+
+        <!-- descriptions -->
+        <g>
+          <text class="s-lbl-b" x="402" y="88">Surface cells</text>
+          <text class="s-lbl-sm" x="402" y="106">RGB = the cut that made the cell.</text>
+          <text class="s-lbl-sm" x="402" y="122">Alpha 0 where it went clean through.</text>
+
+          <text class="s-lbl-b" x="402" y="208">Bottom shadow</text>
+          <text class="s-lbl-sm" x="402" y="226">One quad spans the whole footprint, so it</text>
+          <text class="s-lbl-sm" x="402" y="242">needs per-fragment alpha on the same grid.</text>
+          <text class="s-lbl-sm" x="402" y="258">RGB stays base stock forever.</text>
+
+          <text class="s-lbl-b" x="402" y="286">Spare row &mdash; the four side walls</text>
+          <text class="s-lbl-sm" x="402" y="304">Never written. The outside of the block is</text>
+          <text class="s-lbl-sm" x="402" y="320">original stock and no tool can ever face it.</text>
+        </g>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 4</b>Three bands, three jobs. The surface band is written per cell every time
+        the cut set changes; the bottom band only ever has its alpha touched; the spare row is written
+        once at build time and read by every wall vertex.</figcaption>
+    </figure>
+
+    <h3>Which cut owns a cell</h3>
+    <p>A cell has four corner samples and one texel, so it has to choose. <strong>The deepest corner
+      wins</strong> — on a steep wall quad that is the sample at the foot of the wall, the one the cut
+      actually reached, so the face carries the colour of the tool that made it. Ties go to the
+      <em>higher</em> cut id, which is the later operation, so a boundary between two passes does not
+      drift into whichever corner the scan happened to visit first.</p>
+
+    <p>Cut ids are <code>opIndex + 1</code>, leaving <code>0</code> for uncut. <code>0xffff</code> is
+      reserved for a rapid that removed material — a gouge — which sorts above every real id and so
+      wins every tie, and is painted red in <em>every</em> colour mode including Uniform.</p>
+
+    <h3>Opening a hole</h3>
+    <p>A height map cannot describe a void. A cell cut clean through does not vanish; it sits at the
+      bottom of the block, coplanar with the underside, leaving a paper-thin membrane closing what
+      should be an opening. The fix is alpha plus <code>alphaTest: 0.5</code>:</p>
+
+    <div class="eq">
+      <div>throughLevel = bottom + max( (top − bottom)·1e−5, 1e−9 )</div>
+      <div>alpha = ( max of the cell's four corners ≤ throughLevel ) ? 0 : 255</div>
+    </div>
+
+    <p>The <em>highest</em> corner decides, because that is the one still holding material up. The same
+      alpha is written twice — once to the surface texel and once to its shadow in the bottom band — so
+      the hole opens from above and below together. The epsilon exists because the heights are
+      <code>Float32</code> and <code>stock.bottom</code> is not.</p>
+
+    <p class="note"><span class="tag">Why the modes are free</span>
+      Uniform, By Tool and By Operation are all views of the same <code>cutIds</code> array. Switching
+      mode is a repaint, never a re-cut. And in Uniform mode every texel already holds the base colour,
+      so the colour upload is skipped entirely — unless a gouge has painted something red, which Uniform
+      still has to show.</p>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="loop">
+    <h2 class="sec"><span class="sec-num">08</span>The frame loop</h2>
+
+    <p>Carving is driven from the animation frame, not from input events. <code>requestCarve(dist)</code>
+      only sets a pending value; the loop consumes at most one carve per frame. Dragging the progress
+      slider — which can force a full re-cut on every pointer move — therefore costs one carve per
+      frame rather than one per event.</p>
+
+    <figure class="wide">
+      <div class="svg-scroll">
+      <svg viewBox="0 0 760 300" role="img" aria-label="Flow from a carve request through the frame loop: coalesced into pendingCarve, then either an incremental forward carve or a full reset and re-cut, setting two dirty flags that drive separate position and texture uploads.">
+        <defs>
+          <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+          <marker id="ar4r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--alarm)"/>
+          </marker>
+        </defs>
+
+        <g stroke="currentColor" stroke-width="1.4" fill="none">
+          <rect x="20"  y="108" width="118" height="44"/>
+          <rect x="196" y="108" width="118" height="44"/>
+          <rect x="372" y="108" width="128" height="44"/>
+          <rect x="558" y="60"  width="182" height="44"/>
+          <rect x="558" y="156" width="182" height="44"/>
+          <rect x="196" y="228" width="304" height="42" stroke="var(--alarm)"/>
+        </g>
+
+        <g class="s-lbl-b" text-anchor="middle">
+          <text x="79"  y="128">requestCarve()</text>
+          <text x="255" y="128">pendingCarve</text>
+          <text x="436" y="128">carveTo(dist)</text>
+          <text x="649" y="80">stockGeomDirty</text>
+          <text x="649" y="176">stockColorDirty</text>
+          <text x="348" y="248" fill="var(--alarm)">resetStockHeights() &rarr; re-cut from 0</text>
+        </g>
+        <g class="s-lbl-sm" text-anchor="middle">
+          <text x="79"  y="144">from scrub or play</text>
+          <text x="255" y="144">one per frame</text>
+          <text x="436" y="144">forward only</text>
+          <text x="649" y="96">&rarr; positions upload</text>
+          <text x="649" y="192">&rarr; texture upload</text>
+        </g>
+
+        <g stroke="currentColor" stroke-width="1.3" fill="none" marker-end="url(#ar4)">
+          <line x1="138" y1="130" x2="190" y2="130"/>
+          <line x1="314" y1="130" x2="366" y2="130"/>
+          <path d="M500,120 L528,120 L528,82 L552,82"/>
+          <path d="M500,140 L528,140 L528,178 L552,178"/>
+        </g>
+
+        <!-- backward branch: down into the reset, then straight back out into carveTo -->
+        <g stroke="var(--alarm)" stroke-width="1.3" fill="none" marker-end="url(#ar4r)">
+          <path d="M410,152 L410,226"/>
+          <path d="M452,226 L452,154"/>
+        </g>
+        <text class="s-lbl-sm" x="400" y="196" text-anchor="end" fill="var(--alarm)">dist &lt; carvedDistance</text>
+        <text class="s-lbl-sm" x="462" y="196" fill="var(--alarm)">re-cut</text>
+
+        <text class="s-lbl-sm" x="20" y="42">Forward playback resumes at carveSegIndex and only ever lowers heights.</text>
+        <text class="s-lbl-sm" x="20" y="290">Two flags, because heights change every carve and colours only when the cut set or the mode does.</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 5</b>The asymmetry is the point. Forward is incremental and resumes mid-path;
+        backward has to refill the block and re-cut, because a height map cannot remember what it
+        removed.</figcaption>
+    </figure>
+
+    <p>Inside <code>carveTo</code>, each segment contributes only the arc-length interval that the new
+      distance actually covers. Those bounds are converted back into parameters along the segment and
+      handed to the sweep:</p>
+
+<pre><code>const a = Math.max(carvedDistance, seg.startDist);
+const b = Math.min(dist, segEnd);
+const t0 = (a - seg.startDist) / seg.length;
+const t1 = (b - seg.startDist) / seg.length;</code></pre>
+    <span class="src">carveTo()</span>
+
+    <p>So a segment that is half-traversed carves exactly its first half, and picks up from there on the
+      next frame. <code>carveSegIndex</code> only advances past a segment once it is fully consumed.</p>
+  </section>
+
+  <!-- ==================================================================== -->
+  <section id="limits">
+    <h2 class="sec"><span class="sec-num">09</span>Where the model runs out</h2>
+
+    <p>The height map's single limitation propagates everywhere, and it is worth naming precisely:
+      <strong>one height per column, so no surface can face sideways.</strong></p>
+
+    <p>The sharpest case is a pass that runs along or past the outer boundary. In reality the cutter
+      removes a slab from the edge and leaves a machined wall set in from the original face. The height
+      map cannot hold that: it can only drop the boundary sample. The material below that sample — which
+      is what the outside of the block actually shows — is never touched by anything.</p>
+
+    <figure class="wide">
+      <div class="key">
+        <span><i style="background: var(--stock-fill)"></i>material</span>
+        <span><i style="background: var(--cut-fill)"></i>machined face</span>
+      </div>
+      <div class="svg-scroll">
+      <svg viewBox="0 0 720 290" role="img" aria-label="Two sections compared: the real cut leaves a machined wall set in from the original block face, while the height map drops only the boundary sample and keeps the outer face where it was.">
+        <defs>
+          <marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- ---------- Panel A ---------- -->
+        <text class="s-lbl-b" x="40" y="30">What the cutter does</text>
+        <!-- remaining material: L-shape -->
+        <polygon class="s-stock" points="40,140 110,140 110,80 320,80 320,220 40,220"/>
+        <polyline points="40,140 110,140 110,80 320,80" fill="none" stroke="currentColor" stroke-width="2"/>
+        <line x1="40" y1="140" x2="40" y2="220" stroke="currentColor" stroke-width="2"/>
+        <line x1="40" y1="220" x2="320" y2="220" stroke="currentColor" stroke-width="2"/>
+        <line x1="320" y1="80" x2="320" y2="220" stroke="currentColor" stroke-width="2"/>
+        <!-- machined faces -->
+        <line class="s-cut" x1="110" y1="80" x2="110" y2="140" stroke-width="3.5"/>
+        <line class="s-cut" x1="40" y1="140" x2="110" y2="140" stroke-width="3.5"/>
+        <!-- original block outline -->
+        <rect x="40" y="80" width="280" height="140" fill="none" stroke="currentColor"
+              stroke-width="1" stroke-dasharray="4 4" opacity="0.5"/>
+        <!-- tool -->
+        <rect x="14" y="46" width="72" height="94" fill="none" stroke="var(--tool-fill)" stroke-width="2"/>
+        <text class="s-lbl-sm s-tool-lbl" x="50" y="40" text-anchor="middle">end mill</text>
+        <text class="s-lbl-sm" x="122" y="170">machined wall, set in</text>
+        <line x1="120" y1="166" x2="112" y2="128" stroke="currentColor" stroke-width="1" marker-end="url(#ar5)" opacity="0.7"/>
+        <text class="s-lbl-sm" x="40" y="248">dashed = original block outline</text>
+
+        <!-- ---------- Panel B ---------- -->
+        <text class="s-lbl-b" x="400" y="30">What the height map stores</text>
+        <polygon class="s-stock" points="400,140 440,80 680,80 680,220 400,220"/>
+        <polyline points="400,140 440,80 680,80" fill="none" stroke="currentColor" stroke-width="2"/>
+        <line x1="400" y1="140" x2="400" y2="220" stroke="currentColor" stroke-width="2.5"/>
+        <line x1="400" y1="220" x2="680" y2="220" stroke="currentColor" stroke-width="2"/>
+        <line x1="680" y1="80" x2="680" y2="220" stroke="currentColor" stroke-width="2"/>
+        <line class="s-cut" x1="400" y1="140" x2="440" y2="80" stroke-width="3.5"/>
+
+        <!-- samples -->
+        <g fill="currentColor">
+          <circle cx="400" cy="140" r="4"/><circle cx="440" cy="80" r="4"/>
+          <circle cx="480" cy="80" r="4"/><circle cx="520" cy="80" r="4"/>
+          <circle cx="560" cy="80" r="4"/><circle cx="600" cy="80" r="4"/>
+          <circle cx="640" cy="80" r="4"/><circle cx="680" cy="80" r="4"/>
+        </g>
+        <text class="s-lbl-sm" x="454" y="118">the wall the cut made</text>
+        <line x1="450" y1="114" x2="428" y2="104" stroke="currentColor" stroke-width="1" marker-end="url(#ar5)" opacity="0.7"/>
+
+        <text class="s-lbl-sm" x="412" y="188">&larr; original face, uncut</text>
+
+        <text class="s-lbl-sm" x="40" y="274">Only the boundary sample moved &mdash; the outside of the block stayed where it was.</text>
+      </svg>
+      </div>
+      <figcaption><b>Fig. 6</b>The two are not the same shape, and the difference is entirely on the
+        outer face. Everything the height map knows about that cut lives in one dropped sample and the
+        steep quad beside it.</figcaption>
+    </figure>
+
+    <p class="note fix"><span class="tag">Fixed &mdash; the skirt colouring bug</span>
+      Wall vertices used to borrow the UV of the boundary sample they follow. When a pass ran along the
+      edge, that sample's texel took the cut colour, and the whole outside face of the block was painted
+      in it from the cut depth down to the underside. It is now read from the spare texture row, so the
+      walls stay uncut stock. The wall the cut really made is the steep surface quad just inboard, and
+      that one is still coloured by the pass that made it.</p>
+
+    <h3>The rest of the envelope</h3>
+    <ul>
+      <li><strong>Arcs are chords.</strong> Flattened upstream to a 0.005&nbsp;mm sagitta, so the carve
+        never sees curvature — a chord count derived from the radius, not a fixed number.</li>
+      <li><strong>The tool is a solid of revolution.</strong> No flutes, no helix, no runout; a rotating
+        cutter is fully described by its silhouette.</li>
+      <li><strong>Three axes.</strong> The tool axis is always +Z. Tilt, rotary work and 5-axis motion
+        are outside the model entirely.</li>
+      <li><strong>No mechanics.</strong> Deflection, chatter, and material spring-back do not exist
+        here. This answers <em>what shape is left</em>, not <em>what the machine will actually do</em>.</li>
+      <li><strong>Resolution couples XY and Z.</strong> One slider sets the cell size, and the Z slicing
+        tolerance is <code>min(cellX, cellY)</code>, so the two errors always move together.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Notes on the stock simulation in <code>g-code viewer.html</code> &mdash;
+    <code>rebuildStock</code>, <code>buildStockGeometry</code>, <code>carveCapsule</code>,
+    <code>carveSweep</code>, <code>carveTo</code> and <code>refreshStockGeometry</code>.
+    Line references intentionally omitted; the function names are stable.
+  </footer>
+
+</article>
