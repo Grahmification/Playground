@@ -833,11 +833,15 @@
                 <div class="control-group">
                     <label for="stock-res">Stock Resolution</label>
                     <select id="stock-res">
-                        <option value="220">Low (fastest)</option>
+                        <option value="220">Low</option>
                         <option value="360">High</option>
                         <option value="500" selected>Very High</option>
-                        <option value="1200">Ultra (slowest)</option>
+                        <option value="800">Extra High</option>
+                        <option value="1200">Ultra</option>
+                        <option value="1600">Extreme</option>
+                        <option value="2000">Maximum</option>
                     </select>
+                    <div id="stock-res-hint" class="hint hint-muted" style="display: none;"></div>
                 </div>
                 <div class="control-group">
                     <label for="stock-color-mode">Stock Color</label>
@@ -867,7 +871,6 @@
                     </div>
                 </div>
                 <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
-                <div class="stats-row"><span>Material Removed:</span> <span id="stock-removed" class="stats-value">0.0 %</span></div>
             </div>
         </div>
 
@@ -1010,6 +1013,7 @@
              Toolpath      the program drawn as coloured lines
              ActiveMove    the highlight over the command being executed
              Cutter        the tool mesh that follows the simulation
+             StockGPU      the stock's render targets, shaders and passes
              Stock         the height-map block, and the material removal itself
              Simulation    the playback clock
              Sidebar       the left-hand controls: values in, states out
@@ -2770,30 +2774,583 @@
             };
         })();
 
+        // --- StockGPU ----------------------------------------------------------------
+        // The stock simulation's silicon: the render targets it lives in, the shaders that
+        // read and write them, and the three passes. Stock owns the model and decides what
+        // to cut; this owns nothing but pixels and knows nothing about g-code.
+        //
+        // The one idea the whole module rests on: **the height map is a depth buffer.** A
+        // height sample is a float in [0,1] where 1 is uncut stock and 0 is the floor of the
+        // block, which is exactly what a depth attachment holds, and "cut to the lower of
+        // what is there and what the tool reaches" is exactly what the depth test does. So
+        // the CPU's inner loop
+        //
+        //     if (heights[hi] > target) { heights[hi] = target; cutIds[hi] = cutId; }
+        //
+        // becomes gl.LESS with a colour write behind it: the depth unit performs the
+        // comparison and the min, and because a colour write only lands when the depth test
+        // passes, the cut id follows the height for free -- including the tie, where an equal
+        // target fails a strict LESS and leaves the earlier id standing, just as the strict
+        // `>` above does.
+        //
+        // Two things follow from that and are worth knowing before reading further.
+        //
+        // Order does not matter for the height and does matter for the id, and both survive
+        // being split across draws: the final depth is the min over every capsule however it
+        // was batched, and the id that survives belongs to the first capsule in draw order to
+        // reach that min. That is what lets a whole program be streamed through one small
+        // buffer instead of held in a large one.
+        //
+        // And there is no way back. WebGL 2 cannot read a depth attachment into client
+        // memory at all, so nothing here ever asks the GPU what the stock looks like. The one
+        // exception is a single byte -- "is any of this red?" -- reduced on the GPU to one
+        // texel before it is read (see readGouge).
+        const StockGPU = (() => {
+            const renderer = Viewer.renderer;
+
+            // Every pass below writes gl_FragDepth, samples a 32-bit float depth texture, or
+            // both. That is WebGL 2 or nothing; r128 will happily fall back to a WebGL 1
+            // context on an old machine, and this is the only place that would notice.
+            const supported = renderer.capabilities.isWebGL2 === true;
+
+            // Capsules per streamed batch. Sized so the staging buffer is a couple of
+            // megabytes and never grows: a long program is drawn as a run of batches rather
+            // than held in one buffer, which is what keeps memory flat whatever the file.
+            const BATCH = 65536;
+            // x0,y0,x1,y1 | zLocal,radius,flatRadius,shape | cutId,isCone
+            const STRIDE = 10;
+
+            // Ids are written as two bytes of an RGBA8 attachment, so the Uint16 range the
+            // CPU model used survives intact -- including Palette.RAPID_CUT_ID, which the
+            // shaders below test for as the literal 65535.
+            //
+            // Reduction factor per step of the gouge pyramid. 8 rather than 4 so a 2001-wide
+            // grid folds to one texel in four passes instead of six.
+            const REDUCE = 8;
+
+            const batchArray = supported ? new Float32Array(BATCH * STRIDE) : null;
+            const gougePixel = supported ? new Uint8Array(4) : null;
+            const tmpScissor = supported ? new THREE.Vector4() : null;
+
+            let built = false;
+            let carveGeom, carveData, carveMat, carveScene;
+            let quadMesh, quadScene, quadCam;
+            let resolveMat, gougeSeedMat, gougeMaxMat;
+
+            // Common prologue. RawShaderMaterial gets *only* the version line and the
+            // material's defines, so precision and every declaration has to be written out.
+            const HEAD = `precision highp float;
+                precision highp int;
+                precision highp sampler2D;
+                `;
+
+            // Each instance is one swept-tool capsule. The quad it draws covers exactly the
+            // grid samples carveCapsule used to loop over -- the same floor/ceil bounds, in
+            // the same units -- so nothing outside the tool's footprint is ever rasterised.
+            // That matters more than it looks: writing gl_FragDepth turns off early-Z, so a
+            // loose bound is paid for in full.
+            const CARVE_VERT = HEAD + `
+                in vec2 position;
+                in vec4 aSeg;      // x0, y0, x1, y1   (block-local)
+                in vec4 aTool;     // zLocal, radius, flatRadius, shape
+                in vec2 aMeta;     // cutId, isCone
+                uniform vec2 uCell;
+                uniform vec2 uGridN;   // nx, ny        -- highest sample index
+                uniform vec2 uGridV;   // nx+1, ny+1    -- target size in texels
+                out vec4 vSeg;
+                out vec4 vTool;
+                out vec2 vMeta;
+                void main() {
+                    float r = aTool.y;
+                    vec2 lo = min(aSeg.xy, aSeg.zw) - r;
+                    vec2 hi = max(aSeg.xy, aSeg.zw) + r;
+                    vec2 g0 = max(vec2(0.0), floor(lo / uCell));
+                    vec2 g1 = min(uGridN, ceil(hi / uCell));
+                    if (g1.x < g0.x || g1.y < g0.y) {
+                        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // off-screen, degenerate
+                        return;
+                    }
+                    // Samples g0..g1 inclusive occupy the pixel span [g0, g1+1]. The quarter
+                    // texel of slack absorbs an ULP of NDC error at the edges; it cannot pull
+                    // in a neighbour, whose centre is a full half texel further out.
+                    vec2 px = mix(g0 - 0.25, g1 + 1.25, position);
+                    gl_Position = vec4(2.0 * px / uGridV - 1.0, 0.0, 1.0);
+                    vSeg = aSeg;
+                    vTool = aTool;
+                    vMeta = aMeta;
+                }`;
+
+            // Line for line, this is carveCapsule's inner body: closest approach to the swept
+            // axis, reject outside the radius, raise the target by the tool's profile at that
+            // distance. The profile's two arms are ToolGeometry.heightAt's two arms, and they
+            // are exclusive, which is why one `shape` float can serve as either the cone's
+            // 1/tan(wall) or the corner radius.
+            const CARVE_FRAG = HEAD + `
+                in vec4 vSeg;
+                in vec4 vTool;
+                in vec2 vMeta;
+                uniform vec2 uCell;
+                uniform float uSpan;
+                layout(location = 0) out vec4 outId;
+                void main() {
+                    vec2 p = floor(gl_FragCoord.xy) * uCell;   // this fragment's grid sample
+                    vec2 a = vSeg.xy;
+                    vec2 d = vSeg.zw - a;
+                    float lenSq = dot(d, d);
+                    float t = lenSq > 0.0 ? clamp(dot(p - a, d) / lenSq, 0.0, 1.0) : 0.0;
+                    vec2 e = p - (a + t * d);
+                    float distSq = dot(e, e);
+                    float r = vTool.y;
+                    if (distSq > r * r) discard;
+
+                    float flatR = vTool.z;
+                    float target = vTool.x;
+                    if (distSq > flatR * flatR) {
+                        float k = sqrt(distSq) - flatR;
+                        float s = vTool.w;
+                        target += vMeta.y > 0.5
+                            ? k * s                                  // cone
+                            : s - sqrt(max(s * s - k * k, 0.0));     // ball / bull corner
+                    }
+                    // The lower clamp is the CPU's "cut through to the underside"; the upper
+                    // one is free, since a target above the block simply loses the depth test.
+                    gl_FragDepth = clamp(target / uSpan, 0.0, 1.0);
+
+                    float id = vMeta.x;
+                    outId = vec4(mod(id, 256.0) / 255.0, floor(id / 256.0) / 255.0, 0.0, 1.0);
+                }`;
+
+            const QUAD_VERT = HEAD + `
+                in vec2 position;
+                void main() { gl_Position = vec4(position, 0.0, 1.0); }`;
+
+            // The per-cell colour pass, unchanged in every rule from the CPU loop it replaces
+            // -- deepest corner takes the cell, ties to the later operation, and a cell whose
+            // *highest* corner is on the floor is a hole. The three-band layout of the target
+            // is the same one buildGeometry's UVs were written against; the row decides which
+            // band this fragment is in.
+            const RESOLVE_FRAG = HEAD + `
+                uniform sampler2D uHeight;
+                uniform sampler2D uIds;
+                uniform sampler2D uLut;
+                uniform vec2 uGridV;
+                uniform float uNy;
+                uniform float uLutW;
+                uniform float uThrough;
+                uniform vec3 uBase;
+                layout(location = 0) out vec4 outColor;
+
+                float hAt(vec2 c) { return texture(uHeight, (c + 0.5) / uGridV).r; }
+                float idAt(vec2 c) {
+                    vec2 e = texture(uIds, (c + 0.5) / uGridV).rg;
+                    return floor(e.r * 255.0 + 0.5) + floor(e.g * 255.0 + 0.5) * 256.0;
+                }
+
+                void main() {
+                    float row = floor(gl_FragCoord.y);
+                    // The spare row every skirt vertex reads. Written once, at rebuild.
+                    if (row >= 2.0 * uNy) { outColor = vec4(uBase, 1.0); return; }
+
+                    bool isBottom = row >= uNy;
+                    vec2 c = vec2(floor(gl_FragCoord.x), isBottom ? row - uNy : row);
+
+                    float h0 = hAt(c);
+                    float h1 = hAt(c + vec2(1.0, 0.0));
+                    float h2 = hAt(c + vec2(0.0, 1.0));
+                    float h3 = hAt(c + vec2(1.0, 1.0));
+                    float alpha = max(max(h0, h1), max(h2, h3)) <= uThrough ? 0.0 : 1.0;
+
+                    // The bottom band is alpha only: a hole has to open in the underside too,
+                    // but the underside is never painted in the colour of a cut from above.
+                    if (isBottom) { outColor = vec4(uBase, alpha); return; }
+
+                    float i0 = idAt(c);
+                    float i1 = idAt(c + vec2(1.0, 0.0));
+                    float i2 = idAt(c + vec2(0.0, 1.0));
+                    float i3 = idAt(c + vec2(1.0, 1.0));
+                    float bestH = h0;
+                    float bestId = i0;
+                    if (h1 < bestH || (h1 == bestH && i1 > bestId)) { bestH = h1; bestId = i1; }
+                    if (h2 < bestH || (h2 == bestH && i2 > bestId)) { bestH = h2; bestId = i2; }
+                    if (h3 < bestH || (h3 == bestH && i3 > bestId)) { bestH = h3; bestId = i3; }
+
+                    // The rapid sentinel sorts above every real id, which is what wins it the
+                    // tie above; here it folds back down onto the last slot of the table.
+                    float li = bestId >= 65535.0 ? uLutW - 1.0 : min(bestId, uLutW - 2.0);
+                    outColor = vec4(texture(uLut, vec2((li + 0.5) / uLutW, 0.5)).rgb, alpha);
+                }`;
+
+            // First step of the gouge pyramid: "does any sample in this 8x8 block carry the
+            // rapid id". Every later step is a plain max of the same shape.
+            const GOUGE_SEED_FRAG = HEAD + `
+                uniform sampler2D uIds;
+                uniform vec2 uSrcSize;
+                layout(location = 0) out vec4 outColor;
+                void main() {
+                    vec2 base = floor(gl_FragCoord.xy) * ${REDUCE}.0;
+                    float g = 0.0;
+                    for (int j = 0; j < ${REDUCE}; j++) {
+                        for (int i = 0; i < ${REDUCE}; i++) {
+                            vec2 c = base + vec2(float(i), float(j));
+                            if (c.x < uSrcSize.x && c.y < uSrcSize.y) {
+                                vec2 e = texture(uIds, (c + 0.5) / uSrcSize).rg;
+                                float id = floor(e.r * 255.0 + 0.5) + floor(e.g * 255.0 + 0.5) * 256.0;
+                                if (id >= 65535.0) g = 1.0;
+                            }
+                        }
+                    }
+                    outColor = vec4(g, 0.0, 0.0, 1.0);
+                }`;
+
+            const GOUGE_MAX_FRAG = HEAD + `
+                uniform sampler2D uSrc;
+                uniform vec2 uSrcSize;
+                layout(location = 0) out vec4 outColor;
+                void main() {
+                    vec2 base = floor(gl_FragCoord.xy) * ${REDUCE}.0;
+                    float g = 0.0;
+                    for (int j = 0; j < ${REDUCE}; j++) {
+                        for (int i = 0; i < ${REDUCE}; i++) {
+                            vec2 c = base + vec2(float(i), float(j));
+                            if (c.x < uSrcSize.x && c.y < uSrcSize.y) {
+                                g = max(g, texture(uSrc, (c + 0.5) / uSrcSize).r);
+                            }
+                        }
+                    }
+                    outColor = vec4(g, 0.0, 0.0, 1.0);
+                }`;
+
+            function rawMaterial(vert, frag, uniforms, extra) {
+                // glslVersion is not carried by ShaderMaterial.copy() in r128, so these are
+                // built here and never cloned.
+                return new THREE.RawShaderMaterial(Object.assign({
+                    glslVersion: THREE.GLSL3,
+                    vertexShader: vert,
+                    fragmentShader: frag,
+                    uniforms,
+                    depthTest: false,
+                    depthWrite: false,
+                    blending: THREE.NoBlending
+                }, extra));
+            }
+
+            // Built on first use rather than at load, so a browser without WebGL 2 never
+            // compiles a shader it cannot run.
+            function buildShared() {
+                if (built) return;
+                built = true;
+
+                carveGeom = new THREE.InstancedBufferGeometry();
+                carveGeom.setAttribute('position',
+                    new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), 2));
+                carveGeom.setIndex([0, 1, 2, 0, 2, 3]);
+                // Allocated at full capacity up front: r128 latches _maxInstanceCount off the
+                // first bind and never recomputes it, so a buffer that grows later would be
+                // silently clipped to the size it had on that first draw.
+                carveData = new THREE.InstancedInterleavedBuffer(batchArray, STRIDE);
+                carveData.setUsage(THREE.DynamicDrawUsage);
+                carveGeom.setAttribute('aSeg', new THREE.InterleavedBufferAttribute(carveData, 4, 0));
+                carveGeom.setAttribute('aTool', new THREE.InterleavedBufferAttribute(carveData, 4, 4));
+                carveGeom.setAttribute('aMeta', new THREE.InterleavedBufferAttribute(carveData, 2, 8));
+
+                carveMat = rawMaterial(CARVE_VERT, CARVE_FRAG, {
+                    uCell: { value: new THREE.Vector2() },
+                    uGridN: { value: new THREE.Vector2() },
+                    uGridV: { value: new THREE.Vector2() },
+                    uSpan: { value: 1 }
+                }, {
+                    depthTest: true,
+                    depthWrite: true,
+                    // Strictly less, not the default less-or-equal. On a tie the earlier cut
+                    // has to keep the sample, or a later pass grazing an existing floor would
+                    // repaint it without having removed anything.
+                    depthFunc: THREE.LessDepth,
+                    side: THREE.DoubleSide
+                });
+
+                const carveMesh = new THREE.Mesh(carveGeom, carveMat);
+                // Its bounding sphere is a unit quad at the origin; every instance is placed
+                // by the vertex shader, which the culler cannot see.
+                carveMesh.frustumCulled = false;
+                carveMesh.matrixAutoUpdate = false;
+                carveScene = new THREE.Scene();
+                carveScene.autoUpdate = false;
+                carveScene.add(carveMesh);
+
+                const quadGeom = new THREE.BufferGeometry();
+                quadGeom.setAttribute('position',
+                    new THREE.BufferAttribute(new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]), 2));
+                quadGeom.setIndex([0, 1, 2, 0, 2, 3]);
+
+                resolveMat = rawMaterial(QUAD_VERT, RESOLVE_FRAG, {
+                    uHeight: { value: null },
+                    uIds: { value: null },
+                    uLut: { value: null },
+                    uGridV: { value: new THREE.Vector2() },
+                    uNy: { value: 1 },
+                    uLutW: { value: 2 },
+                    uThrough: { value: 1e-5 },
+                    uBase: { value: new THREE.Color(Palette.STOCK_BASE) }
+                });
+                gougeSeedMat = rawMaterial(QUAD_VERT, GOUGE_SEED_FRAG, {
+                    uIds: { value: null },
+                    uSrcSize: { value: new THREE.Vector2() }
+                });
+                gougeMaxMat = rawMaterial(QUAD_VERT, GOUGE_MAX_FRAG, {
+                    uSrc: { value: null },
+                    uSrcSize: { value: new THREE.Vector2() }
+                });
+
+                quadMesh = new THREE.Mesh(quadGeom, resolveMat);
+                quadMesh.frustumCulled = false;
+                quadMesh.matrixAutoUpdate = false;
+                quadScene = new THREE.Scene();
+                quadScene.autoUpdate = false;
+                quadScene.add(quadMesh);
+
+                // Never read: both shaders write clip space directly. three still wants a
+                // camera to render through.
+                quadCam = new THREE.Camera();
+            }
+
+            function colorTargetOptions() {
+                return {
+                    format: THREE.RGBAFormat,
+                    type: THREE.UnsignedByteType,
+                    minFilter: THREE.NearestFilter,
+                    magFilter: THREE.NearestFilter,
+                    wrapS: THREE.ClampToEdgeWrapping,
+                    wrapT: THREE.ClampToEdgeWrapping,
+                    generateMipmaps: false,
+                    depthBuffer: false,
+                    stencilBuffer: false
+                };
+            }
+
+            return {
+                supported,
+                BATCH,
+                STRIDE,
+                batchArray,
+
+                // Everything a block needs on the GPU. `nx`/`ny` are cell counts; the height
+                // map is one texel per grid *vertex*, so its targets are one larger.
+                alloc(nx, ny, cellX, cellY, span) {
+                    buildShared();
+
+                    const nxv = nx + 1;
+                    const nyv = ny + 1;
+
+                    // FloatType is what makes this DEPTH_COMPONENT32F under WebGL 2 rather
+                    // than a 16-bit depth buffer -- at 16 bits a 14mm block quantises to
+                    // 0.2 micron steps, which is visible as terracing on a shallow ramp.
+                    // Nearest filtering is not a choice either: 32F depth is not filterable.
+                    const depthTexture = new THREE.DepthTexture(nxv, nyv, THREE.FloatType);
+                    // Marks it for allocation. Without a version bump three can reach the
+                    // framebuffer attachment before the texture object has been created.
+                    depthTexture.needsUpdate = true;
+                    const heightRT = new THREE.WebGLRenderTarget(nxv, nyv,
+                        Object.assign(colorTargetOptions(), { depthBuffer: true, depthTexture }));
+
+                    const resolveRT = new THREE.WebGLRenderTarget(nx, 2 * ny + 1, colorTargetOptions());
+
+                    const gougeChain = [];
+                    let w = nxv;
+                    let h = nyv;
+                    while (w > 1 || h > 1) {
+                        w = Math.ceil(w / REDUCE);
+                        h = Math.ceil(h / REDUCE);
+                        gougeChain.push(new THREE.WebGLRenderTarget(w, h, colorTargetOptions()));
+                    }
+
+                    return {
+                        nx, ny, nxv, nyv, cellX, cellY, span,
+                        heightRT, resolveRT, gougeChain,
+                        lut: null,
+                        lutWidth: 0,
+                        // The CPU's `bottom + max(span*1e-5, 1e-9)`, in the normalised units
+                        // the depth buffer stores, so the hole test is the same test.
+                        through: Math.max(1e-5, 1e-9 / span)
+                    };
+                },
+
+                free(gpu) {
+                    if (!gpu) return;
+                    // A render target's own dispose() does not reach an externally-assigned
+                    // depth texture. Left out, this leaks the whole height map per rebuild.
+                    gpu.heightRT.depthTexture.dispose();
+                    gpu.heightRT.dispose();
+                    gpu.resolveRT.dispose();
+                    gpu.gougeChain.forEach(rt => rt.dispose());
+                    if (gpu.lut) gpu.lut.dispose();
+                },
+
+                // colors: one 0xRRGGBB per cut id 0..n, with the rapid's colour last.
+                setLut(gpu, colors) {
+                    const width = colors.length;
+                    if (!gpu.lut || gpu.lutWidth !== width) {
+                        if (gpu.lut) gpu.lut.dispose();
+                        gpu.lut = new THREE.DataTexture(
+                            new Uint8Array(width * 4), width, 1, THREE.RGBAFormat);
+                        gpu.lut.magFilter = THREE.NearestFilter;
+                        gpu.lut.minFilter = THREE.NearestFilter;
+                        gpu.lut.generateMipmaps = false;
+                        gpu.lutWidth = width;
+                    }
+                    const data = gpu.lut.image.data;
+                    for (let i = 0; i < width; i++) {
+                        const hex = colors[i];
+                        data[i * 4] = (hex >> 16) & 0xff;
+                        data[i * 4 + 1] = (hex >> 8) & 0xff;
+                        data[i * 4 + 2] = hex & 0xff;
+                        data[i * 4 + 3] = 255;
+                    }
+                    gpu.lut.needsUpdate = true;
+                },
+
+                heightTexture(gpu) { return gpu.heightRT.depthTexture; },
+                colorTexture(gpu) { return gpu.resolveRT.texture; },
+
+                // The passes below leave the renderer where they found it. Everything they
+                // touch that is not per-material -- autoClear, the scissor, the bound target
+                // -- is reset in end().
+                begin() {
+                    renderer.autoClear = false;
+                },
+
+                end() {
+                    renderer.state.setScissorTest(false);
+                    // Restores the canvas viewport and scissor from the renderer's own,
+                    // which is what makes this safe to run in the middle of a frame.
+                    renderer.setRenderTarget(null);
+                    renderer.autoClear = true;
+                },
+
+                // Refill the block: every sample back to the top, every id back to uncut.
+                clearHeight(gpu) {
+                    renderer.setRenderTarget(gpu.heightRT);
+                    renderer.state.setScissorTest(false);
+                    // A clear is masked by the write masks, and the last material to draw is
+                    // whatever the main scene left behind. Without these two lines the clear
+                    // can silently do nothing and the old cut simply stays.
+                    renderer.state.buffers.depth.setMask(true);
+                    renderer.state.buffers.color.setMask(true);
+                    renderer.state.buffers.depth.setClear(1.0);
+                    renderer.state.buffers.color.setClear(0, 0, 0, 1);
+                    renderer.clear(true, true, false);
+                },
+
+                drawCapsules(gpu, count) {
+                    const u = carveMat.uniforms;
+                    u.uCell.value.set(gpu.cellX, gpu.cellY);
+                    u.uGridN.value.set(gpu.nx, gpu.ny);
+                    u.uGridV.value.set(gpu.nxv, gpu.nyv);
+                    u.uSpan.value = gpu.span;
+
+                    // Elements, not instances, and reset to -1 after every upload -- so this
+                    // has to be set on each flush or the whole buffer goes up each time.
+                    carveData.updateRange.offset = 0;
+                    carveData.updateRange.count = count * STRIDE;
+                    carveData.needsUpdate = true;
+                    carveGeom.instanceCount = count;
+
+                    renderer.setRenderTarget(gpu.heightRT);
+                    renderer.state.setScissorTest(false);
+                    renderer.render(carveScene, quadCam);
+                },
+
+                // rect is [cx0, cy0, cx1, cy1] in cells, inclusive, or null for the whole
+                // target (which is also the only thing that writes the skirt's spare row).
+                resolve(gpu, rect) {
+                    const u = resolveMat.uniforms;
+                    u.uHeight.value = gpu.heightRT.depthTexture;
+                    u.uIds.value = gpu.heightRT.texture;
+                    u.uLut.value = gpu.lut;
+                    u.uGridV.value.set(gpu.nxv, gpu.nyv);
+                    u.uNy.value = gpu.ny;
+                    u.uLutW.value = gpu.lutWidth;
+                    u.uThrough.value = gpu.through;
+
+                    quadMesh.material = resolveMat;
+                    renderer.setRenderTarget(gpu.resolveRT);
+
+                    if (!rect) {
+                        renderer.state.setScissorTest(false);
+                        renderer.render(quadScene, quadCam);
+                        return;
+                    }
+
+                    // Two bands of the same shape: the surface cells, and their shadow in the
+                    // bottom block. One quad, scissored twice -- the shader works out which
+                    // band it is in from its own row.
+                    const w = rect[2] - rect[0] + 1;
+                    const h = rect[3] - rect[1] + 1;
+                    renderer.state.setScissorTest(true);
+                    renderer.state.scissor(tmpScissor.set(rect[0], rect[1], w, h));
+                    renderer.render(quadScene, quadCam);
+                    renderer.state.scissor(tmpScissor.set(rect[0], gpu.ny + rect[1], w, h));
+                    renderer.render(quadScene, quadCam);
+                },
+
+                // The one value that comes back off the GPU, and it is a single bit: has any
+                // sample still standing been cut by a rapid. Folded to one texel first, so the
+                // stall is a 1x1 read rather than a megabyte.
+                readGouge(gpu) {
+                    if (gpu.gougeChain.length === 0) return false;
+                    renderer.state.setScissorTest(false);
+
+                    gougeSeedMat.uniforms.uIds.value = gpu.heightRT.texture;
+                    gougeSeedMat.uniforms.uSrcSize.value.set(gpu.nxv, gpu.nyv);
+                    quadMesh.material = gougeSeedMat;
+                    renderer.setRenderTarget(gpu.gougeChain[0]);
+                    renderer.render(quadScene, quadCam);
+
+                    quadMesh.material = gougeMaxMat;
+                    for (let i = 1; i < gpu.gougeChain.length; i++) {
+                        const src = gpu.gougeChain[i - 1];
+                        gougeMaxMat.uniforms.uSrc.value = src.texture;
+                        gougeMaxMat.uniforms.uSrcSize.value.set(src.width, src.height);
+                        renderer.setRenderTarget(gpu.gougeChain[i]);
+                        renderer.render(quadScene, quadCam);
+                    }
+
+                    const last = gpu.gougeChain[gpu.gougeChain.length - 1];
+                    renderer.readRenderTargetPixels(last, 0, 0, 1, 1, gougePixel);
+                    return gougePixel[0] > 127;
+                }
+            };
+        })();
+
         // --- Stock -------------------------------------------------------------------
         // Material removal. The stock is modelled as a Z-height map: one height sample per
-        // grid vertex. Cutting only ever lowers a height, so the surface is rebuilt from
-        // scratch whenever the simulation is scrubbed backwards.
+        // grid vertex. Cutting only ever lowers a height, so the block is refilled and
+        // replayed from the start whenever the simulation is scrubbed backwards.
         //
-        // Everything that changes the block (heights, colours, the mesh, the carve cursor)
+        // The model is the same one it has always been; what changed is where it lives. The
+        // height map and the cut ids are GPU textures now (see StockGPU), so this module
+        // never touches a sample. Its job is to turn the program into a stream of capsules,
+        // hand them over, and keep track of how far along the path it has got.
+        //
+        // Everything that changes the block (the carve cursor, the mesh, the colour table)
         // is inside this module; the rest of the file only ever asks it to rebuild, reset,
         // carve up to a distance, or flush its pending work once a frame.
         const Stock = (() => {
             // Colour comes entirely from a nearest-filtered texture holding one texel per
             // height-map cell, so the material tint is white and uncut cells are written as
             // Palette.STOCK_BASE. Every face gets exactly one flat colour: see the UV setup
-            // in buildGeometry for how a cell is pinned to its texel, and the colour pass in
-            // refresh for how a cell picks which of its corners it belongs to.
+            // in buildGeometry for how a cell is pinned to its texel, and StockGPU's resolve
+            // pass for how a cell picks which of its corners it belongs to.
             //
             // A vertex colour attribute cannot express this: colours interpolate across a
             // triangle, so every operation boundary came out as a gradient smeared over a
             // whole cell. Duplicating vertices per face would fix it too, but at six vertices
-            // per cell the position buffer -- rewritten on every carve -- grows sixfold, which
-            // the high resolutions cannot absorb. A per-cell texture costs nothing extra.
+            // per cell the position buffer grows sixfold, which the high resolutions cannot
+            // absorb. A per-cell texture costs nothing extra -- and now that the texture is a
+            // render target rather than an upload, it costs nothing per frame either.
             //
-            // three.js here is r128, which predates ColorManagement, so a hex in the texture
-            // and the same hex in `material.color` match exactly -- do not add a
-            // convertSRGBToLinear() call.
+            // three.js here is r128, which predates ColorManagement, so a hex written into
+            // the colour table and the same hex in `material.color` match exactly -- do not
+            // add a convertSRGBToLinear() call.
             // alphaTest is what opens a hole where the tool cut clean through. A height map
             // cannot describe a void -- a fully cut cell just sits at the bottom of the block,
             // coplanar with the underside, leaving a paper-thin membrane closing what should be
@@ -2809,28 +3366,80 @@
                 alphaTest: 0.5
             });
 
-            // { nx, ny, minX, minY, cellX, cellY, top, bottom, heights, cutIds, geometry,
-            //   skirt, topCount, total, colorData, colorTexture }
+            // The mesh's Z comes out of the height texture in the vertex shader, so the
+            // position buffer is written once at build time and never again -- which is the
+            // single biggest saving in the whole module: it used to be rewritten and
+            // re-uploaded in full on every carved frame, tens of megabytes at a time.
+            //
+            // These uniform objects are created once and only ever have their `.value`
+            // replaced, so a rebuild never invalidates the program. `uZ` is (bottom, span),
+            // which also supplies the test that separates the two kinds of vertex: everything
+            // that follows the height map is built at block.top and everything that does not
+            // -- the skirt's lower edge, the bottom quad -- at block.bottom, so a midpoint
+            // comparison tells them apart without a per-vertex flag.
+            const disp = {
+                uHeightTex: { value: null },
+                uInvCell: { value: new THREE.Vector2(1, 1) },
+                uTexel: { value: new THREE.Vector2(1, 1) },
+                uZ: { value: new THREE.Vector2(0, 1) }
+            };
+
+            material.onBeforeCompile = (shader) => {
+                Object.assign(shader.uniforms, disp);
+                shader.vertexShader = shader.vertexShader
+                    .replace('#include <common>', `#include <common>
+                        uniform sampler2D uHeightTex;
+                        uniform vec2 uInvCell;
+                        uniform vec2 uTexel;
+                        uniform vec2 uZ;`)
+                    // Written in the GLSL 1.00 dialect on purpose: three rewrites it for
+                    // WebGL 2 through its own defines, and this reads the same either way.
+                    // The geometry is built in block-local XY, so position.xy / cell is an
+                    // exact small integer and snapping to the texel centre has half a texel
+                    // of margin at any resolution.
+                    .replace('#include <begin_vertex>', `
+                        vec3 transformed = vec3( position );
+                        if ( position.z > uZ.x + 0.5 * uZ.y ) {
+                            vec2 gi = floor( position.xy * uInvCell + 0.5 );
+                            transformed.z = uZ.x + texture2D( uHeightTex, ( gi + 0.5 ) * uTexel ).r * uZ.y;
+                        }`);
+            };
+            // onBeforeCompile closes over module state, so the default cache key (the
+            // function's source) is not enough to tell two variants apart. There is only ever
+            // one variant here, and saying so keeps the program cache honest.
+            material.customProgramCacheKey = () => 'stock-height-displace';
+
+            // { nx, ny, minX, minY, cellX, cellY, top, bottom, geometry, gpu }
             let block = null;
             let mesh = null;
-            let geomDirty = false;
-            let colorDirty = false;
-            // Whether any rapid has removed material in the cut so far. Drives the legend
-            // key, and forces colour uploads that Uniform mode would otherwise skip.
+            // Whether anything visible on the stock was cut by a rapid. Drives the legend key.
+            // Read back off the GPU now -- see checkGouge.
             let hasGouge = false;
-            // Whether anything has reached the bottom of the block. The per-cell alpha pass
-            // exists only to punch those holes, so until one appears it can be skipped --
-            // which is what keeps Uniform mode as cheap as it was.
-            let anyThroughCut = false;
             let carvedDistance = 0;    // how far along the path the stock has been carved
             let carveSegIndex = 0;     // resume point into Program.segments for carving
             let pendingCarve = null;   // coalesces carve requests to one per animation frame
             let colorMode = 'op';
 
-            // Set by App: reporting the removed percentage and keying the gouge colour are
-            // UI decisions, and this module has no business knowing which element says so.
+            // The block has to be refilled before the next capsule is drawn. Set by a reset;
+            // consumed by the first flush that follows, so a reset costs nothing on its own.
+            let needsClear = false;
+            let resolveDirty = false;
+            // Cells touched since the last resolve, inclusive. Empty when x1 < x0.
+            let dx0 = 0, dy0 = 0, dx1 = -1, dy1 = -1;
+            let resolveAll = false;
+
+            // Capsules staged for the next flush.
+            let batchCount = 0;
+
+            // A rapid has been drawn since the flag was last checked, so it is worth asking
+            // the GPU whether any of it survived.
+            let gougeDirty = false;
+            let lastGougeCheck = 0;
+            const GOUGE_INTERVAL = 250;   // ms; the answer is a legend key, not a readout
+
+            // Set by App: keying the gouge colour is a UI decision, and this module has no
+            // business knowing which element says so.
             const hooks = {
-                onRemoved: () => {},
                 onGougeChanged: () => {}
             };
 
@@ -2912,29 +3521,42 @@
                     mesh.geometry.dispose();
                     mesh = null;
                 }
-                if (block && block.colorTexture) {
+                if (block && block.gpu) {
                     setMap(null);
-                    block.colorTexture.dispose();
+                    disp.uHeightTex.value = null;
+                    StockGPU.free(block.gpu);
                 }
                 block = null;
+                batchCount = 0;
+                needsClear = false;
+                resolveDirty = false;
+                gougeDirty = false;
                 // Nothing is cut any more, so nothing is gouged. Matters for the path where
                 // the stock is switched off entirely and resetHeights never runs.
                 if (hasGouge) {
                     hasGouge = false;
                     hooks.onGougeChanged();
                 }
-                hooks.onRemoved(0);
             }
 
             // Builds a fixed-topology mesh: a height-map top surface, four side walls that
-            // follow the boundary heights, and a flat bottom. Only vertex Z values change
-            // as material is removed, so the index buffer is built once.
+            // follow the boundary heights, and a flat bottom. Nothing in it is ever rewritten
+            // -- vertex Z is read from the height texture in the vertex shader, so the whole
+            // mesh is upload-once.
+            //
+            // XY is block-local, with the mesh placed at (minX, minY). That is not tidiness:
+            // it is what makes `position.xy / cell` come back as an exact integer in the
+            // shader, so the vertex can find its own texel by arithmetic instead of carrying
+            // a UV for it. It also keeps the carve maths away from large coordinates, where
+            // float32 would start losing the bottom bits of a sub-millimetre cell.
             function buildGeometry() {
                 const nxv = block.nx + 1;
                 const nyv = block.ny + 1;
                 const topCount = nxv * nyv;
                 const skirtCount = 4 * (nxv + nyv);
                 const total = topCount + skirtCount + 4;
+                const sizeX = block.nx * block.cellX;
+                const sizeY = block.ny * block.cellY;
 
                 const positions = new Float32Array(total * 3);
 
@@ -2949,7 +3571,16 @@
                 // the lower half showed the cut that made the wall. One texel per quad puts
                 // the whole face in one colour, with the change of colour landing exactly on
                 // the top edge where the wall meets the surface above it.
-                const uvs = new Float32Array(total * 2);
+                //
+                // Held as normalised Uint16 rather than float: the worst rounding is 1.5e-5
+                // of the texture, against a half-texel margin of 1.2e-4 at the largest grid,
+                // so the cell stays pinned to its texel -- and the buffer is half the size,
+                // which at the top resolutions is tens of megabytes that never get allocated.
+                const uvs = new Uint16Array(total * 2);
+                function setUV(vertexIndex, u, v) {
+                    uvs[vertexIndex * 2] = Math.round(u * 65535);
+                    uvs[vertexIndex * 2 + 1] = Math.round(v * 65535);
+                }
 
                 // The texture is three blocks of cells stacked: rows [0, ny) are the surface,
                 // rows [ny, 2ny) shadow them for the flat bottom, and row 2ny is a single spare
@@ -2969,8 +3600,7 @@
 
                 // Height-map vertices: cell-corner aligned.
                 function setSurfaceUV(vertexIndex, gx, gy) {
-                    uvs[vertexIndex * 2] = gx / block.nx;
-                    uvs[vertexIndex * 2 + 1] = gy / texRows;
+                    setUV(vertexIndex, gx / block.nx, gy / texRows);
                 }
 
                 // The four side walls are the original outside of the block. No tool can ever
@@ -2983,8 +3613,7 @@
                 // cut really made is the steep surface quad just inboard of it, and that one is
                 // coloured by the pass below like any other.
                 function setSkirtUV(vertexIndex) {
-                    uvs[vertexIndex * 2] = SKIRT_U;
-                    uvs[vertexIndex * 2 + 1] = SKIRT_V;
+                    setUV(vertexIndex, SKIRT_U, SKIRT_V);
                 }
 
                 // Preallocated rather than a growing JS array: the count is known exactly --
@@ -3002,8 +3631,8 @@
                 for (let gy = 0; gy < nyv; gy++) {
                     for (let gx = 0; gx < nxv; gx++) {
                         const vi = gy * nxv + gx;
-                        positions[vi * 3] = block.minX + gx * block.cellX;
-                        positions[vi * 3 + 1] = block.minY + gy * block.cellY;
+                        positions[vi * 3] = gx * block.cellX;
+                        positions[vi * 3 + 1] = gy * block.cellY;
                         positions[vi * 3 + 2] = block.top;
                         setSurfaceUV(vi, gx, gy);
                     }
@@ -3020,9 +3649,9 @@
                     }
                 }
 
-                // Side walls. `skirt` pairs each wall's top vertex with the height sample it follows.
-                const skirt = new Int32Array(skirtCount); // [vertexIndex, heightIndex, ...] for top verts
-                let skirtLen = 0;
+                // Side walls. A wall's top vertex sits at the same XY as the boundary height
+                // sample it follows, so it finds that sample in the shader by the same
+                // arithmetic every other displaced vertex uses -- no pairing table needed.
                 let v = topCount;
 
                 function addWall(heightIndices, forward) {
@@ -3036,8 +3665,6 @@
                         positions[v * 3 + 1] = py;
                         positions[v * 3 + 2] = block.top;
                         setSkirtUV(v);
-                        skirt[skirtLen++] = v;
-                        skirt[skirtLen++] = hi;
                         v++;
 
                         positions[v * 3] = px;
@@ -3068,9 +3695,7 @@
                 addWall(right, true);   // +X face
 
                 // Flat bottom, wound so its normal points down
-                const maxX = block.minX + block.nx * block.cellX;
-                const maxY = block.minY + block.ny * block.cellY;
-                const corners = [[block.minX, block.minY], [maxX, block.minY], [maxX, maxY], [block.minX, maxY]];
+                const corners = [[0, 0], [sizeX, 0], [sizeX, sizeY], [0, sizeY]];
                 // Stretched across the bottom block of the texture, in the same order as the
                 // corners, so every fragment of the quad lands on the shadow of the cell
                 // directly above it.
@@ -3080,293 +3705,237 @@
                     positions[v * 3] = c[0];
                     positions[v * 3 + 1] = c[1];
                     positions[v * 3 + 2] = block.bottom;
-                    uvs[v * 2] = cornerUVs[i][0];
-                    uvs[v * 2 + 1] = cornerUVs[i][1];
+                    setUV(v, cornerUVs[i][0], cornerUVs[i][1]);
                     v++;
                 });
                 tri(base, base + 2, base + 1);
                 tri(base, base + 3, base + 2);
 
                 const geometry = new THREE.BufferGeometry();
-                const posAttr = new THREE.BufferAttribute(positions, 3);
-                posAttr.setUsage(THREE.DynamicDrawUsage);
-                geometry.setAttribute('position', posAttr);
-                // Placeholder normals: the material is flat shaded, so shading is derived
-                // per-face in the fragment shader and this attribute is never read.
-                const normals = new Float32Array(total * 3);
-                for (let i = 0; i < total; i++) normals[i * 3 + 2] = 1;
-                geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-
-                geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-
-                // Two texels per cell -- one for the surface, one for the bottom's shadow of it
-                // -- plus the spare row the side walls read. RGBA rather than RGB so each row is
-                // 4-byte aligned, which is what WebGL's default unpack alignment expects.
-                // Everything starts as opaque uncut stock -- the bottom block keeps that colour
-                // for good and only its alpha ever moves, and the spare row never moves at all.
-                const texelCount = block.nx * texRows;
-                const colorData = new Uint8Array(texelCount * 4);
-                const baseR = (Palette.STOCK_BASE >> 16) & 0xff;
-                const baseG = (Palette.STOCK_BASE >> 8) & 0xff;
-                const baseB = Palette.STOCK_BASE & 0xff;
-                for (let i = 0; i < texelCount; i++) {
-                    colorData[i * 4] = baseR;
-                    colorData[i * 4 + 1] = baseG;
-                    colorData[i * 4 + 2] = baseB;
-                    colorData[i * 4 + 3] = 255;
-                }
-                const colorTexture = new THREE.DataTexture(colorData, block.nx, texRows, THREE.RGBAFormat);
-                // The whole point: no filtering between texels, so a cut edge is an edge.
-                colorTexture.magFilter = THREE.NearestFilter;
-                colorTexture.minFilter = THREE.NearestFilter;
-                colorTexture.generateMipmaps = false;
-                colorTexture.needsUpdate = true;
-
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                // No normal attribute at all. The material is flat shaded, so three derives
+                // the normal per-face from screen-space derivatives and the built-in
+                // `normal` attribute is left unbound -- which is legal, and saves a buffer
+                // exactly as large as the positions for something that was never read.
+                geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2, true));
                 geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+                // Correct for the life of the mesh: the static positions already span
+                // bottom to top, and displacement can only move a vertex down inside that.
                 geometry.computeBoundingSphere();
 
                 block.geometry = geometry;
-                block.skirt = skirt;
-                block.topCount = topCount;
-                block.total = total;
-                block.colorData = colorData;
-                block.colorTexture = colorTexture;
-                setMap(colorTexture);
+
+                block.gpu = StockGPU.alloc(
+                    block.nx, block.ny, block.cellX, block.cellY, block.top - block.bottom);
+                rebuildLut();
+
+                disp.uHeightTex.value = StockGPU.heightTexture(block.gpu);
+                disp.uInvCell.value.set(1 / block.cellX, 1 / block.cellY);
+                disp.uTexel.value.set(1 / (block.nx + 1), 1 / (block.ny + 1));
+                disp.uZ.value.set(block.bottom, block.top - block.bottom);
+                setMap(StockGPU.colorTexture(block.gpu));
 
                 mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(block.minX, block.minY, 0);
                 Viewer.add(mesh);
             }
 
+            // One texel per cut id, in id order, with the rapid sentinel folded onto the last
+            // slot. Colouring is a pure view over ids the carve stores regardless of mode, so
+            // switching mode rewrites this handful of bytes and repaints -- it never re-cuts.
+            function rebuildLut() {
+                // At least one cutting slot even for a file with no named operations: carveTo
+                // falls back to cut id 1 for a segment that never got an operation index, and
+                // stockColorForCutId already knows what to do with an id that has no
+                // operation behind it. Sizing to the operation count alone would clamp that
+                // id back onto uncut stock.
+                const ops = Math.max(Program.operations.length, 1);
+                const colors = new Array(ops + 2);
+                for (let i = 0; i <= ops; i++) colors[i] = Program.stockColorForCutId(i, colorMode);
+                colors[ops + 1] = Program.stockColorForCutId(Palette.RAPID_CUT_ID, colorMode);
+                StockGPU.setLut(block.gpu, colors);
+            }
+
+            // The largest grid this GPU can hold. The colour map is 2*ny+1 texels tall, which
+            // binds well before the height map's nx+1 does; the 2000 on top of that is a
+            // display-mesh budget -- index and position buffers grow with the square of it --
+            // rather than any limit of the carve.
+            function maxCells() {
+                const maxTex = Viewer.renderer.capabilities.maxTextureSize;
+                return Math.max(220, Math.min(2000, Math.floor((maxTex - 1) / 2)));
+            }
+
+            // A cell is repainted from its four corner samples, so a sample at gx feeds the
+            // cells on either side of it: gx-1 and gx. Bounds in, cells out, clamped.
+            //
+            // A cell of slack on the far side as well, because these bounds are recomputed in
+            // float32 by the vertex shader and could land one sample further out at an exact
+            // boundary. Over-painting a cell costs nothing; missing one leaves stale colour.
+            function markDirty(gx0, gy0, gx1, gy1) {
+                // A replay repaints the lot, and it is the one path where this runs hundreds
+                // of thousands of times in a frame.
+                if (resolveAll) return;
+                const cx0 = gx0 > 0 ? gx0 - 1 : 0;
+                const cy0 = gy0 > 0 ? gy0 - 1 : 0;
+                const cx1 = gx1 + 1 < block.nx ? gx1 + 1 : block.nx - 1;
+                const cy1 = gy1 + 1 < block.ny ? gy1 + 1 : block.ny - 1;
+                if (cx1 < cx0 || cy1 < cy0) return;
+                if (dx1 < dx0) { dx0 = cx0; dy0 = cy0; dx1 = cx1; dy1 = cy1; }
+                else {
+                    if (cx0 < dx0) dx0 = cx0;
+                    if (cy0 < dy0) dy0 = cy0;
+                    if (cx1 > dx1) dx1 = cx1;
+                    if (cy1 > dy1) dy1 = cy1;
+                }
+                resolveDirty = true;
+            }
+
+            function markAllDirty() {
+                resolveAll = true;
+                resolveDirty = true;
+            }
+
+            // Refill the block and rewind the carve cursor. The clear itself is deferred to
+            // the next flush, so this costs nothing on its own -- which matters, because a
+            // backward scrub lands here once per frame while the slider is moving.
             function resetHeights() {
                 if (!block) return;
-                block.heights.fill(block.top);
-                // cutIds is a shadow of heights, not an accumulator. This is also the
-                // backward-scrub path, so missing it would leave uncut stock fully coloured.
-                block.cutIds.fill(0);
+                needsClear = true;
+                batchCount = 0;
                 carvedDistance = 0;
                 carveSegIndex = 0;
-                geomDirty = true;
-                // In Uniform mode the colour texture is already all base colour and nothing
-                // has written over it, so a repaint would be pure cost. Backward scrubbing
-                // lands here once per frame. A gouge is the exception: it painted red even in
-                // Uniform mode, and scrubbing back before it has to take that red away again.
+                markAllDirty();
                 if (hasGouge) {
                     hasGouge = false;
-                    colorDirty = true;
                     hooks.onGougeChanged();
                 }
-                // Holes have to close again. The flag is cleared here, so the alpha pass would
-                // not run on its own -- force one last full pass to put the alpha back to
-                // opaque before it goes quiet.
-                if (anyThroughCut) {
-                    anyThroughCut = false;
-                    colorDirty = true;
-                }
-                if (colorMode !== 'off') colorDirty = true;
+                // The replay that follows will paint its own rapids back in, and the answer
+                // should not wait a quarter of a second to arrive.
+                gougeDirty = false;
+                lastGougeCheck = 0;
             }
 
-            // Pushes the current height map into the mesh's vertex positions, and the cut-id
-            // map into the colour texture. The two are uploaded independently: heights change
-            // on every carve, colours only when the cut set or the colour mode changes, and
-            // re-uploading a megabyte of colour every frame for nothing is the whole reason
-            // the flags are separate.
-            function refresh(doPositions, doColors) {
-                if (!block) return;
-                const attr = block.geometry.getAttribute('position');
-                const pos = attr.array;
-                const heights = block.heights;
-                const skirt = block.skirt;
+            // The renderer is only taken over for as long as there is something to draw, so an
+            // idle frame -- which is most of them once playback stops -- costs nothing at all.
+            // Opened lazily because a batch can fill up mid-carve and has to flush there.
+            let passActive = false;
 
-                if (doPositions) {
-                    for (let i = 0; i < block.topCount; i++) {
-                        pos[i * 3 + 2] = heights[i];
-                    }
-                    for (let k = 0; k < skirt.length; k += 2) {
-                        pos[skirt[k] * 3 + 2] = heights[skirt[k + 1]];
-                    }
-                    attr.needsUpdate = true;
-                }
-
-                // The alpha half of this pass follows the height map, not the cut ids, so it
-                // has to run whenever geometry moves -- but only once something has actually
-                // reached the underside. Until then there is no hole to punch and Uniform mode
-                // costs exactly what it always did.
-                const doAlpha = doPositions && anyThroughCut;
-
-                if (doColors || doAlpha) {
-                    const col = block.colorData;
-                    const cutIds = block.cutIds;
-                    const mode = colorMode;
-
-                    // Cut clean through: every corner of the cell is on the floor of the block,
-                    // so no material spans it. Compared against a hair above the bottom because
-                    // the heights are Float32 and block.bottom is not.
-                    const throughLevel = block.bottom + Math.max((block.top - block.bottom) * 1e-5, 1e-9);
-
-                    // Cache one RGB triple per distinct id so the palette lookup runs a
-                    // handful of times rather than once per vertex.
-                    const cache = new Map();
-                    function rgb(id) {
-                        let c = cache.get(id);
-                        if (c === undefined) {
-                            const hex = Program.stockColorForCutId(id, mode);
-                            c = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
-                            cache.set(id, c);
-                        }
-                        return c;
-                    }
-
-                    // A cell takes its deepest corner's cut. On a vertical wall that corner is
-                    // the one at the foot of the wall -- the sample the cut actually reached --
-                    // so the whole face carries the colour of the tool that made it. On flat
-                    // ground all four corners sit at the same height, and the tie goes to the
-                    // later operation, which keeps a boundary between two passes from drifting
-                    // into whichever corner the scan happened to visit first.
-                    //
-                    // One pass covers the whole mesh: the walls read these same texels through
-                    // their UVs, so there is no separate skirt pass, and the bottom's shadow
-                    // block is a second alpha write a fixed distance along the same buffer.
-                    const nxv = block.nx + 1;
-                    const bottomOffset = block.nx * block.ny * 4;
-                    for (let cy = 0; cy < block.ny; cy++) {
-                        for (let cx = 0; cx < block.nx; cx++) {
-                            const corner = cy * nxv + cx;
-                            const n1 = corner + 1;
-                            const n2 = corner + nxv;
-                            const n3 = n2 + 1;
-
-                            // Unrolled: this runs once per cell, which is over a million
-                            // iterations at the top resolutions. `worstH` is the highest corner,
-                            // and so the one that decides whether anything is left standing.
-                            let bestH = heights[corner];
-                            let bestId = cutIds[corner];
-                            let worstH = bestH;
-                            let h = heights[n1], id = cutIds[n1];
-                            if (h > worstH) worstH = h;
-                            if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
-                            h = heights[n2]; id = cutIds[n2];
-                            if (h > worstH) worstH = h;
-                            if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
-                            h = heights[n3]; id = cutIds[n3];
-                            if (h > worstH) worstH = h;
-                            if (h < bestH || (h === bestH && id > bestId)) { bestH = h; bestId = id; }
-
-                            const ci = (cy * block.nx + cx) * 4;
-                            if (doColors) {
-                                const c = rgb(bestId);
-                                col[ci] = c[0];
-                                col[ci + 1] = c[1];
-                                col[ci + 2] = c[2];
-                            }
-                            // Discarded by the material's alphaTest, which is the only way a
-                            // height map can show a hole rather than a membrane lying on the
-                            // floor of the block. The underside opens with it, or the hole
-                            // would be visible from above and closed from below.
-                            const alpha = worstH <= throughLevel ? 0 : 255;
-                            col[ci + 3] = alpha;
-                            col[bottomOffset + ci + 3] = alpha;
-                        }
-                    }
-                    block.colorTexture.needsUpdate = true;
-                }
-
-                // Only the height map moves the needle here, so a colour-only refresh skips
-                // this full scan and its report.
-                if (doPositions) {
-                    let removed = 0;
-                    const span = block.top - block.bottom;
-                    for (let i = 0; i < heights.length; i++) removed += block.top - heights[i];
-                    hooks.onRemoved((removed / (heights.length * span)) * 100);
-                }
+            function beginPass() {
+                if (passActive) return;
+                StockGPU.begin();
+                passActive = true;
             }
 
-            // Removes material under the swept tool travelling from (x0,y0) to (x1,y1) with
-            // its tip at height z. Each sample is cut to the height of the tool's surface at
-            // that sample's distance from the tool axis. That distance is the sample's closest
-            // approach to the swept axis: the tool is rotationally symmetric and its profile
-            // rises monotonically outward, so the closest approach is where the tool reaches
-            // lowest over the sweep. Exact for a constant-Z move; carveSweep slices the rest.
-            function carveCapsule(tool, cutId, x0, y0, x1, y1, z) {
-                const r = tool.radius;
+            function endPass() {
+                if (!passActive) return;
+                StockGPU.end();
+                passActive = false;
+            }
 
+            // Hands the staged capsules to the GPU. The clear rides along at the front so a
+            // reset can never be overtaken by the drawing it was supposed to precede.
+            function flushBatch() {
+                if (!needsClear && batchCount === 0) return;
+                beginPass();
+                if (needsClear) {
+                    StockGPU.clearHeight(block.gpu);
+                    needsClear = false;
+                }
+                if (batchCount === 0) return;
+                StockGPU.drawCapsules(block.gpu, batchCount);
+                batchCount = 0;
+            }
+
+            // Stages the swept tool travelling from (x0,y0) to (x1,y1) with its tip at height
+            // z. What the GPU then does with it is carveCapsule's old inner loop, verbatim:
+            // every sample within the tool's radius of the swept axis is cut to the height of
+            // the tool's surface at its distance from that axis. That distance is the sample's
+            // closest approach to the axis -- the tool is rotationally symmetric and its
+            // profile rises monotonically outward, so the closest approach is where the tool
+            // reaches lowest over the sweep. Exact for a constant-Z move; emitSweep slices the
+            // rest.
+            //
+            // The bounds computed here are only for the early-out and the repaint rectangle;
+            // the shader derives the same ones for itself from the same numbers.
+            function emitCapsule(tool, cutId, x0, y0, x1, y1, z) {
                 // ToolGeometry.heightAt(tool, 0) is 0 for every profile, so the tip is the
                 // tool's lowest point: nothing at all is removed once it sits above the stock.
-                if (z >= block.top) return false;
+                if (z >= block.top) return;
 
-                const gx0 = Math.max(0, Math.floor((Math.min(x0, x1) - r - block.minX) / block.cellX));
-                const gx1 = Math.min(block.nx, Math.ceil((Math.max(x0, x1) + r - block.minX) / block.cellX));
-                const gy0 = Math.max(0, Math.floor((Math.min(y0, y1) - r - block.minY) / block.cellY));
-                const gy1 = Math.min(block.ny, Math.ceil((Math.max(y0, y1) + r - block.minY) / block.cellY));
-                if (gx1 < gx0 || gy1 < gy0) return false;
+                const r = tool.radius;
+                // Block-local, which is the space the instance is written in and the space the
+                // shader works in. Nothing downstream ever sees a machine coordinate.
+                const ax = x0 - block.minX, ay = y0 - block.minY;
+                const bx = x1 - block.minX, by = y1 - block.minY;
 
-                const dx = x1 - x0;
-                const dy = y1 - y0;
-                const lenSq = dx * dx + dy * dy;
-                const r2 = tool.r2;
-                const flatSq = tool.flatSq;
-                const blockBottom = block.bottom;
-                const nxv = block.nx + 1;
-                const heights = block.heights;
-                const cutIds = block.cutIds;
-                let changed = false;
+                const gx0 = Math.max(0, Math.floor((Math.min(ax, bx) - r) / block.cellX));
+                const gx1 = Math.min(block.nx, Math.ceil((Math.max(ax, bx) + r) / block.cellX));
+                const gy0 = Math.max(0, Math.floor((Math.min(ay, by) - r) / block.cellY));
+                const gy1 = Math.min(block.ny, Math.ceil((Math.max(ay, by) + r) / block.cellY));
+                if (gx1 < gx0 || gy1 < gy0) return;
 
-                for (let gy = gy0; gy <= gy1; gy++) {
-                    const py = block.minY + gy * block.cellY;
-                    const rowBase = gy * nxv;
-                    for (let gx = gx0; gx <= gx1; gx++) {
-                        const px = block.minX + gx * block.cellX;
+                markDirty(gx0, gy0, gx1, gy1);
 
-                        let t = lenSq > 0 ? ((px - x0) * dx + (py - y0) * dy) / lenSq : 0;
-                        if (t < 0) t = 0; else if (t > 1) t = 1;
+                if (batchCount === StockGPU.BATCH) flushBatch();
 
-                        const ex = px - (x0 + t * dx);
-                        const ey = py - (y0 + t * dy);
-                        const distSq = ex * ex + ey * ey;
-                        if (distSq > r2) continue;
-
-                        // A flat end mill has flatSq === r2, so it never reaches the sqrt.
-                        let target = distSq <= flatSq ? z : z + ToolGeometry.heightAt(tool, Math.sqrt(distSq));
-                        if (target < blockBottom) {
-                            target = blockBottom;
-                            // Reaching the underside is what the alpha pass looks for; noting
-                            // it here saves that pass from running at all until it can matter.
-                            anyThroughCut = true;
-                        }
-
-                        const hi = rowBase + gx;
-                        if (heights[hi] > target) {
-                            heights[hi] = target;
-                            cutIds[hi] = cutId;
-                            changed = true;
-                        }
-                    }
-                }
-                return changed;
+                const a = StockGPU.batchArray;
+                const o = batchCount * StockGPU.STRIDE;
+                a[o] = ax;
+                a[o + 1] = ay;
+                a[o + 2] = bx;
+                a[o + 3] = by;
+                a[o + 4] = z - block.bottom;
+                a[o + 5] = r;
+                a[o + 6] = tool.flatRadius;
+                // The cone's 1/tan(wall) and the corner radius are never both in play -- see
+                // ToolGeometry.heightAt, whose two arms are exclusive -- so one float carries
+                // whichever this tool needs and the flag below says which.
+                a[o + 7] = tool.isCone ? tool.invTanWall : tool.cornerRadius;
+                a[o + 8] = cutId;
+                a[o + 9] = tool.isCone ? 1 : 0;
+                batchCount++;
             }
 
             // A capsule covers the full XY sweep of a move exactly, however long it is, so
             // slicing is only needed to follow a changing Z (ramps, plunges, helical arcs).
             // One slice per cell-sized drop keeps the Z error at the model's resolution.
-            function carveSweep(tool, cutId, ax, ay, az, bx, by, bz) {
+            function emitSweep(tool, cutId, ax, ay, az, bx, by, bz) {
                 const zTol = Math.min(block.cellX, block.cellY);
-                if (Math.abs(az - bz) <= zTol) return carveCapsule(tool, cutId, ax, ay, bx, by, Math.min(az, bz));
+                if (Math.abs(az - bz) <= zTol) {
+                    emitCapsule(tool, cutId, ax, ay, bx, by, Math.min(az, bz));
+                    return;
+                }
 
                 const slices = Math.min(4000, Math.max(1, Math.ceil(Math.abs(bz - az) / zTol)));
-                let changed = false;
 
-                for (let k = 0; k < slices; k++) {
+                // A slice's cutting height moves monotonically along the move, so the slices
+                // that are below the stock at all form one contiguous run. Solving for it
+                // matters: a retract from the floor of a deep pocket is thousands of slices,
+                // nearly all of them in free air above the block, and each one that reaches
+                // emitCapsule is a wasted instance rather than a wasted sample loop.
+                const dz = bz - az;
+                const cut = (block.top - az) * slices / dz;
+                let kLo = 0;
+                let kHi = slices;
+                if (isFinite(cut)) {
+                    // A slice either side of the solved boundary, because emitCapsule's own
+                    // z >= top test is the authority and this only has to avoid missing work.
+                    if (dz > 0) kHi = Math.min(slices, Math.max(0, Math.floor(cut) + 2));
+                    else kLo = Math.max(0, Math.floor(cut) - 1);
+                }
+
+                for (let k = kLo; k < kHi; k++) {
                     const t0 = k / slices;
                     const t1 = (k + 1) / slices;
-                    const z0 = az + (bz - az) * t0;
-                    const z1 = az + (bz - az) * t1;
-                    if (carveCapsule(
+                    const z0 = az + dz * t0;
+                    const z1 = az + dz * t1;
+                    emitCapsule(
                         tool, cutId,
                         ax + (bx - ax) * t0, ay + (by - ay) * t0,
                         ax + (bx - ax) * t1, ay + (by - ay) * t1,
                         Math.min(z0, z1)
-                    )) changed = true;
+                    );
                 }
-                return changed;
             }
 
             function carveTo(dist) {
@@ -3377,8 +3946,6 @@
                 if (dist <= carvedDistance) return;
 
                 const segments = Program.segments;
-                let changed = false;
-                let gouged = false;
                 for (let i = carveSegIndex; i < segments.length; i++) {
                     const seg = segments[i];
                     if (seg.startDist >= dist) break;
@@ -3400,14 +3967,15 @@
                         const isRapid = seg.motion === 'G0';
                         const cutId = isRapid ? Palette.RAPID_CUT_ID
                             : (seg.opIndex != null ? seg.opIndex + 1 : 1);
-                        if (carveSweep(
+                        emitSweep(
                             tool, cutId,
                             seg.start[0] + dxs * t0, seg.start[1] + dys * t0, seg.start[2] + dzs * t0,
                             seg.start[0] + dxs * t1, seg.start[1] + dys * t1, seg.start[2] + dzs * t1
-                        )) {
-                            changed = true;
-                            if (isRapid) gouged = true;
-                        }
+                        );
+                        // Whether it removed anything is the depth test's business, not ours.
+                        // All the CPU knows is that some red was offered up, which is enough
+                        // to make the question worth asking the GPU.
+                        if (isRapid) gougeDirty = true;
                     }
 
                     if (segEnd <= dist) carveSegIndex = i + 1;
@@ -3416,21 +3984,26 @@
 
                 carvedDistance = dist;
 
-                // The key for red only appears once there is red to explain.
-                if (gouged && !hasGouge) {
-                    hasGouge = true;
-                    hooks.onGougeChanged();
-                }
+                // Red already on screen can be machined away by what comes after it, so while
+                // there is any, keep asking. Once there is none the question stops being asked
+                // until the next rapid offers some.
+                if (hasGouge) gougeDirty = true;
+            }
 
-                if (changed) {
-                    geomDirty = true;
-                    // Only worth re-uploading the colour texture if it is actually being
-                    // looked at. In Uniform mode every cell already holds the base colour, so
-                    // playback costs exactly what it did before colouring existed -- unless a
-                    // gouge has painted something red, which Uniform mode still has to show,
-                    // and which later cuts can paint back over.
-                    if (colorMode !== 'off' || hasGouge) colorDirty = true;
-                }
+            // The one value that comes back off the GPU: is any of the surface still standing
+            // red. Throttled, because a readback is a pipeline stall however small the read,
+            // and because this drives a legend key rather than anything you watch move.
+            //
+            // Note the change of meaning from the height-map days, and it is the better one:
+            // the flag now says "there is red on screen", not "a rapid cut something once".
+            // A gouge that a later operation machined away no longer keeps the key alive.
+            function checkGouge(now) {
+                lastGougeCheck = now;
+                gougeDirty = false;
+                const found = StockGPU.readGouge(block.gpu);
+                if (found === hasGouge) return;
+                hasGouge = found;
+                hooks.onGougeChanged();
             }
 
             return {
@@ -3441,12 +4014,20 @@
                 suggestExtents,
                 resetHeights,
 
+                // Every pass here writes gl_FragDepth or samples a float depth texture, so
+                // there is no meaningful software fallback -- the whole model lives in
+                // shaders. App disables the panel rather than pretending otherwise.
+                isSupported() { return StockGPU.supported; },
+                maxCells,
+
                 // Colouring is a pure view over the stored cut ids, which are accumulated
-                // regardless of the selected mode, so this repaints without touching the
-                // height map.
+                // regardless of the selected mode, so this rewrites a few dozen texels of
+                // colour table and repaints. It never touches the height map.
                 setColorMode(mode) {
                     colorMode = mode;
-                    colorDirty = true;
+                    if (!block) return;
+                    rebuildLut();
+                    markAllDirty();
                 },
 
                 // cfg: { enabled, top, bottom, margin, cells, distance }. Anything not
@@ -3454,7 +4035,7 @@
                 // makes an emptied input field behave rather than blow the block away.
                 rebuild(cfg) {
                     dispose();
-                    if (!cfg.enabled || Program.isEmpty()) return;
+                    if (!StockGPU.supported || !cfg.enabled || Program.isEmpty()) return;
 
                     let top = cfg.top;
                     let bottom = cfg.bottom;
@@ -3474,26 +4055,22 @@
                     const sizeY = Math.max((fp.maxY - fp.minY) + 2 * margin, 1e-3);
 
                     // Square-ish cells sized so the longest side gets the requested sample
-                    // count. The cap is a backstop against a malformed value, not a working
-                    // limit: `target` is set from the longest side, so neither axis can exceed
-                    // `cells` on its own. It has to stay at or above the largest option.
-                    const cells = cfg.cells || 500;
+                    // count. The cap is what this GPU can actually hold, and is also applied
+                    // to the menu itself; `target` is set from the longest side, so neither
+                    // axis can exceed `cells` on its own.
+                    const limit = maxCells();
+                    const cells = Math.min(cfg.cells || 500, limit);
                     const target = Math.max(sizeX, sizeY) / cells;
-                    const nx = Math.max(1, Math.min(1600, Math.round(sizeX / target)));
-                    const ny = Math.max(1, Math.min(1600, Math.round(sizeY / target)));
+                    const nx = Math.max(1, Math.min(limit, Math.round(sizeX / target)));
+                    const ny = Math.max(1, Math.min(limit, Math.round(sizeY / target)));
 
                     block = {
                         nx, ny, minX, minY,
                         cellX: sizeX / nx,
                         cellY: sizeY / ny,
                         top, bottom,
-                        heights: new Float32Array((nx + 1) * (ny + 1)),
-                        // Strict shadow of `heights`: operation index + 1, 0 for uncut.
-                        // Cleared in lockstep by resetHeights(). Uint16 because operation
-                        // counts can exceed 255.
-                        cutIds: new Uint16Array((nx + 1) * (ny + 1)),
-                        skirt: null,
-                        geometry: null
+                        geometry: null,
+                        gpu: null
                     };
 
                     buildGeometry();
@@ -3503,20 +4080,39 @@
 
                 requestCarve(dist) { pendingCarve = dist; },
 
-                // Once per animation frame. Carving is coalesced so that dragging the
-                // progress slider (which can force a full re-cut) doesn't queue up work per
-                // event, and the two uploads are flushed together after it.
+                // Once per animation frame, and the only place any of this touches the
+                // renderer. Carving is coalesced so that dragging the progress slider -- which
+                // can force a replay of the whole program -- costs one carve per frame rather
+                // than one per event.
                 update() {
-                    if (pendingCarve !== null) {
-                        const target = pendingCarve;
-                        pendingCarve = null;
-                        carveTo(target);
+                    if (!block) return;
+
+                    const target = pendingCarve;
+                    pendingCarve = null;
+                    if (target !== null) carveTo(target);
+
+                    flushBatch();
+
+                    if (resolveDirty) {
+                        beginPass();
+                        // A replay repaints everything, which is also the only thing that
+                        // writes the spare row the skirt reads. Ordinary playback repaints the
+                        // handful of cells the frame's capsules actually touched.
+                        StockGPU.resolve(block.gpu,
+                            resolveAll || dx1 < dx0 ? null : [dx0, dy0, dx1, dy1]);
+                        resolveDirty = false;
+                        resolveAll = false;
+                        dx1 = -1;
+                        dy1 = -1;
                     }
-                    if (geomDirty || colorDirty) {
-                        refresh(geomDirty, colorDirty);
-                        geomDirty = false;
-                        colorDirty = false;
+
+                    const now = performance.now();
+                    if (gougeDirty && (now - lastGougeCheck) >= GOUGE_INTERVAL) {
+                        beginPass();
+                        checkGouge(now);
                     }
+
+                    endPass();
                 }
             };
         })();
@@ -3655,6 +4251,10 @@
             const MANUAL_TOOL_FIELDS =
                 ['tool-diameter', 'tool-type', 'tool-corner-radius', 'tool-wall-angle', 'tool-tip-diameter'];
 
+            // Latched by disableStock(). Once the panel is off for want of WebGL 2 its hint
+            // says why, and the ordinary "enter a tool diameter" hint must not overwrite it.
+            let stockDisabled = false;
+
             function readManualTool() {
                 const diameter = numberFrom('tool-diameter', NaN);
                 if (isNaN(diameter) || diameter <= 0) return null;
@@ -3774,8 +4374,53 @@
                     el('stock-bottom').value = ext.bottom.toFixed(2);
                 },
                 resetMargin() { el('stock-margin').value = '5'; },
-                showRemoved(pct) { el('stock-removed').innerText = `${pct.toFixed(1)} %`; },
-                showStockHint(show) { el('stock-hint').style.display = show ? 'block' : 'none'; },
+                showStockHint(show) {
+                    if (stockDisabled) return;
+                    el('stock-hint').style.display = show ? 'block' : 'none';
+                },
+
+                // The GPU decides the ceiling, not the file: the colour map is 2*ny+1 texels
+                // tall, so a device with a small MAX_TEXTURE_SIZE cannot hold the upper tiers.
+                // They are disabled rather than removed, so the list still reads as a scale and
+                // the reason is stated instead of a silently shorter menu.
+                limitStockRes(maxCells) {
+                    const select = el('stock-res');
+                    let best = null;
+                    let limited = false;
+                    for (const opt of select.options) {
+                        opt.disabled = parseInt(opt.value, 10) > maxCells;
+                        if (opt.disabled) limited = true;
+                        else best = opt.value;
+                    }
+                    if (select.selectedOptions[0] && select.selectedOptions[0].disabled && best !== null) {
+                        select.value = best;
+                    }
+                    const hint = el('stock-res-hint');
+                    hint.innerText = limited
+                        ? `This GPU caps the stock grid at ${maxCells} samples per side.`
+                        : '';
+                    hint.style.display = limited ? 'block' : 'none';
+                },
+
+                // No WebGL 2, no stock simulation: the carve, the colouring and the surface
+                // itself all live in shaders now. The rest of the viewer is untouched, so the
+                // panel is disabled in place rather than hidden.
+                disableStock(message) {
+                    stockDisabled = true;
+                    el('stock-enabled').checked = false;
+                    el('stock-enabled').disabled = true;
+                    el('stock-res').disabled = true;
+                    // Off, not just disabled: nothing is drawn, so the stock's colour key
+                    // would be a legend for something that is not on screen.
+                    el('stock-color-mode').value = 'off';
+                    el('stock-color-mode').disabled = true;
+                    // "Use tool geometry from G-code file" stays live: it also decides which
+                    // cutter the playback marker wears, which is worth having without a block.
+                    ['stock-margin', 'stock-top', 'stock-bottom', 'btn-stock-fit']
+                        .forEach(id => { el(id).disabled = true; });
+                    el('stock-hint').innerText = message;
+                    el('stock-hint').style.display = 'block';
+                },
 
                 useFileTools() { return el('use-file-tools').checked; },
 
@@ -4444,7 +5089,9 @@
                     if (dist !== null) seek(dist);
                 }
 
-                // Carve requests and the two GPU uploads, coalesced to once per frame.
+                // Carve requests and the stock's GPU passes, coalesced to once per frame.
+                // Before Viewer.render(), because the surface it draws is read straight out of
+                // the targets these passes write.
                 Stock.update();
 
                 // Before controls.update(), which reads the camera position back out: a swing
@@ -4517,9 +5164,21 @@
                     }
                 });
 
-                Stock.hooks.onRemoved = Sidebar.showRemoved;
                 Stock.hooks.onGougeChanged = () => Legends.updateStock();
                 Simulation.hooks.onStopped = () => Playback.showPlaying(false);
+
+                // The stock simulation is a set of shader passes now, so it stands or falls
+                // with WebGL 2. Everything else in the viewer -- the toolpath, the playback,
+                // the readouts -- is untouched by this, which is why only the one panel goes.
+                // Before the colour mode is read, so the stock legend goes with it.
+                if (!Stock.isSupported()) {
+                    Sidebar.disableStock(
+                        'The stock simulation needs WebGL 2, which this browser or graphics '
+                        + 'card does not provide. Everything else still works.');
+                } else {
+                    Sidebar.limitStockRes(Stock.maxCells());
+                }
+
                 Stock.setColorMode(Sidebar.stockColorMode());
 
                 // Initialise the legends and the tool state (which hides the fields the

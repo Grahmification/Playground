@@ -1043,10 +1043,9 @@ attr.needsUpdate = true;</code></pre>
       <code>Float32</code> and <code>stock.bottom</code> is not.</p>
 
     <p class="note"><span class="tag">Why the modes are free</span>
-      Uniform, By Tool and By Operation are all views of the same <code>cutIds</code> array. Switching
-      mode is a repaint, never a re-cut. And in Uniform mode every texel already holds the base colour,
-      so the colour upload is skipped entirely — unless a gouge has painted something red, which Uniform
-      still has to show.</p>
+      Uniform, By Tool and By Operation are all views of the same cut ids, which the carve records
+      whatever the mode happens to be. The mode lives in a colour table of a few dozen texels, one per
+      id; switching mode rewrites that table and repaints. It is never a re-cut.</p>
   </section>
 
   <!-- ==================================================================== -->
@@ -1055,12 +1054,18 @@ attr.needsUpdate = true;</code></pre>
 
     <p>Carving is driven from the animation frame, not from input events. <code>requestCarve(dist)</code>
       only sets a pending value; the loop consumes at most one carve per frame. Dragging the progress
-      slider — which can force a full re-cut on every pointer move — therefore costs one carve per
-      frame rather than one per event.</p>
+      slider — which can force a replay of the whole program on every pointer move — therefore costs
+      one carve per frame rather than one per event.</p>
+
+    <p>What the CPU does per frame is now only bookkeeping. <code>carveTo</code> walks the segments it
+      has not reached yet and turns each one into <strong>capsules</strong> — one per constant-Z sweep,
+      more where the Z is ramping — writing ten floats each into a staging buffer of 65,536. When that
+      buffer fills it is uploaded and drawn, and filling starts again. Nothing else on the CPU touches
+      the stock: the height map, the cut ids and the colour texture are all GPU-side.</p>
 
     <figure class="wide">
       <div class="svg-scroll">
-      <svg viewBox="0 0 760 300" role="img" aria-label="Flow from a carve request through the frame loop: coalesced into pendingCarve, then either an incremental forward carve or a full reset and re-cut, setting two dirty flags that drive separate position and texture uploads.">
+      <svg viewBox="0 0 760 300" role="img" aria-label="Flow from a carve request through the frame loop: coalesced into pendingCarve, then carveTo emits capsules into a staging batch, which is drawn by the carve pass into the depth buffer and then repainted by the resolve pass. Scrubbing backwards refills the block and replays from the start.">
         <defs>
           <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
@@ -1083,41 +1088,71 @@ attr.needsUpdate = true;</code></pre>
           <text x="79"  y="128">requestCarve()</text>
           <text x="255" y="128">pendingCarve</text>
           <text x="436" y="128">carveTo(dist)</text>
-          <text x="649" y="80">stockGeomDirty</text>
-          <text x="649" y="176">stockColorDirty</text>
-          <text x="348" y="248" fill="var(--alarm)">resetStockHeights() &rarr; re-cut from 0</text>
+          <text x="649" y="80">carve pass</text>
+          <text x="649" y="176">resolve pass</text>
+          <text x="348" y="248" fill="var(--alarm)">refill the block &rarr; replay from 0</text>
         </g>
         <g class="s-lbl-sm" text-anchor="middle">
           <text x="79"  y="144">from scrub or play</text>
           <text x="255" y="144">one per frame</text>
-          <text x="436" y="144">forward only</text>
-          <text x="649" y="96">&rarr; positions upload</text>
-          <text x="649" y="192">&rarr; texture upload</text>
+          <text x="436" y="144">emits capsules</text>
+          <text x="649" y="96">depth test &rarr; height + id</text>
+          <text x="649" y="192">cells &rarr; colour + alpha</text>
         </g>
 
         <g stroke="currentColor" stroke-width="1.3" fill="none" marker-end="url(#ar4)">
           <line x1="138" y1="130" x2="190" y2="130"/>
           <line x1="314" y1="130" x2="366" y2="130"/>
           <path d="M500,120 L528,120 L528,82 L552,82"/>
-          <path d="M500,140 L528,140 L528,178 L552,178"/>
+          <path d="M649,104 L649,150"/>
         </g>
 
-        <!-- backward branch: down into the reset, then straight back out into carveTo -->
+        <!-- backward branch: down into the refill, then straight back out into carveTo -->
         <g stroke="var(--alarm)" stroke-width="1.3" fill="none" marker-end="url(#ar4r)">
           <path d="M410,152 L410,226"/>
           <path d="M452,226 L452,154"/>
         </g>
         <text class="s-lbl-sm" x="400" y="196" text-anchor="end" fill="var(--alarm)">dist &lt; carvedDistance</text>
-        <text class="s-lbl-sm" x="462" y="196" fill="var(--alarm)">re-cut</text>
+        <text class="s-lbl-sm" x="462" y="196" fill="var(--alarm)">replay</text>
 
         <text class="s-lbl-sm" x="20" y="42">Forward playback resumes at carveSegIndex and only ever lowers heights.</text>
-        <text class="s-lbl-sm" x="20" y="290">Two flags, because heights change every carve and colours only when the cut set or the mode does.</text>
+        <text class="s-lbl-sm" x="20" y="290">The resolve pass is scissored to the cells the frame's capsules actually touched.</text>
       </svg>
       </div>
-      <figcaption><b>Fig. 5</b>The asymmetry is the point. Forward is incremental and resumes mid-path;
-        backward has to refill the block and re-cut, because a height map cannot remember what it
-        removed.</figcaption>
+      <figcaption><b>Fig. 5</b>The asymmetry is still there — forward is incremental and resumes
+        mid-path, backward has to refill the block and replay, because a height map cannot remember
+        what it removed — but it no longer costs what it did. Replaying is a stream of capsules through
+        the same small buffer, and the arithmetic is the depth unit's.</figcaption>
     </figure>
+
+    <h3>The height map is the depth buffer</h3>
+
+    <p>The carve pass draws one quad per capsule, sized to exactly the grid samples that capsule can
+      reach, into an offscreen target whose <em>depth attachment</em> is the height map. Each fragment
+      works out its own sample's distance from the swept tool axis, raises the tool's tip height by the
+      profile at that distance, and writes the result as its depth. Then the depth test — set to
+      strictly less, not the default less-or-equal — does the rest:</p>
+
+<pre><code>if (heights[hi] &gt; target) { heights[hi] = target; cutIds[hi] = cutId; }</code></pre>
+    <span class="src">what the depth unit now does</span>
+
+    <p>The comparison, the minimum and the write are one fixed-function operation. The cut id rides
+      along in the colour attachment, and lands only when the depth test passed — which is what keeps
+      it a shadow of the height rather than an accumulator, tie included: an equal target fails a strict
+      less-than and leaves the earlier id standing.</p>
+
+    <p class="note"><span class="tag">Why batching is safe</span>
+      The final depth is the minimum over every capsule, whatever order they were drawn in and however
+      they were split across draws. The id that survives belongs to the first capsule, in draw order, to
+      reach that minimum. So streaming a program through a 65,536-capsule buffer gives bit-identical
+      results to one impossible draw of all of it — which is what makes a fixed, small buffer enough for
+      a file of any size.</p>
+
+    <p>Two consequences worth naming. The mesh's vertex Z is read from that depth texture in the vertex
+      shader, so the position buffer is written once when the block is built and never again — the
+      surface changes with no upload at all. And nothing can be read back: WebGL cannot return a depth
+      attachment to the CPU, so the simulation is write-only. The single exception is the gouge key,
+      which is one bit, reduced on the GPU to one texel before it is read.</p>
 
     <p>Inside <code>carveTo</code>, each segment contributes only the arc-length interval that the new
       distance actually covers. Those bounds are converted back into parameters along the segment and
@@ -1231,9 +1266,11 @@ const t1 = (b - seg.startDist) / seg.length;</code></pre>
   </section>
 
   <footer>
-    Notes on the stock simulation in <code>g-code viewer.html</code> &mdash;
-    <code>rebuildStock</code>, <code>buildStockGeometry</code>, <code>carveCapsule</code>,
-    <code>carveSweep</code>, <code>carveTo</code> and <code>refreshStockGeometry</code>.
+    Notes on the stock simulation in <code>g-code viewer.html</code> &mdash; the <code>Stock</code>
+    module (<code>rebuild</code>, <code>buildGeometry</code>, <code>emitCapsule</code>,
+    <code>emitSweep</code>, <code>carveTo</code>, <code>resetHeights</code>) and the
+    <code>StockGPU</code> module behind it (<code>alloc</code>, <code>clearHeight</code>,
+    <code>drawCapsules</code>, <code>resolve</code>, <code>readGouge</code>).
     Line references intentionally omitted; the function names are stable.
   </footer>
 
