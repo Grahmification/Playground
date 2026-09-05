@@ -833,12 +833,11 @@
                 <div class="control-group">
                     <label for="stock-res">Stock Resolution</label>
                     <select id="stock-res">
-                        <option value="220">Low</option>
-                        <option value="360">High</option>
-                        <option value="500" selected>Very High</option>
-                        <option value="800">Extra High</option>
-                        <option value="1200">Ultra</option>
-                        <option value="1600">Extreme</option>
+                        <option value="360">Low</option>
+                        <option value="500" selected>Medium</option>
+                        <option value="800">High</option>
+                        <option value="1200">Very High</option>
+                        <option value="1600">Ultra</option>
                         <option value="2000">Maximum</option>
                     </select>
                     <div id="stock-res-hint" class="hint hint-muted" style="display: none;"></div>
@@ -3762,7 +3761,9 @@
             // rather than any limit of the carve.
             function maxCells() {
                 const maxTex = Viewer.renderer.capabilities.maxTextureSize;
-                return Math.max(220, Math.min(2000, Math.floor((maxTex - 1) / 2)));
+                // The floor is the lowest tier in the menu: clamping below it would leave
+                // nothing selectable, and no GPU that can run these shaders is that small.
+                return Math.max(360, Math.min(2000, Math.floor((maxTex - 1) / 2)));
             }
 
             // A cell is repainted from its four corner samples, so a sample at gx feeds the

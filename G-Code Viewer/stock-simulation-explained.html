@@ -589,38 +589,46 @@ cutIds:  new Uint16Array((nx + 1) * (ny + 1)),</code></pre>
       the same target cell size, so cells come out square-ish rather than stretched:</p>
 
     <div class="eq">
+      <div>limit  = min(2000, (maxTextureSize − 1) / 2)</div>
       <div>target = max(sizeX, sizeY) / cells</div>
-      <div>nx     = clamp(round(sizeX / target), 1, 1600)</div>
-      <div>ny     = clamp(round(sizeY / target), 1, 1600)</div>
+      <div>nx     = clamp(round(sizeX / target), 1, limit)</div>
+      <div>ny     = clamp(round(sizeY / target), 1, limit)</div>
       <div>cellX  = sizeX / nx        cellY = sizeY / ny</div>
     </div>
 
-    <p>The 1600 cap is a backstop against a malformed value in the select, not a working limit —
-      <code>target</code> is set from the longest side, so neither axis can exceed <code>cells</code>
-      on its own.</p>
+    <p><code>target</code> is set from the longest side, so neither axis can exceed <code>cells</code>
+      on its own; the <code>limit</code> is what the hardware will actually hold. The colour texture is
+      <code>2·ny + 1</code> texels tall, which runs into <code>MAX_TEXTURE_SIZE</code> well before the
+      height map's <code>nx + 1</code> does — hence the halving. The 2000 on top of that is a budget for
+      the display mesh, not a limit of the carve.</p>
 
     <div class="table-wrap wide">
       <table>
         <thead>
           <tr>
             <th>Setting</th><th class="num">Cells (long axis)</th><th class="num">Samples (square job)</th>
-            <th class="num">heights + cutIds</th><th class="num">All buffers</th>
+            <th class="num">GPU targets</th><th class="num">Display mesh</th><th class="num">Total</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td>Low</td><td class="num">220</td><td class="num">48,841</td><td class="num">0.29 MB</td><td class="num">≈ 3 MB</td></tr>
-          <tr><td>High</td><td class="num">360</td><td class="num">130,321</td><td class="num">0.78 MB</td><td class="num">≈ 9 MB</td></tr>
-          <tr><td>Very High</td><td class="num">500</td><td class="num">251,001</td><td class="num">1.51 MB</td><td class="num">≈ 18 MB</td></tr>
-          <tr><td>Ultra</td><td class="num">1200</td><td class="num">1,442,401</td><td class="num">8.65 MB</td><td class="num">≈ 101 MB</td></tr>
+          <tr><td>Low</td><td class="num">360</td><td class="num">130,321</td><td class="num">2.1 MB</td><td class="num">5.2 MB</td><td class="num">≈ 7 MB</td></tr>
+          <tr><td>Medium</td><td class="num">500</td><td class="num">251,001</td><td class="num">4.0 MB</td><td class="num">10.0 MB</td><td class="num">≈ 14 MB</td></tr>
+          <tr><td>High</td><td class="num">800</td><td class="num">641,601</td><td class="num">10.3 MB</td><td class="num">25.6 MB</td><td class="num">≈ 36 MB</td></tr>
+          <tr><td>Very High</td><td class="num">1200</td><td class="num">1,442,401</td><td class="num">23.1 MB</td><td class="num">57.7 MB</td><td class="num">≈ 81 MB</td></tr>
+          <tr><td>Ultra</td><td class="num">1600</td><td class="num">2,563,201</td><td class="num">41.0 MB</td><td class="num">102.4 MB</td><td class="num">≈ 143 MB</td></tr>
+          <tr><td>Maximum</td><td class="num">2000</td><td class="num">4,004,001</td><td class="num">64.1 MB</td><td class="num">160.1 MB</td><td class="num">≈ 224 MB</td></tr>
         </tbody>
       </table>
     </div>
 
     <p class="note"><span class="tag">Where the memory goes</span>
-      At Ultra on a square job the height map itself is the small part. Positions and normals are
-      17.4&nbsp;MB each, the index buffer is 34.7&nbsp;MB, UVs are 11.6&nbsp;MB, and the colour texture
-      is 11.5&nbsp;MB. That index buffer is written once at build time and never touched again, which
-      is exactly the trade the fixed-topology mesh in §6 is making.</p>
+      Not where you would expect. The simulation itself is the cheap half: a 32-bit depth texture and a
+      cut-id texture at one texel per sample, plus the colour map. What costs is the mesh that
+      <em>displays</em> it, and within that the index buffer — 96&nbsp;MB of the 160&nbsp;MB at Maximum,
+      six <code>Uint32</code> indices per cell. It is written once at build time and never touched
+      again, which is the trade the fixed-topology mesh in §6 is making; it is also why the resolution
+      ceiling is where it is. Getting past it means generating the surface grid procedurally rather than
+      storing it, not making the carve any cleverer.</p>
   </section>
 
   <!-- ==================================================================== -->
