@@ -1162,6 +1162,17 @@ attr.needsUpdate = true;</code></pre>
       attachment to the CPU, so the simulation is write-only. The single exception is the gouge key,
       which is one bit, reduced on the GPU to one texel before it is read.</p>
 
+    <p class="note"><span class="tag">Where that one bit lives</span>
+      In the alpha channel of the same attachment the cut id is written to — and WebGL&nbsp;2 lets RGB
+      and alpha carry separate blend equations, so the two halves of that texel follow different rules.
+      RGB blends add-with-zero-destination, which is a plain overwrite: the id is a shadow of the
+      height, replaced whenever the sample drops. Alpha blends <code>MAX</code>, so it can only ever go
+      up. A rapid's fragment reaches blending only if it passed the depth test, which is exactly
+      <em>this rapid removed material</em> — so the bit records that it happened and nothing can take it
+      back. That is what lets the legend key stay up after a later operation has machined the red away,
+      and it is also why sampling the bit on a timer is sound: the answer only ever goes from no to yes,
+      so no polling interval can step over a gouge that appeared and was covered in between.</p>
+
     <p>Inside <code>carveTo</code>, each segment contributes only the arc-length interval that the new
       distance actually covers. Those bounds are converted back into parameters along the segment and
       handed to the sweep:</p>

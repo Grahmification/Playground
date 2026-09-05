@@ -2834,7 +2834,7 @@
             let built = false;
             let carveGeom, carveData, carveMat, carveScene;
             let quadMesh, quadScene, quadCam;
-            let resolveMat, gougeSeedMat, gougeMaxMat;
+            let resolveMat, gougeMaxMat;
 
             // Common prologue. RawShaderMaterial gets *only* the version line and the
             // material's defines, so precision and every declaration has to be written out.
@@ -2915,8 +2915,18 @@
                     // one is free, since a target above the block simply loses the depth test.
                     gl_FragDepth = clamp(target / uSpan, 0.0, 1.0);
 
+                    // Alpha is the gouge bit, and it is sticky: the material blends this
+                    // attachment with MAX on alpha and straight replacement on RGB, so the id
+                    // behaves as a plain write while alpha can only ever go up. A fragment
+                    // only reaches blending if it passed the depth test, which is exactly
+                    // "this rapid removed material" -- so the bit records that it happened,
+                    // and no later operation can machine the record away.
                     float id = vMeta.x;
-                    outId = vec4(mod(id, 256.0) / 255.0, floor(id / 256.0) / 255.0, 0.0, 1.0);
+                    outId = vec4(
+                        mod(id, 256.0) / 255.0,
+                        floor(id / 256.0) / 255.0,
+                        0.0,
+                        id >= 65535.0 ? 1.0 : 0.0);
                 }`;
 
             const QUAD_VERT = HEAD + `
@@ -2979,28 +2989,9 @@
                     outColor = vec4(texture(uLut, vec2((li + 0.5) / uLutW, 0.5)).rgb, alpha);
                 }`;
 
-            // First step of the gouge pyramid: "does any sample in this 8x8 block carry the
-            // rapid id". Every later step is a plain max of the same shape.
-            const GOUGE_SEED_FRAG = HEAD + `
-                uniform sampler2D uIds;
-                uniform vec2 uSrcSize;
-                layout(location = 0) out vec4 outColor;
-                void main() {
-                    vec2 base = floor(gl_FragCoord.xy) * ${REDUCE}.0;
-                    float g = 0.0;
-                    for (int j = 0; j < ${REDUCE}; j++) {
-                        for (int i = 0; i < ${REDUCE}; i++) {
-                            vec2 c = base + vec2(float(i), float(j));
-                            if (c.x < uSrcSize.x && c.y < uSrcSize.y) {
-                                vec2 e = texture(uIds, (c + 0.5) / uSrcSize).rg;
-                                float id = floor(e.r * 255.0 + 0.5) + floor(e.g * 255.0 + 0.5) * 256.0;
-                                if (id >= 65535.0) g = 1.0;
-                            }
-                        }
-                    }
-                    outColor = vec4(g, 0.0, 0.0, 1.0);
-                }`;
-
+            // One step of the gouge pyramid: the max of an 8x8 block of the alpha channel.
+            // The same shader runs every step, including the first over the id texture itself,
+            // because it writes its answer back into alpha as well as red.
             const GOUGE_MAX_FRAG = HEAD + `
                 uniform sampler2D uSrc;
                 uniform vec2 uSrcSize;
@@ -3012,11 +3003,11 @@
                         for (int i = 0; i < ${REDUCE}; i++) {
                             vec2 c = base + vec2(float(i), float(j));
                             if (c.x < uSrcSize.x && c.y < uSrcSize.y) {
-                                g = max(g, texture(uSrc, (c + 0.5) / uSrcSize).r);
+                                g = max(g, texture(uSrc, (c + 0.5) / uSrcSize).a);
                             }
                         }
                     }
-                    outColor = vec4(g, 0.0, 0.0, 1.0);
+                    outColor = vec4(g, 0.0, 0.0, g);
                 }`;
 
             function rawMaterial(vert, frag, uniforms, extra) {
@@ -3064,7 +3055,18 @@
                     // has to keep the sample, or a later pass grazing an existing floor would
                     // repaint it without having removed anything.
                     depthFunc: THREE.LessDepth,
-                    side: THREE.DoubleSide
+                    side: THREE.DoubleSide,
+                    // Two different rules for one attachment, which WebGL 2 allows because RGB
+                    // and alpha carry their own blend equation. RGB is add-with-zero-destination
+                    // -- a plain overwrite, exactly what an id needs. Alpha is MAX, which makes
+                    // the gouge bit accumulate rather than be replaced.
+                    blending: THREE.CustomBlending,
+                    blendEquation: THREE.AddEquation,
+                    blendSrc: THREE.OneFactor,
+                    blendDst: THREE.ZeroFactor,
+                    blendEquationAlpha: THREE.MaxEquation,
+                    blendSrcAlpha: THREE.OneFactor,
+                    blendDstAlpha: THREE.OneFactor
                 });
 
                 const carveMesh = new THREE.Mesh(carveGeom, carveMat);
@@ -3090,10 +3092,6 @@
                     uLutW: { value: 2 },
                     uThrough: { value: 1e-5 },
                     uBase: { value: new THREE.Color(Palette.STOCK_BASE) }
-                });
-                gougeSeedMat = rawMaterial(QUAD_VERT, GOUGE_SEED_FRAG, {
-                    uIds: { value: null },
-                    uSrcSize: { value: new THREE.Vector2() }
                 });
                 gougeMaxMat = rawMaterial(QUAD_VERT, GOUGE_MAX_FRAG, {
                     uSrc: { value: null },
@@ -3225,7 +3223,8 @@
                     renderer.autoClear = true;
                 },
 
-                // Refill the block: every sample back to the top, every id back to uncut.
+                // Refill the block: every sample back to the top, every id back to uncut, and
+                // the sticky gouge bit in alpha back to zero.
                 clearHeight(gpu) {
                     renderer.setRenderTarget(gpu.heightRT);
                     renderer.state.setScissorTest(false);
@@ -3235,7 +3234,7 @@
                     renderer.state.buffers.depth.setMask(true);
                     renderer.state.buffers.color.setMask(true);
                     renderer.state.buffers.depth.setClear(1.0);
-                    renderer.state.buffers.color.setClear(0, 0, 0, 1);
+                    renderer.state.buffers.color.setClear(0, 0, 0, 0);
                     renderer.clear(true, true, false);
                 },
 
@@ -3291,31 +3290,34 @@
                     renderer.render(quadScene, quadCam);
                 },
 
-                // The one value that comes back off the GPU, and it is a single bit: has any
-                // sample still standing been cut by a rapid. Folded to one texel first, so the
-                // stall is a 1x1 read rather than a megabyte.
+                // The one value that comes back off the GPU, and it is a single bit: has a
+                // rapid removed material anywhere in the cut so far. Folded to one texel
+                // first, so the stall is a 1x1 read rather than a megabyte.
+                //
+                // The bit it reduces is sticky, which is what makes reading it on a timer
+                // sound: the answer can only ever go from no to yes, so no sampling rate can
+                // step over a gouge that appeared and was machined away in between.
                 readGouge(gpu) {
                     if (gpu.gougeChain.length === 0) return false;
                     renderer.state.setScissorTest(false);
-
-                    gougeSeedMat.uniforms.uIds.value = gpu.heightRT.texture;
-                    gougeSeedMat.uniforms.uSrcSize.value.set(gpu.nxv, gpu.nyv);
-                    quadMesh.material = gougeSeedMat;
-                    renderer.setRenderTarget(gpu.gougeChain[0]);
-                    renderer.render(quadScene, quadCam);
-
                     quadMesh.material = gougeMaxMat;
-                    for (let i = 1; i < gpu.gougeChain.length; i++) {
-                        const src = gpu.gougeChain[i - 1];
-                        gougeMaxMat.uniforms.uSrc.value = src.texture;
-                        gougeMaxMat.uniforms.uSrcSize.value.set(src.width, src.height);
+
+                    let src = gpu.heightRT.texture;
+                    let w = gpu.nxv;
+                    let h = gpu.nyv;
+                    for (let i = 0; i < gpu.gougeChain.length; i++) {
+                        gougeMaxMat.uniforms.uSrc.value = src;
+                        gougeMaxMat.uniforms.uSrcSize.value.set(w, h);
                         renderer.setRenderTarget(gpu.gougeChain[i]);
                         renderer.render(quadScene, quadCam);
+                        src = gpu.gougeChain[i].texture;
+                        w = gpu.gougeChain[i].width;
+                        h = gpu.gougeChain[i].height;
                     }
 
                     const last = gpu.gougeChain[gpu.gougeChain.length - 1];
                     renderer.readRenderTargetPixels(last, 0, 0, 1, 1, gougePixel);
-                    return gougePixel[0] > 127;
+                    return gougePixel[3] > 127;
                 }
             };
         })();
@@ -3411,8 +3413,8 @@
             // { nx, ny, minX, minY, cellX, cellY, top, bottom, geometry, gpu }
             let block = null;
             let mesh = null;
-            // Whether anything visible on the stock was cut by a rapid. Drives the legend key.
-            // Read back off the GPU now -- see checkGouge.
+            // Whether a rapid has removed material at or before the carved distance. Latches
+            // on and is cleared only by a reset. Drives the legend key -- see checkGouge.
             let hasGouge = false;
             let carvedDistance = 0;    // how far along the path the stock has been carved
             let carveSegIndex = 0;     // resume point into Program.segments for carving
@@ -3810,8 +3812,9 @@
                     hasGouge = false;
                     hooks.onGougeChanged();
                 }
-                // The replay that follows will paint its own rapids back in, and the answer
-                // should not wait a quarter of a second to arrive.
+                // The clear takes the sticky bit with it, so the flag has to come down here
+                // and be re-earned. The replay that follows redraws every rapid in the new
+                // prefix, and the answer should not wait a quarter of a second to arrive.
                 gougeDirty = false;
                 lastGougeCheck = 0;
             }
@@ -3974,8 +3977,8 @@
                             seg.start[0] + dxs * t1, seg.start[1] + dys * t1, seg.start[2] + dzs * t1
                         );
                         // Whether it removed anything is the depth test's business, not ours.
-                        // All the CPU knows is that some red was offered up, which is enough
-                        // to make the question worth asking the GPU.
+                        // All the CPU knows is that a rapid was offered up, which is enough to
+                        // make the question worth putting to the GPU.
                         if (isRapid) gougeDirty = true;
                     }
 
@@ -3984,26 +3987,25 @@
                 }
 
                 carvedDistance = dist;
-
-                // Red already on screen can be machined away by what comes after it, so while
-                // there is any, keep asking. Once there is none the question stops being asked
-                // until the next rapid offers some.
-                if (hasGouge) gougeDirty = true;
             }
 
-            // The one value that comes back off the GPU: is any of the surface still standing
-            // red. Throttled, because a readback is a pipeline stall however small the read,
-            // and because this drives a legend key rather than anything you watch move.
+            // The one value that comes back off the GPU: has a rapid removed material anywhere
+            // in the cut so far. Throttled, because a readback is a pipeline stall however
+            // small the read, and because this drives a legend key rather than anything you
+            // watch move.
             //
-            // Note the change of meaning from the height-map days, and it is the better one:
-            // the flag now says "there is red on screen", not "a rapid cut something once".
-            // A gouge that a later operation machined away no longer keeps the key alive.
+            // Once true it stays true, and this stops being asked at all. The GPU-side bit is
+            // sticky too (see the alpha blend on the carve material), so the flag means "a
+            // rapid cut something at or before this point in the program" rather than "there
+            // is red on screen right now" -- a gouge that a later operation machines away is
+            // still a gouge, and the key that explains it should not vanish with the evidence.
+            // Scrubbing back before the rapid clears it, because the replay redraws only the
+            // prefix and the bit is rebuilt with it.
             function checkGouge(now) {
                 lastGougeCheck = now;
                 gougeDirty = false;
-                const found = StockGPU.readGouge(block.gpu);
-                if (found === hasGouge) return;
-                hasGouge = found;
+                if (!StockGPU.readGouge(block.gpu)) return;
+                hasGouge = true;
                 hooks.onGougeChanged();
             }
 
@@ -4107,8 +4109,9 @@
                         dy1 = -1;
                     }
 
+                    // Nothing to learn once it is latched, so the readback stops entirely.
                     const now = performance.now();
-                    if (gougeDirty && (now - lastGougeCheck) >= GOUGE_INTERVAL) {
+                    if (!hasGouge && gougeDirty && (now - lastGougeCheck) >= GOUGE_INTERVAL) {
                         beginPass();
                         checkGouge(now);
                     }
@@ -4696,8 +4699,15 @@
                 const palette = stockMode === 'off' ? '' : paletteLegend(stockMode);
 
                 // Its own block rather than a row inside the palette legend: red is not a
-                // palette slot, it appears in Uniform mode where there is no palette legend at
-                // all, and it should only be on screen while there is actually red to explain.
+                // palette slot, and it appears in Uniform mode where there is no palette
+                // legend at all.
+                //
+                // It stays up once a rapid has cut, even after a later operation has machined
+                // the red away. The key is a warning about the program, not a caption for
+                // whatever is currently on screen -- and a warning that erases itself as soon
+                // as the next pass tidies up is worse than no warning. Scrubbing back before
+                // the rapid does take it down, because at that point in the program it has not
+                // happened yet.
                 const gouge = Stock.hasGouge() ? `<div class="legend">
                         <div class="legend-item">
                             <div class="color-box" style="background-color: ${cssHex(Palette.RAPID)};"></div>
