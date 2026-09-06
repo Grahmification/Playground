@@ -493,6 +493,29 @@
             max-width: 100%;
         }
 
+        /* Mirror of #overlay-stack down the other side of the view. Unlike that stack this
+           panel takes the mouse -- everything in it is interactive, and the patch of orbit
+           surface it costs is small enough not to matter. */
+        #view-toggles {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 5;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        #view-toggles .toggle-title {
+            color: #e0e0e0;
+            font-weight: 600;
+            margin-bottom: 1px;
+        }
+
+        #view-toggles .check-row {
+            font-size: 0.8rem;
+        }
+
         #readout {
             display: grid;
             grid-template-columns: auto auto;
@@ -603,6 +626,17 @@
             /* Stops short of the floating sidebar button rather than the edge of the view. */
             #overlay-stack {
                 max-width: calc(100vw - 76px);
+            }
+
+            /* Down to the bottom-left. The top-left corner belongs to the button that
+               brings the drawer back, and the readout stack is already using the width
+               beside it. The ViewCube has the other bottom corner.
+
+               `top: auto` matters -- an absolutely positioned box with both offsets set
+               stretches between them instead of sizing to its contents. */
+            #view-toggles {
+                top: auto;
+                bottom: 12px;
             }
         }
     </style>
@@ -822,34 +856,6 @@
                 <input type="number" id="edge-margin" value="0.3" min="0" step="0.05">
                 <div id="margin-hint" class="hint" hidden></div>
             </div>
-            <label class="check-row">
-                <input type="checkbox" id="show-outline" checked>
-                <span>Show outline</span>
-            </label>
-            <label class="check-row">
-                <input type="checkbox" id="show-solid" checked>
-                <span>Show dial body</span>
-            </label>
-            <label class="check-row">
-                <input type="checkbox" id="show-grid" checked>
-                <span>Show grid</span>
-            </label>
-        </div>
-
-        <!-- Display -->
-        <div class="panel">
-            <div class="panel-title panel-title-row">
-                <span>Display</span>
-            </div>
-            <label class="check-row">
-                <input type="checkbox" id="show-relief" checked>
-                <span>Simulate engraved cut</span>
-            </label>
-            <label class="check-row">
-                <input type="checkbox" id="show-lines">
-                <span>Show pattern lines</span>
-            </label>
-            <div id="relief-warning" class="hint" hidden></div>
         </div>
 
         <!-- Statistics -->
@@ -862,6 +868,7 @@
             <div class="stats-row"><span>Segments:</span> <span id="stat-segments" class="stats-value">0</span></div>
             <div class="stats-row"><span>Cut length:</span> <span id="stat-length" class="stats-value">0 mm</span></div>
             <div class="stats-row"><span>Generated in:</span> <span id="stat-time" class="stats-value">&mdash;</span></div>
+            <div id="relief-warning" class="hint" hidden></div>
         </div>
 
         <!-- Export -->
@@ -895,6 +902,14 @@
 
     <div id="viewport">
         <div id="canvas-container">
+            <div id="view-toggles" class="overlay-panel">
+                <div class="toggle-title">Show</div>
+                <label class="check-row"><input type="checkbox" id="show-solid" checked><span>Dial</span></label>
+                <label class="check-row"><input type="checkbox" id="show-relief" checked><span>Cut</span></label>
+                <label class="check-row"><input type="checkbox" id="show-outline" checked><span>Outline</span></label>
+                <label class="check-row"><input type="checkbox" id="show-lines"><span>Paths</span></label>
+                <label class="check-row"><input type="checkbox" id="show-grid" checked><span>Grid</span></label>
+            </div>
             <div id="overlay-stack">
                 <div id="readout" class="overlay-panel">
                     <div class="readout-row"><span>Dial</span> <span id="ov-dial">&mdash;</span></div>
@@ -932,6 +947,7 @@
              PatternView   the generated pattern, as lines and as an engraved cut
              Layers        the pattern layer stack: the document being edited
              Sidebar       the left-hand controls: values in, states out
+             ViewToggles   the "what is drawn" panel floated over the 3D view
              Exporter      SVG / DXF / G-code writers
              App           the wiring: what happens when, and in what order
 
@@ -3615,17 +3631,12 @@
                 'layer-cutter', 'layer-depth', 'layer-angle', 'layer-radius', 'layer-color'
             ];
 
-            // Anything here only changes what is shown, which is a toggle rather than a
-            // rebuild -- so it must not trigger one.
-            const DISPLAY_INPUTS = ['show-outline', 'show-solid', 'show-grid', 'show-relief', 'show-lines'];
-
             // ...and these rebuild the dial body but not the pattern.
             const DIAL_INPUTS = ['dial-thickness', 'dial-material'];
 
             const hooks = {
                 regenerate: () => {},
                 redial: () => {},
-                display: () => {},
                 reparse: () => {}
             };
 
@@ -3641,11 +3652,6 @@
                     margin: Math.max(readNumber('edge-margin', 0), 0),
                     thickness: Math.max(readNumber('dial-thickness', 0.6), 0.05),
                     material: el('dial-material').value,
-                    showOutline: el('show-outline').checked,
-                    showSolid: el('show-solid').checked,
-                    showGrid: el('show-grid').checked,
-                    showRelief: el('show-relief').checked,
-                    showLines: el('show-lines').checked,
                     gcode: {
                         safeZ: readNumber('gc-safe', 1),
                         feed: readNumber('gc-feed', 300),
@@ -3798,10 +3804,6 @@
                 el(id).addEventListener('input', () => hooks.redial());
             }
 
-            for (const id of DISPLAY_INPUTS) {
-                el(id).addEventListener('change', () => hooks.display());
-            }
-
             el('layer-type').addEventListener('change', () => {
                 const layer = Layers.selected();
                 if (!layer) return;
@@ -3926,6 +3928,42 @@
                 hooks, settings, refresh,
                 setDialInfo, setStats, setReliefWarning, setMarginHint, setBusy
             };
+        })();
+
+        // --- ViewToggles -------------------------------------------------------------
+        // The "what is drawn" panel, floated over the top-left of the 3D view.
+        //
+        // These five belong over the view rather than in the sidebar because they answer
+        // "what am I looking at" -- a question asked while looking at it. On a phone that
+        // is not a preference either: the sidebar is a drawer there, so a toggle inside it
+        // cannot be reached without covering the thing it changes.
+        //
+        // Nothing here rebuilds anything. Every one of these is a visibility flag, which
+        // is why they are kept well away from the fields that trigger a regeneration.
+        const ViewToggles = (() => {
+            // The names in the panel are one word each; these are what the rest of the
+            // program calls them.
+            const IDS = {
+                solid: 'show-solid',
+                cut: 'show-relief',
+                outline: 'show-outline',
+                paths: 'show-lines',
+                grid: 'show-grid'
+            };
+
+            const hooks = { change: () => {} };
+
+            function state() {
+                const out = {};
+                for (const key of Object.keys(IDS)) out[key] = Util.el(IDS[key]).checked;
+                return out;
+            }
+
+            for (const id of Object.values(IDS)) {
+                Util.el(id).addEventListener('change', () => hooks.change());
+            }
+
+            return { hooks, state };
         })();
         // --- Exporter ----------------------------------------------------------------
         // The generated pattern, written out three ways. All three re-origin the drawing on
@@ -4363,20 +4401,20 @@
             }
 
             function applyDisplay() {
-                const settings = Sidebar.settings();
+                const view = ViewToggles.state();
                 // The cut is a shape cut *into* the body -- walls of the dial's own metal,
                 // standing in a hole in its face. With the body gone there is nothing for
                 // it to be cut into, and it would read as a pattern of floating troughs, so
                 // hiding the body takes the cut with it whatever the cut's own box says.
-                const showCut = settings.showSolid && settings.showRelief;
+                const showCut = view.solid && view.cut;
 
-                DialMesh.setBodyVisible(settings.showSolid);
-                DialMesh.setOutlineVisible(settings.showOutline);
+                DialMesh.setBodyVisible(view.solid);
+                DialMesh.setOutlineVisible(view.outline);
                 // The mask goes with the cut walls, never without them: the holes in the
                 // face are only ever there so the walls below can be seen through them.
                 DialMesh.setMask(showCut ? cutMask : null);
-                Viewer.setGridVisible(settings.showGrid);
-                PatternView.setLinesVisible(settings.showLines);
+                Viewer.setGridVisible(view.grid);
+                PatternView.setLinesVisible(view.paths);
                 PatternView.setReliefVisible(showCut);
             }
 
@@ -4397,8 +4435,8 @@
             // --- Wiring --------------------------------------------------------------
             Sidebar.hooks.regenerate = scheduleRegenerate;
             Sidebar.hooks.redial = rebuildDial;
-            Sidebar.hooks.display = applyDisplay;
             Sidebar.hooks.reparse = () => { rebuildBoundary(); scheduleRegenerate(); };
+            ViewToggles.hooks.change = applyDisplay;
 
             Util.el('dxf-file').addEventListener('change', (e) => {
                 const file = e.target.files && e.target.files[0];
