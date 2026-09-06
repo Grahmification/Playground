@@ -1,0 +1,3990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch Dial Guilloch&eacute; Generator</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        /* overscroll-behavior stops the rubber-band drag peeling the app off the top of a
+           phone screen mid-orbit. */
+        html {
+            height: 100%;
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
+
+        body {
+            display: flex;
+            /* dvh is what is on screen now, with a phone's toolbars showing; vh is the
+               fallback for browsers that do not know the unit. */
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+        }
+
+        #sidebar {
+            width: 330px;
+            flex: 0 0 auto;
+            background-color: #252526;
+            border-right: 1px solid #3c3c3c;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            gap: 14px;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        /* The rule and the padding under it belong to the row rather than the heading, so
+           the collapse button sits above the line with it instead of beside it. */
+        .sidebar-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid #3c3c3c;
+            padding-bottom: 8px;
+        }
+
+        h1 {
+            font-size: 1.15rem;
+            color: #ffffff;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        /* Only ever shown by the narrow-width rules at the end of the sheet. Sized for a
+           fingertip rather than matching the 18px .panel-toggle glyphs. */
+        .sidebar-toggle {
+            display: none;
+            flex: 0 0 auto;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            margin-left: auto;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .sidebar-toggle:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* The only part of the sidebar left on screen once it is collapsed, and likewise
+           shown only by the narrow-width rules. Floats over the 3D view, so it is opaque
+           enough to stay legible against whatever is drawn behind it. */
+        .sidebar-open {
+            display: none;
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 20;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            background-color: rgba(37, 37, 38, 0.92);
+            color: #e0e0e0;
+            font-size: 1.1rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .sidebar-open:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Dismisses the drawer, and darkens the view behind it so it reads as covered
+           rather than merely obscured. Same narrow-widths-only story. */
+        #sidebar-backdrop {
+            display: none;
+            position: absolute;
+            inset: 0;
+            z-index: 25;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .control-group label {
+            font-size: 0.85rem;
+            color: #aaaaaa;
+        }
+
+        /* A label with a help affordance beside it. Also the positioning context for the
+           bubble, so the bubble spans the row rather than the icon and can never be
+           pushed out through the sidebar's edge. */
+        .label-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            position: relative;
+        }
+
+        .help {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 14px;
+            height: 14px;
+            flex: 0 0 auto;
+            border: 1px solid #4a4a4a;
+            border-radius: 50%;
+            color: #aaaaaa;
+            font-size: 0.65rem;
+            line-height: 1;
+            cursor: help;
+            user-select: none;
+        }
+
+        .help:hover,
+        .help:focus-visible {
+            border-color: #6a6a6a;
+            color: #ffffff;
+        }
+
+        /* Opens downward over the field it describes. Upward would be clipped whenever
+           the row sits at the top of the scrolled sidebar -- #sidebar has overflow-y,
+           which makes it clip on both axes. */
+        .help-bubble {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            padding: 8px 10px;
+            background-color: #2b2b2b;
+            border: 1px solid #4a4a4a;
+            border-radius: 4px;
+            color: #e0e0e0;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            z-index: 20;
+            /* Kept in flow-less limbo rather than display:none so it never reflows the
+               panel, and click-through so it cannot swallow a click on the input. */
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .help:hover .help-bubble,
+        .help:focus-visible .help-bubble {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        select, input[type="number"], input[type="text"] {
+            width: 100%;
+            padding: 6px;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            outline: none;
+        }
+
+        select:focus, input[type="number"]:focus, input[type="text"]:focus {
+            border-color: #0e639c;
+        }
+
+        input[type="color"] {
+            width: 100%;
+            height: 30px;
+            padding: 2px;
+            background-color: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: block;
+            width: 100%;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            background-color: #0e639c;
+            color: white;
+            text-align: center;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
+            border: none;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background-color: #1177bb;
+        }
+
+        .btn-secondary {
+            background-color: #3c3c3c;
+            padding: 8px;
+            font-size: 0.85rem;
+        }
+
+        .btn-secondary:hover {
+            background-color: #505050;
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-row > * {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .check-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #e0e0e0;
+            cursor: pointer;
+        }
+
+        .check-row input[type="checkbox"] {
+            width: auto;
+            flex: 0 0 auto;
+            cursor: pointer;
+        }
+
+        .hint {
+            font-size: 0.75rem;
+            color: #d4a05a;
+            line-height: 1.35;
+        }
+
+        .hint-muted {
+            color: #808080;
+        }
+
+        .hint-bad {
+            color: #e06c6c;
+        }
+
+        .panel {
+            background-color: #1e1e1e;
+            border-radius: 4px;
+            padding: 12px;
+            border: 1px solid #3c3c3c;
+            font-size: 0.85rem;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .panel-title {
+            font-weight: 600;
+            color: #ffffff;
+            border-bottom: 1px solid #2a2a2a;
+            padding-bottom: 4px;
+        }
+
+        /* A title that carries a control. .panel-toggle floats itself right from here. */
+        .panel-title-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Repeats the panel's own column so the rows keep their spacing once nested, and
+           spells out the hidden case -- a display rule outranks the browser's [hidden]. */
+        .panel-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .panel-body[hidden] {
+            display: none;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .stats-value {
+            color: #4ec9b0;
+            font-family: monospace;
+            min-width: 0;
+            text-align: right;
+            overflow-wrap: anywhere;
+        }
+
+        /* Two fields side by side, each still labelled. Used for X/Y pairs and for the
+           radius band, where the pair only means anything read together. */
+        .field-pair {
+            display: flex;
+            gap: 8px;
+        }
+
+        .field-pair .control-group,
+        .field-pair > input {
+            flex: 1;
+            min-width: 0;
+        }
+
+        /* --- Layer list ---------------------------------------------------------
+           One row per pattern layer. The row is the selector; the checkbox and the
+           delete button inside it are not, so each stops the click reaching the row. */
+        #layer-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .layer-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #232323;
+            cursor: pointer;
+        }
+
+        .layer-row:hover {
+            background-color: #2b2b2b;
+        }
+
+        .layer-row.selected {
+            border-color: #0e639c;
+            background-color: #24313c;
+        }
+
+        .layer-row .layer-swatch {
+            flex: 0 0 auto;
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            border: 1px solid #00000060;
+        }
+
+        /* Takes the free space so the delete button sits hard right, and wraps rather
+           than pushing it off the row -- the name is user text with no bound on length. */
+        .layer-row .layer-name {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .layer-row .layer-del {
+            flex: 0 0 auto;
+            width: 20px;
+            height: 20px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #909090;
+            font-size: 0.8rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .layer-row .layer-del:hover {
+            background-color: #6b2e2e;
+            color: #ffffff;
+        }
+
+        .layer-row.disabled .layer-name {
+            color: #6e6e6e;
+            text-decoration: line-through;
+        }
+
+        #viewport {
+            flex: 1 1 auto;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        /* Positioned so the overlays inside it can be measured against the 3D view alone. */
+        #canvas-container {
+            flex: 1 1 auto;
+            width: 100%;
+            min-height: 0;
+            position: relative;
+        }
+
+        /* A canvas is inline by default, which leaves a baseline gap under it and makes the
+           container a few pixels taller than the size the renderer was given -- which the
+           ResizeObserver then feeds back in as a resize. */
+        #canvas-container canvas {
+            display: block;
+        }
+
+        /* The stack of panels floated over the top-right of the 3D view. A flow column
+           rather than each panel positioning itself, so a panel that grows pushes the next
+           one down instead of sliding under it. Transparent to the mouse so it never
+           steals an orbit drag that starts on it. */
+        #overlay-stack {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 5;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            pointer-events: none;
+            max-height: calc(100% - 24px);
+            max-width: calc(100% - 24px);
+        }
+
+        .overlay-panel {
+            padding: 10px 12px;
+            background-color: rgba(30, 30, 30, 0.78);
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #aaaaaa;
+            min-height: 0;
+            max-width: 100%;
+        }
+
+        #readout {
+            display: grid;
+            grid-template-columns: auto auto;
+            column-gap: 16px;
+            row-gap: 4px;
+            flex: 0 0 auto;
+        }
+
+        /* The rows are grouping only -- the spans themselves are the grid items, so the
+           values line up in a column however long the labels get. */
+        #readout .readout-row {
+            display: contents;
+        }
+
+        #readout .readout-row span:last-child {
+            color: #4ec9b0;
+            font-family: monospace;
+            text-align: right;
+            max-width: 200px;
+            overflow-wrap: anywhere;
+        }
+
+        /* Sits over the middle of the view while a regeneration is in flight. Click-through
+           so a slider drag that triggered it is never interrupted by its own progress
+           message. */
+        #busy {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 6;
+            padding: 14px 22px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            font-weight: 500;
+            pointer-events: none;
+        }
+
+        #busy[hidden] {
+            display: none;
+        }
+
+        /* Shown while a file is dragged anywhere over the window. */
+        #drop-hint {
+            position: absolute;
+            inset: 12px;
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed #0e639c;
+            border-radius: 8px;
+            background-color: rgba(14, 99, 156, 0.15);
+            color: #ffffff;
+            font-size: 1.1rem;
+            font-weight: 500;
+            pointer-events: none;
+        }
+
+        #drop-hint[hidden] {
+            display: none;
+        }
+
+        /* Narrow widths. A 330px sidebar is most of a phone screen, so it becomes a drawer
+           that slides over the 3D view and is dismissed by the backdrop behind it. Out of
+           flow, so #viewport keeps the whole screen in both states and the canvas never
+           resizes; collapsed, nothing of it is left on screen but #sidebar-open. */
+        @media (max-width: 700px) {
+            /* The drawer and backdrop measure against this. Not `fixed`: that would
+               measure the layout viewport and run under the browser's toolbars. */
+            body {
+                position: relative;
+            }
+
+            .sidebar-toggle {
+                display: flex;
+            }
+
+            #sidebar {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                z-index: 30;
+                width: min(330px, 88vw);
+                padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+                box-shadow: 0 0 24px rgba(0, 0, 0, 0.5);
+                transition: transform 0.2s ease, visibility 0s;
+            }
+
+            /* visibility is what takes the fields out of the tab order once they are off
+               screen, held back until the slide finishes so it does not cut it short. */
+            body.sidebar-collapsed #sidebar {
+                transform: translateX(-100%);
+                visibility: hidden;
+                transition: transform 0.2s ease, visibility 0s linear 0.2s;
+            }
+
+            body.sidebar-collapsed .sidebar-open {
+                display: flex;
+            }
+
+            body:not(.sidebar-collapsed) #sidebar-backdrop {
+                display: block;
+            }
+
+            /* Stops short of the floating sidebar button rather than the edge of the view. */
+            #overlay-stack {
+                max-width: calc(100vw - 76px);
+            }
+        }
+    </style>
+    <!-- Three.js and OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <!-- Both are narrow widths only, where the sidebar is a drawer: the button that brings
+         it back, and the backdrop that sends it away. -->
+    <button id="sidebar-open" class="sidebar-open" type="button"
+            title="Show sidebar" aria-label="Show sidebar" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
+    <div id="sidebar-backdrop"></div>
+
+    <div id="sidebar">
+        <div class="sidebar-head">
+            <h1>Dial Guilloch&eacute;</h1>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button"
+                    title="Hide sidebar" aria-expanded="true" aria-controls="sidebar">&#9664;</button>
+        </div>
+
+        <div class="file-input-wrapper">
+            <label for="dxf-file" class="btn">Load Dial Outline (DXF)</label>
+            <input type="file" id="dxf-file" accept=".dxf,.DXF,text/plain">
+        </div>
+        <button id="btn-sample" class="btn btn-secondary" type="button">Use Sample Dial</button>
+
+        <!-- Dial -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Dial</span>
+            </div>
+            <div class="stats-row"><span>Outline:</span> <span id="dial-file" class="stats-value">&mdash;</span></div>
+            <div class="stats-row"><span>Size:</span> <span id="dial-size" class="stats-value">&mdash;</span></div>
+            <div class="stats-row"><span>Closed loops:</span> <span id="dial-loops" class="stats-value">0</span></div>
+            <div id="dial-warning" class="hint" hidden></div>
+
+            <div class="field-pair">
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="dxf-units">File Units</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">What one drawing
+                            unit in the DXF means. <b>Auto</b> reads $INSUNITS from the file header
+                            and falls back to millimetres when the file does not say.</span></span>
+                    </div>
+                    <select id="dxf-units">
+                        <option value="auto" selected>Auto</option>
+                        <option value="mm">Millimetres</option>
+                        <option value="cm">Centimetres</option>
+                        <option value="m">Metres</option>
+                        <option value="in">Inches</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="join-tol">Join Tol. (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">How far apart two
+                            entity ends may be and still be treated as the same point when the
+                            outline is chained into closed loops. Raise it if a drawing comes in
+                            with gaps at the corners.</span></span>
+                    </div>
+                    <input type="number" id="join-tol" value="0.05" min="0" step="0.01">
+                </div>
+            </div>
+
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="dial-thickness">Thickness (mm)</label>
+                    <input type="number" id="dial-thickness" value="0.6" min="0.05" step="0.05">
+                </div>
+                <div class="control-group">
+                    <label for="dial-material">Finish</label>
+                    <select id="dial-material">
+                        <option value="silver" selected>Rhodium / Steel</option>
+                        <option value="gold">Yellow Gold</option>
+                        <option value="rose">Rose Gold</option>
+                        <option value="brass">Brass</option>
+                        <option value="blue">Flame Blue</option>
+                        <option value="black">Black</option>
+                        <option value="white">Silvered White</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pattern layers -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Pattern Layers</span>
+            </div>
+            <div id="layer-list"></div>
+            <div class="btn-row">
+                <button id="btn-layer-add" class="btn btn-secondary" type="button">Add</button>
+                <button id="btn-layer-dup" class="btn btn-secondary" type="button">Duplicate</button>
+            </div>
+        </div>
+
+        <!-- Selected layer -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span id="layer-title">Layer Settings</span>
+            </div>
+            <div class="control-group">
+                <label for="layer-type">Pattern</label>
+                <select id="layer-type"></select>
+            </div>
+            <div id="layer-desc" class="hint hint-muted"></div>
+            <!-- Built from the selected pattern's parameter schema every time the type
+                 changes, so there is no markup here to keep in step with it. -->
+            <div id="layer-params" class="panel-body"></div>
+
+            <div class="panel-title panel-title-row" style="margin-top:2px">
+                <span>Placement</span>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="layer-cx">Centre X (mm)</label>
+                    <input type="number" id="layer-cx" value="0" step="0.25">
+                </div>
+                <div class="control-group">
+                    <label for="layer-cy">Centre Y (mm)</label>
+                    <input type="number" id="layer-cy" value="0" step="0.25">
+                </div>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="layer-rot">Rotation (&deg;)</label>
+                    <input type="number" id="layer-rot" value="0" step="1">
+                </div>
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="layer-rmin">Band In / Out</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">Keeps this layer
+                            inside a ring measured from its own centre, so several layers can share
+                            the dial. Leave the outer radius at 0 for "as far as the outline
+                            allows".</span></span>
+                    </div>
+                    <div class="field-pair">
+                        <input type="number" id="layer-rmin" value="0" min="0" step="0.5">
+                        <input type="number" id="layer-rmax" value="0" min="0" step="0.5">
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-title panel-title-row" style="margin-top:2px">
+                <span>Cut Profile</span>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="layer-profile">Profile</label>
+                    <select id="layer-profile">
+                        <option value="groove" selected>Groove</option>
+                        <option value="ridge">V Ridge</option>
+                        <option value="round">Rounded</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="layer-color">Line Colour</label>
+                    <input type="color" id="layer-color" value="#ffc94a">
+                </div>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="layer-width">Width (mm)</label>
+                    <input type="number" id="layer-width" value="0.3" min="0.01" step="0.05">
+                </div>
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="layer-depth">Relief (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">How far the cut
+                            profile stands off the dial face. Real guilloch&eacute; is a few
+                            hundredths of a millimetre deep; exaggerate it here to read the pattern
+                            on screen.</span></span>
+                    </div>
+                    <input type="number" id="layer-depth" value="0.1" min="0" step="0.02">
+                </div>
+            </div>
+        </div>
+
+        <!-- Containment -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Containment</span>
+            </div>
+            <div class="control-group">
+                <div class="label-row">
+                    <label for="edge-margin">Edge Margin (mm)</label>
+                    <span class="help" tabindex="0">?<span class="help-bubble">Every generated line
+                        is cut back this far short of the dial outline and of any hole in it, so no
+                        part of the pattern can reach the perimeter. 0 takes the pattern right up
+                        to the edge.</span></span>
+                </div>
+                <input type="number" id="edge-margin" value="0.3" min="0" step="0.05">
+            </div>
+            <label class="check-row">
+                <input type="checkbox" id="show-outline" checked>
+                <span>Show outline</span>
+            </label>
+            <label class="check-row">
+                <input type="checkbox" id="show-solid" checked>
+                <span>Show dial body</span>
+            </label>
+            <label class="check-row">
+                <input type="checkbox" id="show-grid" checked>
+                <span>Show grid</span>
+            </label>
+        </div>
+
+        <!-- Display -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Display</span>
+            </div>
+            <label class="check-row">
+                <input type="checkbox" id="show-relief" checked>
+                <span>Simulate cut relief</span>
+            </label>
+            <label class="check-row">
+                <input type="checkbox" id="show-lines">
+                <span>Show pattern lines</span>
+            </label>
+            <div id="relief-warning" class="hint" hidden></div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Statistics</span>
+            </div>
+            <div class="stats-row"><span>Status:</span> <span id="stat-status" class="stats-value">Idle</span></div>
+            <div class="stats-row"><span>Paths:</span> <span id="stat-paths" class="stats-value">0</span></div>
+            <div class="stats-row"><span>Segments:</span> <span id="stat-segments" class="stats-value">0</span></div>
+            <div class="stats-row"><span>Cut length:</span> <span id="stat-length" class="stats-value">0 mm</span></div>
+            <div class="stats-row"><span>Generated in:</span> <span id="stat-time" class="stats-value">&mdash;</span></div>
+        </div>
+
+        <!-- Export -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Export</span>
+            </div>
+            <div class="btn-row">
+                <button id="btn-export-svg" class="btn btn-secondary" type="button">SVG</button>
+                <button id="btn-export-dxf" class="btn btn-secondary" type="button">DXF</button>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="gc-depth">Cut Depth (mm)</label>
+                    <input type="number" id="gc-depth" value="0.08" min="0.001" step="0.01">
+                </div>
+                <div class="control-group">
+                    <label for="gc-safe">Safe Z (mm)</label>
+                    <input type="number" id="gc-safe" value="1" step="0.5">
+                </div>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="gc-feed">Feed (mm/min)</label>
+                    <input type="number" id="gc-feed" value="300" min="1" step="10">
+                </div>
+                <div class="control-group">
+                    <label for="gc-plunge">Plunge (mm/min)</label>
+                    <input type="number" id="gc-plunge" value="80" min="1" step="10">
+                </div>
+            </div>
+            <button id="btn-export-gcode" class="btn btn-secondary" type="button">G-Code</button>
+        </div>
+    </div>
+
+    <div id="viewport">
+        <div id="canvas-container">
+            <div id="overlay-stack">
+                <div id="readout" class="overlay-panel">
+                    <div class="readout-row"><span>Dial</span> <span id="ov-dial">&mdash;</span></div>
+                    <div class="readout-row"><span>Layers</span> <span id="ov-layers">0</span></div>
+                    <div class="readout-row"><span>Segments</span> <span id="ov-segments">0</span></div>
+                </div>
+            </div>
+            <div id="busy" hidden>Generating pattern&hellip;</div>
+        </div>
+        <div id="drop-hint" hidden>Drop a .dxf dial outline</div>
+    </div>
+
+    <script>
+        /* ============================================================================
+           Watch Dial Guilloché Generator
+           ============================================================================
+
+           Everything below is organised as a stack of single-purpose modules. Each is an
+           IIFE that returns only what the rest of the file is allowed to touch, and
+           dependencies only ever point *up* this list -- so a module can be read, changed
+           or replaced knowing exactly what can be affected:
+
+             Util          formatting and maths helpers; depends on nothing
+             Palette       every colour and material the generator uses, in one place
+             DxfParser     DXF text -> flat polylines. No DOM, no three.js
+             Loops         polylines -> closed loops, chained end to end
+             Boundary      a set of loops, indexed for "inside?" and "how near an edge?"
+             Waveform      the rosette cams, shared by several patterns
+             Patterns      the pattern generators and their parameter schemas
+             Clipper       a polyline -> the parts of it that survive the boundary
+             Viewer        scene, camera, renderer, controls, lighting, grid
+             ViewCube      the corner navigation widget -- self-contained
+             DialMesh      the dial body, extruded from the loaded loops
+             PatternView   the generated pattern, as lines and as cut relief
+             Layers        the pattern layer stack: the document being edited
+             Sidebar       the left-hand controls: values in, states out
+             Exporter      SVG / DXF / G-code writers
+             App           the wiring: what happens when, and in what order
+
+           `Layers` and the loaded `Boundary` are the shared mutable state, and App is the
+           only writer of either. Everything else reads.
+
+           The containment rule -- "no pattern may cross the dial's perimeter" -- lives in
+           exactly one place, `Clipper.clip`, which is handed a predicate built by App from
+           the boundary, the edge margin and the layer's own radius band. No generator
+           knows or cares where the dial's edge is; they all draw past it and are cut back.
+           ============================================================================ */
+
+        // --- Util --------------------------------------------------------------------
+        const Util = (() => {
+            function clamp(val, lo, hi) {
+                return val < lo ? lo : (val > hi ? hi : val);
+            }
+
+            function el(id) {
+                return document.getElementById(id);
+            }
+
+            const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"]/g, ch => HTML_ESCAPES[ch]);
+            }
+
+            // Thousands separators, because segment counts run into six figures and an
+            // unbroken run of digits is unreadable at a glance.
+            function count(n) {
+                return n.toLocaleString('en-US');
+            }
+
+            function mm(v, digits = 2) {
+                return `${v.toFixed(digits)} mm`;
+            }
+
+            function gcd(a, b) {
+                a = Math.abs(Math.round(a));
+                b = Math.abs(Math.round(b));
+                while (b) { const t = b; b = a % b; a = t; }
+                return a || 1;
+            }
+
+            // Saves a generated file. The object URL is revoked on the next frame rather
+            // than immediately: revoking it in the same tick can beat the download the
+            // click just started.
+            function download(name, text, mime) {
+                const blob = new Blob([text], { type: mime || 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                requestAnimationFrame(() => URL.revokeObjectURL(url));
+            }
+
+            return { clamp, el, escapeHtml, count, mm, gcd, download };
+        })();
+
+        // --- Palette -----------------------------------------------------------------
+        // Every colour in the viewer, so a relationship between two of them is stated here
+        // rather than left as two matching literals in distant places.
+        const Palette = (() => {
+            // The finishes offered for the dial body. metalness/roughness matter more than
+            // the colour: the pattern is only legible because the two flanks of a cut catch
+            // the environment differently, and a rough dielectric surface erases that.
+            const MATERIALS = {
+                silver: { color: 0xc9ced6, metalness: 0.92, roughness: 0.22 },
+                gold:   { color: 0xd9b036, metalness: 0.94, roughness: 0.22 },
+                rose:   { color: 0xd79a7c, metalness: 0.92, roughness: 0.24 },
+                brass:  { color: 0xc2a04e, metalness: 0.88, roughness: 0.30 },
+                blue:   { color: 0x2c4f96, metalness: 0.85, roughness: 0.20 },
+                black:  { color: 0x24262a, metalness: 0.55, roughness: 0.35 },
+                white:  { color: 0xe8e8e6, metalness: 0.35, roughness: 0.45 }
+            };
+
+            // Cycled when a new layer is added, so two layers never open the same colour.
+            const LAYER_COLORS = [
+                '#ffc94a', '#4ec9b0', '#7fb2ff', '#e07ad0',
+                '#9ec44e', '#e0904e', '#8f7ae0', '#5ac8e0'
+            ];
+
+            return {
+                MATERIALS,
+                LAYER_COLORS,
+                layerColor(i) { return LAYER_COLORS[i % LAYER_COLORS.length]; },
+
+                BACKGROUND: 0x1a1a1a,
+                GRID: 0x444444,
+                GRID_FAINT: 0x222222,
+                OUTLINE: 0x4ec9b0,      // a closed loop: usable as boundary
+                OUTLINE_OPEN: 0xe06c6c  // an open chain: shown, but not containing anything
+            };
+        })();
+
+        // --- DxfParser ---------------------------------------------------------------
+        // DXF text in, flat polylines out. Deliberately narrow: it understands the entity
+        // types a 2D outline is actually drawn with, tessellates every curve to points at
+        // the source, and hands back nothing but coordinates -- so no later module has to
+        // know what a bulge or a knot vector is.
+        //
+        // Everything is resolved in file units here; the caller scales once, afterwards.
+        const DxfParser = (() => {
+            // Angular step for tessellating arcs, circles, ellipses. 0.035 rad puts ~180
+            // points on a full circle: a 0.15% sagitta error, which on a 34mm dial is well
+            // under a micron and far below anything the clipper cares about.
+            const ARC_STEP = 0.035;
+            const MAX_INSERT_DEPTH = 8;
+
+            // $INSUNITS, as written in the header. 0 means "unitless", which in practice
+            // means the drawing was never told, so the caller's fallback applies.
+            const INSUNITS = {
+                1: 'in', 2: 'ft', 4: 'mm', 5: 'cm', 6: 'm', 12: 'mm'
+            };
+
+            // DXF is a stream of (group code, value) pairs, one per line. Values keep their
+            // text form: only the codes that are read below are ever converted.
+            function tokenize(text) {
+                const lines = text.split(/\r\n|\r|\n/);
+                const pairs = [];
+                for (let i = 0; i + 1 < lines.length; i += 2) {
+                    const code = parseInt(lines[i], 10);
+                    // A file with a stray line would desynchronise every pair after it.
+                    // Skipping one line to resynchronise recovers the common case (a
+                    // trailing blank in a hand-edited file) and costs nothing otherwise.
+                    if (Number.isNaN(code)) { i -= 1; continue; }
+                    pairs.push([code, lines[i + 1]]);
+                }
+                return pairs;
+            }
+
+            function makeEntity(type) {
+                return { type, pairs: [], map: new Map() };
+            }
+
+            function addPair(entity, code, value) {
+                entity.pairs.push([code, value]);
+                let bucket = entity.map.get(code);
+                if (!bucket) { bucket = []; entity.map.set(code, bucket); }
+                bucket.push(value);
+            }
+
+            function num(entity, code, def = 0, index = 0) {
+                const bucket = entity.map.get(code);
+                if (!bucket || index >= bucket.length) return def;
+                const v = parseFloat(bucket[index]);
+                return Number.isFinite(v) ? v : def;
+            }
+
+            function str(entity, code, def = '') {
+                const bucket = entity.map.get(code);
+                return bucket && bucket.length ? bucket[0].trim() : def;
+            }
+
+            function nums(entity, code) {
+                const bucket = entity.map.get(code) || [];
+                return bucket.map(v => parseFloat(v)).filter(Number.isFinite);
+            }
+
+            // --- Structure -----------------------------------------------------------
+            // One pass over the pairs, splitting them into header variables, block
+            // definitions and the entity list. BLOCK is handled by looking ahead rather
+            // than by becoming an entity of its own, which keeps `finish` honest: every
+            // entity it closes is a real drawing entity.
+            function structure(pairs) {
+                const header = {};
+                const blocks = new Map();
+                const entities = [];
+
+                let section = null;
+                let headerVar = null;
+                let block = null;
+                let target = entities;
+                let current = null;
+
+                const finish = () => {
+                    if (current) target.push(current);
+                    current = null;
+                };
+
+                for (let i = 0; i < pairs.length; i++) {
+                    const [code, raw] = pairs[i];
+
+                    if (code === 0) {
+                        const value = raw.trim().toUpperCase();
+                        if (value === 'SECTION') {
+                            finish();
+                            section = (pairs[i + 1] && pairs[i + 1][0] === 2)
+                                ? pairs[i + 1][1].trim().toUpperCase() : null;
+                            headerVar = null;
+                            i++;
+                            continue;
+                        }
+                        if (value === 'ENDSEC') {
+                            finish();
+                            section = null;
+                            block = null;
+                            target = entities;
+                            continue;
+                        }
+                        if (value === 'EOF') { finish(); break; }
+                        if (value === 'BLOCK') {
+                            finish();
+                            block = { name: '', bx: 0, by: 0, entities: [] };
+                            // The block's own header runs to the next code 0.
+                            let j = i + 1;
+                            for (; j < pairs.length && pairs[j][0] !== 0; j++) {
+                                const [c, v] = pairs[j];
+                                if (c === 2) block.name = v.trim();
+                                else if (c === 10) block.bx = parseFloat(v) || 0;
+                                else if (c === 20) block.by = parseFloat(v) || 0;
+                            }
+                            i = j - 1;
+                            target = block.entities;
+                            continue;
+                        }
+                        if (value === 'ENDBLK') {
+                            finish();
+                            if (block && block.name) blocks.set(block.name.toUpperCase(), block);
+                            block = null;
+                            target = entities;
+                            continue;
+                        }
+                        finish();
+                        current = makeEntity(value);
+                        continue;
+                    }
+
+                    if (section === 'HEADER') {
+                        if (code === 9) headerVar = raw.trim().toUpperCase();
+                        else if (headerVar && !(headerVar in header)) header[headerVar] = raw.trim();
+                        continue;
+                    }
+
+                    if (current) addPair(current, code, raw);
+                }
+
+                return { header, blocks, entities };
+            }
+
+            // --- Transforms ----------------------------------------------------------
+            // An INSERT places a block with its own origin, scale and rotation, and blocks
+            // may nest. Rather than carry a matrix through every entity converter, each
+            // level composes a plain function: local point in, world point out. Curves are
+            // tessellated in local space first, so a non-uniform block scale bends a circle
+            // into the ellipse it should be instead of silently staying round.
+            const IDENTITY = (x, y) => [x, y];
+
+            function compose(parent, bx, by, ix, iy, sx, sy, rot) {
+                const c = Math.cos(rot);
+                const s = Math.sin(rot);
+                return (x, y) => {
+                    const px = (x - bx) * sx;
+                    const py = (y - by) * sy;
+                    return parent(px * c - py * s + ix, px * s + py * c + iy);
+                };
+            }
+
+            // --- Curve tessellation --------------------------------------------------
+            function pushArc(out, cx, cy, r, start, sweep) {
+                const steps = Math.max(2, Math.min(4096, Math.ceil(Math.abs(sweep) / ARC_STEP)));
+                for (let i = 0; i <= steps; i++) {
+                    const a = start + sweep * (i / steps);
+                    out.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+                }
+            }
+
+            // The arc a bulge stands for. b is the tangent of a quarter of the included
+            // angle, positive counter-clockwise, so the sagitta is b * half the chord --
+            // which is all that is needed to place the centre and radius.
+            function pushBulgeArc(out, x1, y1, x2, y2, b) {
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const chord = Math.hypot(dx, dy);
+                if (chord < 1e-12 || Math.abs(b) < 1e-9) { out.push(x2, y2); return; }
+
+                const half = chord / 2;
+                const sagitta = b * half;
+                const radius = (half * half + sagitta * sagitta) / (2 * sagitta);
+                // Unit normal to the left of the chord: the side a positive bulge swells to.
+                const nx = -dy / chord;
+                const ny = dx / chord;
+                const cx = (x1 + x2) / 2 + nx * (sagitta - radius);
+                const cy = (y1 + y2) / 2 + ny * (sagitta - radius);
+
+                const startAngle = Math.atan2(y1 - cy, x1 - cx);
+                const sweep = 4 * Math.atan(b);
+                const r = Math.abs(radius);
+
+                const steps = Math.max(2, Math.min(2048, Math.ceil(Math.abs(sweep) / ARC_STEP)));
+                for (let i = 1; i <= steps; i++) {
+                    const a = startAngle + sweep * (i / steps);
+                    out.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+                }
+            }
+
+            // de Boor, with weights when the file gives them. Splines turn up in dial
+            // outlines wherever the shape is not made of arcs, and approximating one by its
+            // control polygon -- the usual shortcut -- would cut the corners off the dial.
+            function splinePoint(ctrl, weights, degree, knots, t) {
+                const n = ctrl.length / 2;
+                // The span t falls in. Clamped at the end so t == last knot still evaluates.
+                let k = degree;
+                while (k < n - 1 && t >= knots[k + 1]) k++;
+
+                const dx = new Array(degree + 1);
+                const dy = new Array(degree + 1);
+                const dw = new Array(degree + 1);
+                for (let j = 0; j <= degree; j++) {
+                    const idx = k - degree + j;
+                    const w = weights ? weights[idx] : 1;
+                    dx[j] = ctrl[idx * 2] * w;
+                    dy[j] = ctrl[idx * 2 + 1] * w;
+                    dw[j] = w;
+                }
+
+                for (let r = 1; r <= degree; r++) {
+                    for (let j = degree; j >= r; j--) {
+                        const i = k - degree + j;
+                        const lo = knots[i];
+                        const hi = knots[i + degree - r + 1];
+                        const alpha = (hi - lo) < 1e-12 ? 0 : (t - lo) / (hi - lo);
+                        dx[j] = (1 - alpha) * dx[j - 1] + alpha * dx[j];
+                        dy[j] = (1 - alpha) * dy[j - 1] + alpha * dy[j];
+                        dw[j] = (1 - alpha) * dw[j - 1] + alpha * dw[j];
+                    }
+                }
+
+                const w = dw[degree] || 1;
+                return [dx[degree] / w, dy[degree] / w];
+            }
+
+            function tessellateSpline(entity) {
+                const ctrl = [];
+                const xs = entity.map.get(10) || [];
+                const ys = entity.map.get(20) || [];
+                for (let i = 0; i < Math.min(xs.length, ys.length); i++) {
+                    ctrl.push(parseFloat(xs[i]) || 0, parseFloat(ys[i]) || 0);
+                }
+
+                const flags = num(entity, 70, 0);
+                const closed = (flags & 1) !== 0;
+
+                // Fit points, where there are no control points to work with. They lie on
+                // the curve, so joining them is a fair approximation of it.
+                if (ctrl.length < 4) {
+                    const fx = entity.map.get(11) || [];
+                    const fy = entity.map.get(21) || [];
+                    const pts = [];
+                    for (let i = 0; i < Math.min(fx.length, fy.length); i++) {
+                        pts.push(parseFloat(fx[i]) || 0, parseFloat(fy[i]) || 0);
+                    }
+                    return pts.length >= 4 ? [{ pts, closed }] : [];
+                }
+
+                const count = ctrl.length / 2;
+                const degree = Util.clamp(Math.round(num(entity, 71, 3)), 1, Math.min(7, count - 1));
+                let knots = nums(entity, 40);
+                if (knots.length !== count + degree + 1) {
+                    // Clamped uniform: the knot vector the file should have carried.
+                    knots = [];
+                    for (let i = 0; i <= count + degree; i++) {
+                        knots.push(Util.clamp(i - degree, 0, count - degree));
+                    }
+                }
+                const weightList = nums(entity, 41);
+                const weights = weightList.length === count ? weightList : null;
+
+                const t0 = knots[degree];
+                const t1 = knots[count];
+                if (!(t1 > t0)) return [];
+
+                const steps = Util.clamp(count * 16, 64, 4000);
+                const pts = [];
+                for (let i = 0; i <= steps; i++) {
+                    const t = t0 + (t1 - t0) * (i / steps);
+                    const p = splinePoint(ctrl, weights, degree, knots, Math.min(t, t1 - 1e-12));
+                    pts.push(p[0], p[1]);
+                }
+                return [{ pts, closed }];
+            }
+
+            // --- Entity conversion ---------------------------------------------------
+            // Index-based rather than for-of, because POLYLINE swallows the VERTEX entities
+            // that follow it up to the SEQEND: the converter has to be able to move the
+            // cursor itself.
+            function convert(entities, blocks, xf, depth, out) {
+                const emit = (pts, closed) => {
+                    if (pts.length < 4) return;
+                    const world = new Array(pts.length);
+                    for (let i = 0; i < pts.length; i += 2) {
+                        const p = xf(pts[i], pts[i + 1]);
+                        world[i] = p[0];
+                        world[i + 1] = p[1];
+                    }
+                    out.push({ pts: world, closed });
+                };
+
+                for (let i = 0; i < entities.length; i++) {
+                    const e = entities[i];
+                    switch (e.type) {
+                        case 'LINE':
+                            emit([num(e, 10), num(e, 20), num(e, 11), num(e, 21)], false);
+                            break;
+
+                        case 'CIRCLE': {
+                            const pts = [];
+                            pushArc(pts, num(e, 10), num(e, 20), Math.abs(num(e, 40)), 0, Math.PI * 2);
+                            emit(pts, true);
+                            break;
+                        }
+
+                        case 'ARC': {
+                            const start = num(e, 50) * Math.PI / 180;
+                            let end = num(e, 51) * Math.PI / 180;
+                            // DXF arcs always run counter-clockwise from start to end.
+                            while (end <= start) end += Math.PI * 2;
+                            const pts = [];
+                            pushArc(pts, num(e, 10), num(e, 20), Math.abs(num(e, 40)), start, end - start);
+                            emit(pts, false);
+                            break;
+                        }
+
+                        case 'ELLIPSE': {
+                            const cx = num(e, 10);
+                            const cy = num(e, 20);
+                            const mx = num(e, 11);   // major axis, as a vector from the centre
+                            const my = num(e, 21);
+                            const ratio = num(e, 40, 1);
+                            const t0 = num(e, 41, 0);
+                            const t1 = num(e, 42, Math.PI * 2);
+                            const sweep = t1 - t0;
+                            const steps = Math.max(8, Math.min(4096, Math.ceil(Math.abs(sweep) / ARC_STEP)));
+                            const pts = [];
+                            for (let s = 0; s <= steps; s++) {
+                                const t = t0 + sweep * (s / steps);
+                                const c = Math.cos(t);
+                                const sn = Math.sin(t) * ratio;
+                                // The minor axis is the major turned a quarter turn, scaled.
+                                pts.push(cx + mx * c - my * sn, cy + my * c + mx * sn);
+                            }
+                            emit(pts, Math.abs(Math.abs(sweep) - Math.PI * 2) < 1e-6);
+                            break;
+                        }
+
+                        case 'LWPOLYLINE': {
+                            // Walked as an ordered pair stream, not through the code buckets:
+                            // a bulge (42) belongs to the vertex it follows, and only some
+                            // vertices carry one, so bucket position would not line up.
+                            const verts = [];
+                            for (const [code, raw] of e.pairs) {
+                                const v = parseFloat(raw);
+                                if (code === 10) verts.push({ x: v || 0, y: 0, bulge: 0 });
+                                else if (code === 20 && verts.length) verts[verts.length - 1].y = v || 0;
+                                else if (code === 42 && verts.length) verts[verts.length - 1].bulge = v || 0;
+                            }
+                            const closed = (num(e, 70, 0) & 1) !== 0;
+                            emit(expandVertices(verts, closed), closed);
+                            break;
+                        }
+
+                        case 'POLYLINE': {
+                            const flags = num(e, 70, 0);
+                            const closed = (flags & 1) !== 0;
+                            const verts = [];
+                            let j = i + 1;
+                            for (; j < entities.length && entities[j].type !== 'SEQEND'; j++) {
+                                if (entities[j].type !== 'VERTEX') continue;
+                                const v = entities[j];
+                                verts.push({ x: num(v, 10), y: num(v, 20), bulge: num(v, 42, 0) });
+                            }
+                            i = j;   // consume the VERTEX run and its SEQEND
+                            // 16 and 64 mark the vertex lists of meshes, which are not outlines.
+                            if (!(flags & 16) && !(flags & 64)) emit(expandVertices(verts, closed), closed);
+                            break;
+                        }
+
+                        case 'SPLINE':
+                            for (const path of tessellateSpline(e)) emit(path.pts, path.closed);
+                            break;
+
+                        case 'SOLID':
+                        case 'TRACE': {
+                            // Four corners, in DXF's own zig-zag order: 10,11,13,12.
+                            const pts = [num(e, 10), num(e, 20), num(e, 11), num(e, 21),
+                                         num(e, 13), num(e, 23), num(e, 12), num(e, 22)];
+                            emit(pts, true);
+                            break;
+                        }
+
+                        case 'INSERT': {
+                            if (depth >= MAX_INSERT_DEPTH) break;
+                            const block = blocks.get(str(e, 2).toUpperCase());
+                            if (!block) break;
+                            const ix = num(e, 10);
+                            const iy = num(e, 20);
+                            const sx = num(e, 41, 1) || 1;
+                            const sy = num(e, 42, 1) || 1;
+                            const rot = num(e, 50, 0) * Math.PI / 180;
+                            const cols = Util.clamp(Math.round(num(e, 70, 1)) || 1, 1, 500);
+                            const rows = Util.clamp(Math.round(num(e, 71, 1)) || 1, 1, 500);
+                            const colSpacing = num(e, 44, 0);
+                            const rowSpacing = num(e, 45, 0);
+                            for (let c = 0; c < cols; c++) {
+                                for (let r = 0; r < rows; r++) {
+                                    // The array offsets are measured in the insert's own
+                                    // rotated frame, which is what composing them into the
+                                    // insertion point before the rotation would get wrong --
+                                    // so they are applied through the same rotation here.
+                                    const ox = c * colSpacing;
+                                    const oy = r * rowSpacing;
+                                    const cr = Math.cos(rot);
+                                    const sr = Math.sin(rot);
+                                    const child = compose(
+                                        xf, block.bx, block.by,
+                                        ix + ox * cr - oy * sr,
+                                        iy + ox * sr + oy * cr,
+                                        sx, sy, rot
+                                    );
+                                    convert(block.entities, blocks, child, depth + 1, out);
+                                }
+                            }
+                            break;
+                        }
+
+                        default:
+                            break;   // TEXT, DIMENSION, HATCH and the rest are not outlines
+                    }
+                }
+            }
+
+            // Vertices with bulges, flattened to points. Closing the ring means the arc from
+            // the last vertex back to the first has to be walked too, which is the one a
+            // simple loop over pairs always misses.
+            function expandVertices(verts, closed) {
+                if (verts.length < 2) return [];
+                const pts = [verts[0].x, verts[0].y];
+                const last = closed ? verts.length : verts.length - 1;
+                for (let i = 0; i < last; i++) {
+                    const a = verts[i];
+                    const b = verts[(i + 1) % verts.length];
+                    if (Math.abs(a.bulge) > 1e-9) pushBulgeArc(pts, a.x, a.y, b.x, b.y, a.bulge);
+                    else pts.push(b.x, b.y);
+                }
+                return pts;
+            }
+
+            // --- Entry point ---------------------------------------------------------
+            function parse(text) {
+                if (/^\s*AutoCAD Binary DXF/.test(text.slice(0, 40))) {
+                    throw new Error('This is a binary DXF. Re-save it as ASCII DXF and try again.');
+                }
+                const { header, blocks, entities } = structure(tokenize(text));
+                const paths = [];
+                convert(entities, blocks, IDENTITY, 0, paths);
+
+                const code = parseInt(header.$INSUNITS, 10);
+                const units = INSUNITS[code] || null;
+                return { paths, units };
+            }
+
+            return { parse };
+        })();
+        // --- Loops -------------------------------------------------------------------
+        // Loose polylines in, closed rings out. A DXF outline is almost never one entity:
+        // it is a dozen arcs and lines that happen to meet, and until they have been walked
+        // end to end there is no "inside the dial" to speak of.
+        const Loops = (() => {
+            // Endpoints bucketed by a grid one tolerance wide, so finding what a chain
+            // continues into is a look at nine cells rather than a scan of every path.
+            function makeIndex(cell) {
+                const map = new Map();
+                const key = (x, y) => `${Math.floor(x / cell)},${Math.floor(y / cell)}`;
+                return {
+                    add(x, y, ref) {
+                        const k = key(x, y);
+                        let bucket = map.get(k);
+                        if (!bucket) { bucket = []; map.set(k, bucket); }
+                        bucket.push(ref);
+                    },
+                    near(x, y) {
+                        const gx = Math.floor(x / cell);
+                        const gy = Math.floor(y / cell);
+                        const found = [];
+                        for (let dx = -1; dx <= 1; dx++) {
+                            for (let dy = -1; dy <= 1; dy++) {
+                                const bucket = map.get(`${gx + dx},${gy + dy}`);
+                                if (bucket) found.push(...bucket);
+                            }
+                        }
+                        return found;
+                    }
+                };
+            }
+
+            function reversed(pts) {
+                const out = new Array(pts.length);
+                for (let i = 0, j = pts.length - 2; i < pts.length; i += 2, j -= 2) {
+                    out[i] = pts[j];
+                    out[i + 1] = pts[j + 1];
+                }
+                return out;
+            }
+
+            // Drops the repeated closing point, and any run of duplicates: a boundary edge
+            // of zero length contributes nothing and makes the normals in DialMesh NaN.
+            function clean(pts, closed, tol) {
+                const out = [];
+                const tol2 = tol * tol;
+                for (let i = 0; i < pts.length; i += 2) {
+                    const n = out.length;
+                    if (n >= 2) {
+                        const dx = pts[i] - out[n - 2];
+                        const dy = pts[i + 1] - out[n - 1];
+                        if (dx * dx + dy * dy < tol2) continue;
+                    }
+                    out.push(pts[i], pts[i + 1]);
+                }
+                if (closed && out.length >= 4) {
+                    const dx = out[0] - out[out.length - 2];
+                    const dy = out[1] - out[out.length - 1];
+                    if (dx * dx + dy * dy < tol2) out.length -= 2;
+                }
+                return out;
+            }
+
+            function build(paths, tol) {
+                const loops = [];
+                const open = [];
+                const chainable = [];
+
+                for (const path of paths) {
+                    // A tenth of the join tolerance for de-duplication: two points that far
+                    // apart are the same point, but points a whole tolerance apart may be a
+                    // genuine (if tiny) segment.
+                    const pts = clean(path.pts, path.closed, tol * 0.1);
+                    if (pts.length < 4) continue;
+                    if (path.closed) { loops.push(pts); continue; }
+
+                    // An entity that arrives already closed on itself -- a polyline whose
+                    // last point equals its first, without the closed flag set.
+                    const dx = pts[0] - pts[pts.length - 2];
+                    const dy = pts[1] - pts[pts.length - 1];
+                    if (Math.hypot(dx, dy) <= tol && pts.length >= 6) { loops.push(pts); continue; }
+
+                    chainable.push({ pts, used: false });
+                }
+
+                const index = makeIndex(Math.max(tol, 1e-6));
+                chainable.forEach((path, i) => {
+                    index.add(path.pts[0], path.pts[1], { i, end: 0 });
+                    index.add(path.pts[path.pts.length - 2], path.pts[path.pts.length - 1], { i, end: 1 });
+                });
+
+                // Greedy walk. Whichever unused path starts or ends nearest the open end of
+                // the chain is appended, reversed if it was the far end that matched.
+                const takeNearest = (x, y) => {
+                    let best = null;
+                    let bestDist = tol;
+                    for (const ref of index.near(x, y)) {
+                        const path = chainable[ref.i];
+                        if (path.used) continue;
+                        const px = ref.end === 0 ? path.pts[0] : path.pts[path.pts.length - 2];
+                        const py = ref.end === 0 ? path.pts[1] : path.pts[path.pts.length - 1];
+                        const d = Math.hypot(px - x, py - y);
+                        if (d <= bestDist) { bestDist = d; best = ref; }
+                    }
+                    return best;
+                };
+
+                for (let i = 0; i < chainable.length; i++) {
+                    if (chainable[i].used) continue;
+                    chainable[i].used = true;
+                    let chain = chainable[i].pts.slice();
+
+                    // Forward, then backward from the other end -- a chain can be picked up
+                    // anywhere in the middle of the ring the drawing describes.
+                    for (let pass = 0; pass < 2; pass++) {
+                        if (pass === 1) chain = reversed(chain);
+                        for (;;) {
+                            const ex = chain[chain.length - 2];
+                            const ey = chain[chain.length - 1];
+                            const ref = takeNearest(ex, ey);
+                            if (!ref) break;
+                            const path = chainable[ref.i];
+                            path.used = true;
+                            const add = ref.end === 0 ? path.pts : reversed(path.pts);
+                            // The shared endpoint is already on the chain; the gap up to the
+                            // tolerance is closed by simply not repeating it.
+                            for (let k = 2; k < add.length; k++) chain.push(add[k]);
+                        }
+                    }
+
+                    const dx = chain[0] - chain[chain.length - 2];
+                    const dy = chain[1] - chain[chain.length - 1];
+                    if (Math.hypot(dx, dy) <= tol && chain.length >= 6) {
+                        loops.push(clean(chain, true, tol * 0.1));
+                    } else {
+                        open.push(chain);
+                    }
+                }
+
+                return { loops, open };
+            }
+
+            return { build };
+        })();
+
+        // --- Boundary ----------------------------------------------------------------
+        // The loaded loops, indexed for the only two questions the generator ever asks of
+        // them: is this point inside the dial, and is it within `d` of an edge. The second
+        // is what gives the edge margin an exact meaning on an arbitrary outline -- eroding
+        // a polygon by a disc is precisely "inside, and no nearer than d to any edge" --
+        // without ever computing an offset curve.
+        const Boundary = (() => {
+            function signedArea(loop) {
+                let a = 0;
+                for (let i = 0, n = loop.length; i < n; i += 2) {
+                    const j = (i + 2) % n;
+                    a += loop[i] * loop[j + 1] - loop[j] * loop[i + 1];
+                }
+                return a / 2;
+            }
+
+            function centroidOf(loop) {
+                const a = signedArea(loop);
+                if (Math.abs(a) < 1e-12) {
+                    let sx = 0, sy = 0;
+                    for (let i = 0; i < loop.length; i += 2) { sx += loop[i]; sy += loop[i + 1]; }
+                    return [sx / (loop.length / 2), sy / (loop.length / 2)];
+                }
+                let cx = 0, cy = 0;
+                for (let i = 0, n = loop.length; i < n; i += 2) {
+                    const j = (i + 2) % n;
+                    const cross = loop[i] * loop[j + 1] - loop[j] * loop[i + 1];
+                    cx += (loop[i] + loop[j]) * cross;
+                    cy += (loop[i + 1] + loop[j + 1]) * cross;
+                }
+                return [cx / (6 * a), cy / (6 * a)];
+            }
+
+            function create(loops) {
+                if (!loops.length) return null;
+
+                // Edges as one flat array. Every query below is a scan of a small subset of
+                // this, so it is worth having them contiguous rather than nested per loop.
+                const ex1 = [], ey1 = [], ex2 = [], ey2 = [];
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+                for (const loop of loops) {
+                    for (let i = 0, n = loop.length; i < n; i += 2) {
+                        const j = (i + 2) % n;
+                        ex1.push(loop[i]); ey1.push(loop[i + 1]);
+                        ex2.push(loop[j]); ey2.push(loop[j + 1]);
+                        if (loop[i] < minX) minX = loop[i];
+                        if (loop[i] > maxX) maxX = loop[i];
+                        if (loop[i + 1] < minY) minY = loop[i + 1];
+                        if (loop[i + 1] > maxY) maxY = loop[i + 1];
+                    }
+                }
+
+                const edgeCount = ex1.length;
+                const width = Math.max(maxX - minX, 1e-6);
+                const height = Math.max(maxY - minY, 1e-6);
+                const diagonal = Math.hypot(width, height);
+
+                // Containment: a ray cast along +X, counting crossings. Only edges whose Y
+                // span reaches this row can be crossed, so each test looks at a handful.
+                const rowCount = Util.clamp(Math.round(Math.sqrt(edgeCount)) * 2, 8, 512);
+                const rows = Array.from({ length: rowCount }, () => []);
+                const rowOf = y => Util.clamp(Math.floor((y - minY) / height * rowCount), 0, rowCount - 1);
+                for (let i = 0; i < edgeCount; i++) {
+                    const lo = rowOf(Math.min(ey1[i], ey2[i]));
+                    const hi = rowOf(Math.max(ey1[i], ey2[i]));
+                    for (let r = lo; r <= hi; r++) rows[r].push(i);
+                }
+
+                // Proximity: a uniform grid holding every edge whose bounding box touches a
+                // cell. Sized so a margin query normally reaches one ring of neighbours.
+                const cell = Util.clamp(diagonal / 120, 1e-4, Infinity);
+                const gridW = Math.max(1, Math.ceil(width / cell) + 1);
+                const gridH = Math.max(1, Math.ceil(height / cell) + 1);
+                const grid = new Map();
+                const cellKey = (gx, gy) => gy * gridW + gx;
+                for (let i = 0; i < edgeCount; i++) {
+                    const gx0 = Util.clamp(Math.floor((Math.min(ex1[i], ex2[i]) - minX) / cell), 0, gridW - 1);
+                    const gx1 = Util.clamp(Math.floor((Math.max(ex1[i], ex2[i]) - minX) / cell), 0, gridW - 1);
+                    const gy0 = Util.clamp(Math.floor((Math.min(ey1[i], ey2[i]) - minY) / cell), 0, gridH - 1);
+                    const gy1 = Util.clamp(Math.floor((Math.max(ey1[i], ey2[i]) - minY) / cell), 0, gridH - 1);
+                    for (let gx = gx0; gx <= gx1; gx++) {
+                        for (let gy = gy0; gy <= gy1; gy++) {
+                            const k = cellKey(gx, gy);
+                            let bucket = grid.get(k);
+                            if (!bucket) { bucket = []; grid.set(k, bucket); }
+                            bucket.push(i);
+                        }
+                    }
+                }
+
+                function distanceSq(px, py, i) {
+                    const vx = ex2[i] - ex1[i];
+                    const vy = ey2[i] - ey1[i];
+                    const len2 = vx * vx + vy * vy;
+                    let t = len2 < 1e-18 ? 0 : ((px - ex1[i]) * vx + (py - ey1[i]) * vy) / len2;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    const dx = px - (ex1[i] + vx * t);
+                    const dy = py - (ey1[i] + vy * t);
+                    return dx * dx + dy * dy;
+                }
+
+                // Even-odd, so a loop drawn inside another is a hole without anyone having
+                // had to say so -- which is exactly how a dial's centre hole, date window
+                // and subdial cut-outs arrive from CAD.
+                function contains(x, y) {
+                    if (x < minX || x > maxX || y < minY || y > maxY) return false;
+                    const bucket = rows[rowOf(y)];
+                    let crossings = 0;
+                    for (let k = 0; k < bucket.length; k++) {
+                        const i = bucket[k];
+                        const y1 = ey1[i];
+                        const y2 = ey2[i];
+                        if ((y1 > y) === (y2 > y)) continue;
+                        const t = (y - y1) / (y2 - y1);
+                        if (ex1[i] + t * (ex2[i] - ex1[i]) > x) crossings++;
+                    }
+                    return (crossings & 1) === 1;
+                }
+
+                function nearEdge(x, y, d) {
+                    if (d <= 0) return false;
+                    if (x < minX - d || x > maxX + d || y < minY - d || y > maxY + d) return false;
+                    const d2 = d * d;
+                    const reach = Math.ceil(d / cell);
+                    const gx = Util.clamp(Math.floor((x - minX) / cell), 0, gridW - 1);
+                    const gy = Util.clamp(Math.floor((y - minY) / cell), 0, gridH - 1);
+                    for (let ix = Math.max(0, gx - reach); ix <= Math.min(gridW - 1, gx + reach); ix++) {
+                        for (let iy = Math.max(0, gy - reach); iy <= Math.min(gridH - 1, gy + reach); iy++) {
+                            const bucket = grid.get(cellKey(ix, iy));
+                            if (!bucket) continue;
+                            for (let k = 0; k < bucket.length; k++) {
+                                if (distanceSq(x, y, bucket[k]) < d2) return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+
+                // The largest loop by area is the dial; everything else is a hole in it.
+                // Nesting deeper than that (an island inside a cut-out) is left to the
+                // even-odd rule above, which gets it right even though the extruded body
+                // below cannot.
+                const ranked = loops
+                    .map(loop => ({ loop, area: Math.abs(signedArea(loop)) }))
+                    .sort((a, b) => b.area - a.area);
+                const outer = ranked[0].loop;
+                const holes = ranked.slice(1).map(r => r.loop);
+                const centroid = centroidOf(outer);
+
+                let radius = 0;
+                for (let i = 0; i < outer.length; i += 2) {
+                    radius = Math.max(radius, Math.hypot(outer[i] - centroid[0], outer[i + 1] - centroid[1]));
+                }
+
+                return {
+                    loops, outer, holes,
+                    minX, minY, maxX, maxY, width, height, diagonal,
+                    centerX: centroid[0], centerY: centroid[1],
+                    radius, edgeCount,
+                    area: ranked.reduce((sum, r, i) => i === 0 ? r.area : sum - r.area, 0),
+                    contains, nearEdge
+                };
+            }
+
+            return { create, signedArea };
+        })();
+
+        // --- Waveform ----------------------------------------------------------------
+        // The cam profiles a rose engine's rubber rides on, as pure functions of phase.
+        // Several patterns share them, and swapping one for another is the single biggest
+        // change to the character of a guilloché -- so they live together rather than
+        // inside whichever pattern first needed them.
+        const Waveform = (() => {
+            const SQUARE_NORM = Math.tanh(3);
+
+            function of(kind, phase) {
+                switch (kind) {
+                    case 'triangle': return (2 / Math.PI) * Math.asin(Math.sin(phase));
+                    case 'saw': {
+                        const u = phase / (Math.PI * 2);
+                        return 2 * (u - Math.floor(u + 0.5));
+                    }
+                    // Softened rather than a true square: an instantaneous step would put a
+                    // vertical wall in the relief and a zero-length segment in the export.
+                    case 'square': return Math.tanh(3 * Math.sin(phase)) / SQUARE_NORM;
+                    case 'point': {
+                        const s = Math.sin(phase);
+                        return Math.sign(s) * Math.sqrt(Math.abs(s));
+                    }
+                    default: return Math.sin(phase);
+                }
+            }
+
+            const OPTIONS = [
+                ['sine', 'Sine'], ['triangle', 'Triangle'], ['saw', 'Sawtooth'],
+                ['square', 'Soft Square'], ['point', 'Pointed']
+            ];
+
+            return { of, OPTIONS };
+        })();
+        // --- Patterns ----------------------------------------------------------------
+        // The generators, each with the schema of its own parameters. A generator draws in
+        // its layer's local frame, centred on the origin, and is told only how far out it
+        // may need to reach (`ctx.reach`). It never asks where the dial's edge is: drawing
+        // past it is expected, and Clipper cuts it back. That is what keeps "the pattern
+        // cannot leave the dial" a property of the program rather than of ten generators
+        // each having remembered to check.
+        //
+        // Every count is clamped where it is read. The parameters are free-typed numbers,
+        // and a spacing of 0.001 on a 40mm dial would otherwise ask for forty thousand
+        // rings before anything got a chance to notice.
+        const Patterns = (() => {
+            const TAU = Math.PI * 2;
+            const DEG = Math.PI / 180;
+
+            const waveformParam = (value = 'sine') => ({
+                k: 'waveform', label: 'Cam Profile', type: 'select', value,
+                options: Waveform.OPTIONS
+            });
+
+            // A straight segment in the local frame, given a direction and an offset along
+            // its perpendicular. Used by every family-of-parallel-lines pattern.
+            function straightLine(ux, uy, offset, half) {
+                const vx = -uy, vy = ux;
+                return {
+                    pts: [
+                        -ux * half + vx * offset, -uy * half + vy * offset,
+                        ux * half + vx * offset, uy * half + vy * offset
+                    ],
+                    closed: false
+                };
+            }
+
+            function circle(cx, cy, r, start, sweep, step) {
+                const steps = Util.clamp(Math.ceil(Math.abs(sweep) / (step || 0.05)), 8, 4000);
+                const pts = [];
+                for (let i = 0; i <= steps; i++) {
+                    const a = start + sweep * (i / steps);
+                    pts.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+                }
+                return { pts, closed: Math.abs(Math.abs(sweep) - TAU) < 1e-9 };
+            }
+
+            // Families of evenly spaced parallel lines, the raw material of every
+            // cross-hatch-derived pattern here.
+            function family(out, ctx, angleDeg, spacing, phase) {
+                const a = angleDeg * DEG;
+                const ux = Math.cos(a);
+                const uy = Math.sin(a);
+                const half = ctx.reach * 1.05;
+                const step = Math.max(spacing, 0.02);
+                const count = Util.clamp(Math.ceil(half / step), 0, 4000);
+                for (let k = -count; k <= count; k++) {
+                    if (!ctx.room()) return;
+                    out.push(straightLine(ux, uy, k * step + (phase || 0), half));
+                    ctx.spend(2);
+                }
+            }
+
+            const REGISTRY = {
+                'rosette-spiral': {
+                    label: 'Rosette Spiral (Rose Engine)',
+                    note: 'One unbroken spiral cut while the rosette rocks the work: the classic ' +
+                          'sunray-and-wave guilloché of a rose engine.',
+                    params: [
+                        { k: 'lobes', label: 'Lobes', type: 'number', value: 36, min: 1, max: 400, step: 1 },
+                        { k: 'amplitude', label: 'Amplitude (mm)', type: 'number', value: 0.3, step: 0.05 },
+                        waveformParam(),
+                        { k: 'pitch', label: 'Pitch / rev (mm)', type: 'number', value: 0.45, min: 0.02, step: 0.05 },
+                        { k: 'innerRadius', label: 'Start Radius (mm)', type: 'number', value: 1.5, min: 0, step: 0.5 },
+                        { k: 'phaseDrift', label: 'Phase Drift (°/rev)', type: 'number', value: 0, step: 1,
+                          help: 'Turns the rosette a little further each revolution, so the lobes ' +
+                                'sweep round into a twist instead of stacking radially.' }
+                    ],
+                    generate(p, ctx) {
+                        const lobes = Util.clamp(Math.round(p.lobes), 1, 400);
+                        const pitch = Math.max(p.pitch, 0.02);
+                        const start = Math.max(p.innerRadius, 0);
+                        const revs = Util.clamp(Math.ceil((ctx.reach - start) / pitch) + 1, 1, 2000);
+                        const perRev = Util.clamp(lobes * 20, 360, 3000);
+                        const total = Math.min(revs * perRev, ctx.left());
+                        const pts = [];
+                        for (let i = 0; i <= total; i++) {
+                            const th = (i / perRev) * TAU;
+                            const drift = p.phaseDrift * DEG * (th / TAU);
+                            const r = start + pitch * (th / TAU) +
+                                      p.amplitude * Waveform.of(p.waveform, lobes * th + drift);
+                            pts.push(Math.cos(th) * r, Math.sin(th) * r);
+                        }
+                        ctx.spend(pts.length / 2);
+                        return [{ pts, closed: false }];
+                    }
+                },
+
+                'rosette-rings': {
+                    label: 'Rosette Rings',
+                    note: 'The same rosette cut as a stack of separate closed rings rather than a ' +
+                          'spiral. A phase step between rings is what produces the woven look.',
+                    params: [
+                        { k: 'lobes', label: 'Lobes', type: 'number', value: 30, min: 1, max: 400, step: 1 },
+                        { k: 'amplitude', label: 'Amplitude (mm)', type: 'number', value: 0.35, step: 0.05 },
+                        waveformParam(),
+                        { k: 'spacing', label: 'Ring Spacing (mm)', type: 'number', value: 0.6, min: 0.05, step: 0.05 },
+                        { k: 'rings', label: 'Rings (0 = fill)', type: 'number', value: 0, min: 0, max: 2000, step: 1 },
+                        { k: 'innerRadius', label: 'Inner Radius (mm)', type: 'number', value: 2, min: 0, step: 0.5 },
+                        { k: 'phaseStep', label: 'Phase / ring (°)', type: 'number', value: 6, step: 1 },
+                        { k: 'ampTaper', label: 'Amplitude Taper (%/ring)', type: 'number', value: 0, step: 1,
+                          help: 'Grows or shrinks the lobe depth as the rings move outward. ' +
+                                'Negative flattens the pattern toward the rim.' }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const lobes = Util.clamp(Math.round(p.lobes), 1, 400);
+                        const spacing = Math.max(p.spacing, 0.05);
+                        const inner = Math.max(p.innerRadius, 0);
+                        const auto = Math.floor((ctx.reach - inner) / spacing) + 1;
+                        const rings = Util.clamp(p.rings > 0 ? Math.round(p.rings) : auto, 1, 2000);
+                        const steps = Util.clamp(lobes * 20, 360, 3000);
+
+                        for (let k = 0; k < rings; k++) {
+                            if (!ctx.room()) break;
+                            const R = inner + k * spacing;
+                            if (R <= 1e-6) continue;
+                            const amp = p.amplitude * (1 + (p.ampTaper / 100) * k);
+                            const phase = k * p.phaseStep * DEG;
+                            const pts = [];
+                            for (let i = 0; i <= steps; i++) {
+                                const th = (i / steps) * TAU;
+                                const r = R + amp * Waveform.of(p.waveform, lobes * th + phase);
+                                pts.push(Math.cos(th) * r, Math.sin(th) * r);
+                            }
+                            out.push({ pts, closed: true });
+                            ctx.spend(steps + 1);
+                        }
+                        return out;
+                    }
+                },
+
+                'spirograph': {
+                    label: 'Spirograph Rosette',
+                    note: 'A hypotrochoid: the flower a pen traces from inside a rolling circle. ' +
+                          'Two radii and a pen offset decide the whole figure.',
+                    params: [
+                        { k: 'ringR', label: 'Fixed Radius', type: 'number', value: 60, min: 1, step: 1 },
+                        { k: 'rollR', label: 'Rolling Radius', type: 'number', value: 23, min: 1, step: 1 },
+                        { k: 'penD', label: 'Pen Offset', type: 'number', value: 18, min: 0, step: 1 },
+                        { k: 'fit', label: 'Scale to fit dial', type: 'check', value: true },
+                        { k: 'scale', label: 'Manual Scale', type: 'number', value: 0.25, min: 0.001, step: 0.05 },
+                        { k: 'copies', label: 'Copies', type: 'number', value: 1, min: 1, max: 120, step: 1,
+                          help: 'Repeats the figure, each turned an equal share of a full turn, ' +
+                                'so several passes interlace.' }
+                    ],
+                    generate(p, ctx) {
+                        const R = Math.max(p.ringR, 0.001);
+                        const r = Math.max(p.rollR, 0.001);
+                        const d = Math.max(p.penD, 0);
+                        // The figure closes after r / gcd(R, r) turns. Rounding to integers
+                        // first is what makes that finite for the arbitrary decimals the
+                        // fields allow; the cap catches the near-irrational ratios that
+                        // would otherwise never close at all.
+                        const revs = Util.clamp(Math.round(r) / Util.gcd(R, r), 1, 300);
+                        const extent = Math.abs(R - r) + d;
+                        const scale = p.fit ? ctx.reach / Math.max(extent, 1e-6) : Math.max(p.scale, 1e-6);
+                        const copies = Util.clamp(Math.round(p.copies), 1, 120);
+                        const steps = Util.clamp(Math.round(revs * 720), 720, 200000);
+                        const ratio = (R - r) / r;
+
+                        const out = [];
+                        for (let c = 0; c < copies; c++) {
+                            if (!ctx.room()) break;
+                            const turn = (c / copies) * TAU;
+                            const ct = Math.cos(turn);
+                            const st = Math.sin(turn);
+                            const pts = [];
+                            const budget = Math.min(steps, ctx.left());
+                            for (let i = 0; i <= budget; i++) {
+                                const t = (i / steps) * revs * TAU;
+                                const x = ((R - r) * Math.cos(t) + d * Math.cos(ratio * t)) * scale;
+                                const y = ((R - r) * Math.sin(t) - d * Math.sin(ratio * t)) * scale;
+                                pts.push(x * ct - y * st, x * st + y * ct);
+                            }
+                            out.push({ pts, closed: budget >= steps });
+                            ctx.spend(pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
+                'waves': {
+                    label: 'Straight-Line Waves',
+                    note: 'Straight-line engine turning: parallel passes with the rubber rocking, ' +
+                          'each pass started a little further along the wave.',
+                    params: [
+                        { k: 'spacing', label: 'Line Spacing (mm)', type: 'number', value: 0.6, min: 0.05, step: 0.05 },
+                        { k: 'wavelength', label: 'Wavelength (mm)', type: 'number', value: 6, min: 0.1, step: 0.5 },
+                        { k: 'amplitude', label: 'Amplitude (mm)', type: 'number', value: 0.6, step: 0.05 },
+                        waveformParam(),
+                        { k: 'angle', label: 'Angle (°)', type: 'number', value: 0, step: 5 },
+                        { k: 'phaseStep', label: 'Phase / line (°)', type: 'number', value: 24, step: 1 }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const a = p.angle * DEG;
+                        const ux = Math.cos(a), uy = Math.sin(a);
+                        const vx = -uy, vy = ux;
+                        const half = ctx.reach * 1.05;
+                        const spacing = Math.max(p.spacing, 0.05);
+                        const lambda = Math.max(p.wavelength, 0.1);
+                        const lines = Util.clamp(Math.ceil(half / spacing), 0, 4000);
+                        // Enough samples that the shortest wave still reads as a curve, and
+                        // never so many that a long flat line costs anything.
+                        const steps = Util.clamp(Math.ceil((2 * half) / (lambda / 24)), 8, 6000);
+
+                        for (let k = -lines; k <= lines; k++) {
+                            if (!ctx.room()) break;
+                            const phase = k * p.phaseStep * DEG;
+                            const base = k * spacing;
+                            const pts = [];
+                            for (let i = 0; i <= steps; i++) {
+                                const s = -half + (2 * half) * (i / steps);
+                                const off = base + p.amplitude * Waveform.of(p.waveform, (TAU * s) / lambda + phase);
+                                pts.push(ux * s + vx * off, uy * s + vy * off);
+                            }
+                            out.push({ pts, closed: false });
+                            ctx.spend(steps + 1);
+                        }
+                        return out;
+                    }
+                },
+
+                'sunburst': {
+                    label: 'Sunburst (Soleil)',
+                    note: 'Radial rays from the centre. A little twist turns it from a sunray dial ' +
+                          'into a snailed one.',
+                    params: [
+                        { k: 'count', label: 'Rays', type: 'number', value: 180, min: 2, max: 4000, step: 2 },
+                        { k: 'innerRadius', label: 'Inner Radius (mm)', type: 'number', value: 2.5, min: 0, step: 0.5 },
+                        { k: 'outerRadius', label: 'Outer Radius (0 = edge)', type: 'number', value: 0, min: 0, step: 0.5 },
+                        { k: 'twist', label: 'Twist (°)', type: 'number', value: 0, step: 5,
+                          help: 'How far a ray turns between its inner and outer end. Anything but ' +
+                                'zero makes each ray a curve rather than a straight line.' },
+                        { k: 'alternate', label: 'Alternate Shorten (%)', type: 'number', value: 0, min: 0, max: 95, step: 5 }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const count = Util.clamp(Math.round(p.count), 2, 4000);
+                        const inner = Math.max(p.innerRadius, 0);
+                        const outer = p.outerRadius > 0 ? p.outerRadius : ctx.reach;
+                        const twist = p.twist * DEG;
+                        const steps = Math.abs(p.twist) > 0.01 ? 64 : 1;
+
+                        for (let i = 0; i < count; i++) {
+                            if (!ctx.room()) break;
+                            const base = (i / count) * TAU;
+                            const shorten = (i & 1) ? 1 - Util.clamp(p.alternate, 0, 95) / 100 : 1;
+                            const end = inner + (outer - inner) * shorten;
+                            const pts = [];
+                            for (let s = 0; s <= steps; s++) {
+                                const f = s / steps;
+                                const r = inner + (end - inner) * f;
+                                const a = base + twist * f;
+                                pts.push(Math.cos(a) * r, Math.sin(a) * r);
+                            }
+                            out.push({ pts, closed: false });
+                            ctx.spend(steps + 1);
+                        }
+                        return out;
+                    }
+                },
+
+                'concentric': {
+                    label: 'Concentric Circles',
+                    note: 'Plain turned circles. Offset the layer centre and they become the ' +
+                          'eccentric côtes circulaires of a snailed dial.',
+                    params: [
+                        { k: 'spacing', label: 'Spacing (mm)', type: 'number', value: 0.5, min: 0.05, step: 0.05 },
+                        { k: 'innerRadius', label: 'Inner Radius (mm)', type: 'number', value: 0.5, min: 0, step: 0.5 },
+                        { k: 'count', label: 'Count (0 = fill)', type: 'number', value: 0, min: 0, max: 4000, step: 1 }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const spacing = Math.max(p.spacing, 0.05);
+                        const inner = Math.max(p.innerRadius, 0);
+                        const auto = Math.floor((ctx.reach - inner) / spacing) + 1;
+                        const count = Util.clamp(p.count > 0 ? Math.round(p.count) : auto, 1, 4000);
+                        for (let i = 0; i < count; i++) {
+                            if (!ctx.room()) break;
+                            const r = inner + i * spacing;
+                            if (r <= 1e-6) continue;
+                            // Step chosen so the chord stays under a tenth of a millimetre
+                            // whatever the radius: a visible facet on a turned circle is the
+                            // one flaw that reads instantly as "not engine turned".
+                            const c = circle(0, 0, r, 0, TAU, Math.min(0.05, 0.1 / r));
+                            out.push(c);
+                            ctx.spend(c.pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
+                'crosshatch': {
+                    label: 'Cross Hatch',
+                    note: 'Two or more families of parallel lines laid over each other.',
+                    params: [
+                        { k: 'spacing', label: 'Spacing (mm)', type: 'number', value: 0.8, min: 0.05, step: 0.05 },
+                        { k: 'angle', label: 'First Angle (°)', type: 'number', value: 45, step: 5 },
+                        { k: 'between', label: 'Angle Between (°)', type: 'number', value: 90, step: 5 },
+                        { k: 'families', label: 'Families', type: 'number', value: 2, min: 1, max: 12, step: 1 }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const families = Util.clamp(Math.round(p.families), 1, 12);
+                        for (let f = 0; f < families; f++) {
+                            family(out, ctx, p.angle + f * p.between, p.spacing, 0);
+                        }
+                        return out;
+                    }
+                },
+
+                'clous': {
+                    label: 'Clous de Paris (Hobnail)',
+                    note: 'The square grid of tiny pyramids. The diagonals are the pyramid edges: ' +
+                          'leave them off and it is a plain grid.',
+                    params: [
+                        { k: 'pitch', label: 'Pitch (mm)', type: 'number', value: 0.9, min: 0.05, step: 0.05 },
+                        { k: 'angle', label: 'Angle (°)', type: 'number', value: 45, step: 5 },
+                        { k: 'diagonals', label: 'Cut pyramid diagonals', type: 'check', value: false }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const pitch = Math.max(p.pitch, 0.05);
+                        family(out, ctx, p.angle, pitch, 0);
+                        family(out, ctx, p.angle + 90, pitch, 0);
+                        if (p.diagonals) {
+                            // Through the cell corners, so the diagonals meet the grid where
+                            // the lines cross rather than wandering across the squares.
+                            const dSpacing = pitch * Math.SQRT1_2;
+                            family(out, ctx, p.angle + 45, dSpacing, 0);
+                            family(out, ctx, p.angle + 135, dSpacing, 0);
+                        }
+                        return out;
+                    }
+                },
+
+                'basket': {
+                    label: 'Basket Weave (Panier)',
+                    note: 'A checkerboard of small hatched blocks, each turned a quarter turn from ' +
+                          'its neighbours.',
+                    params: [
+                        { k: 'cell', label: 'Cell Size (mm)', type: 'number', value: 3, min: 0.2, step: 0.25 },
+                        { k: 'lines', label: 'Lines per Cell', type: 'number', value: 6, min: 1, max: 60, step: 1 },
+                        { k: 'angle', label: 'Angle (°)', type: 'number', value: 0, step: 5 },
+                        { k: 'inset', label: 'Cell Inset (%)', type: 'number', value: 10, min: 0, max: 45, step: 5 }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const cell = Math.max(p.cell, 0.2);
+                        const lines = Util.clamp(Math.round(p.lines), 1, 60);
+                        const inset = Util.clamp(p.inset, 0, 45) / 100;
+                        const a = p.angle * DEG;
+                        const ux = Math.cos(a), uy = Math.sin(a);
+                        const vx = -uy, vy = ux;
+                        const span = cell * (1 - 2 * inset) / 2;
+                        const n = Util.clamp(Math.ceil(ctx.reach / cell) + 1, 0, 400);
+
+                        for (let ix = -n; ix <= n; ix++) {
+                            for (let iy = -n; iy <= n; iy++) {
+                                if (!ctx.room()) return out;
+                                const cx = ux * (ix * cell) + vx * (iy * cell);
+                                const cy = uy * (ix * cell) + vy * (iy * cell);
+                                // Skip whole cells that cannot reach the dial at all: on a
+                                // round outline that is a third of the bounding square.
+                                if (Math.hypot(cx, cy) > ctx.reach + cell) continue;
+                                // The checkerboard: alternate cells run their hatch the
+                                // other way, which is the whole of the weave illusion.
+                                const flip = ((ix + iy) & 1) === 0;
+                                const dx = flip ? ux : vx;
+                                const dy = flip ? uy : vy;
+                                const px = flip ? vx : -ux;
+                                const py = flip ? vy : -uy;
+                                for (let j = 0; j < lines; j++) {
+                                    const t = ((j + 0.5) / lines - 0.5) * cell * (1 - 2 * inset);
+                                    out.push({
+                                        pts: [
+                                            cx + px * t - dx * span, cy + py * t - dy * span,
+                                            cx + px * t + dx * span, cy + py * t + dy * span
+                                        ],
+                                        closed: false
+                                    });
+                                    ctx.spend(2);
+                                }
+                            }
+                        }
+                        return out;
+                    }
+                },
+
+                'arcs': {
+                    label: 'Barleycorn Arcs (Grain d\'Orge)',
+                    note: 'Rings of overlapping arcs struck from centres that sit on a circle. ' +
+                          'Stagger the rings and the scales interlock.',
+                    params: [
+                        { k: 'divisions', label: 'Arcs per Ring', type: 'number', value: 24, min: 1, max: 2000, step: 1 },
+                        { k: 'arcRadius', label: 'Arc Radius (mm)', type: 'number', value: 5, min: 0.1, step: 0.5 },
+                        { k: 'span', label: 'Arc Span (°)', type: 'number', value: 160, min: 5, max: 360, step: 5 },
+                        { k: 'rings', label: 'Rings (0 = fill)', type: 'number', value: 0, min: 0, max: 400, step: 1 },
+                        { k: 'ringSpacing', label: 'Ring Spacing (mm)', type: 'number', value: 3.5, min: 0.1, step: 0.5 },
+                        { k: 'innerRadius', label: 'Inner Radius (mm)', type: 'number', value: 3.5, min: 0, step: 0.5 },
+                        { k: 'stagger', label: 'Stagger (% of division)', type: 'number', value: 50, step: 5 }
+                    ],
+                    generate(p, ctx) {
+                        const out = [];
+                        const divisions = Util.clamp(Math.round(p.divisions), 1, 2000);
+                        const arcR = Math.max(p.arcRadius, 0.1);
+                        const spacing = Math.max(p.ringSpacing, 0.1);
+                        const inner = Math.max(p.innerRadius, 0);
+                        const auto = Math.floor((ctx.reach - inner) / spacing) + 1;
+                        const rings = Util.clamp(p.rings > 0 ? Math.round(p.rings) : auto, 1, 400);
+                        const span = Util.clamp(p.span, 5, 360) * DEG;
+
+                        for (let m = 0; m < rings; m++) {
+                            const R = inner + m * spacing;
+                            const stagger = (p.stagger / 100) * (TAU / divisions) * m;
+                            for (let i = 0; i < divisions; i++) {
+                                if (!ctx.room()) return out;
+                                const a = (i / divisions) * TAU + stagger;
+                                const cx = Math.cos(a) * R;
+                                const cy = Math.sin(a) * R;
+                                // Struck facing the dial's centre, so the scales all lie the
+                                // same way up however far out the ring is.
+                                const c = circle(cx, cy, arcR, a + Math.PI - span / 2, span, 0.06);
+                                out.push(c);
+                                ctx.spend(c.pts.length / 2);
+                            }
+                        }
+                        return out;
+                    }
+                }
+            };
+
+            const ORDER = [
+                'rosette-spiral', 'rosette-rings', 'spirograph', 'waves', 'sunburst',
+                'concentric', 'crosshatch', 'clous', 'basket', 'arcs'
+            ];
+
+            function defaults(type) {
+                const out = {};
+                for (const param of REGISTRY[type].params) out[param.k] = param.value;
+                return out;
+            }
+
+            return {
+                ORDER,
+                get(type) { return REGISTRY[type]; },
+                defaults
+            };
+        })();
+        // --- Clipper -----------------------------------------------------------------
+        // The containment rule, and the only place it lives. A polyline goes in with a
+        // predicate; the parts of it that satisfy the predicate come out, cut at the
+        // crossings.
+        //
+        // It walks samples rather than intersecting against the boundary edges directly,
+        // and that is deliberate: the predicate is not a polygon. It is "inside the outline,
+        // AND no nearer than the margin to any edge of it, AND within this layer's radius
+        // band" -- a region whose true border is an offset curve nobody has to construct.
+        // Sampling asks the question the caller actually posed, and a short bisection puts
+        // the cut within a few microns of the real crossing.
+        const Clipper = (() => {
+            const BISECT_STEPS = 12;
+
+            function bisect(x0, y0, x1, y1, stateAt0, inside) {
+                let lo = 0;
+                let hi = 1;
+                for (let k = 0; k < BISECT_STEPS; k++) {
+                    const m = (lo + hi) / 2;
+                    if (inside(x0 + (x1 - x0) * m, y0 + (y1 - y0) * m) === stateAt0) lo = m;
+                    else hi = m;
+                }
+                const t = (lo + hi) / 2;
+                return [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+            }
+
+            function clip(pts, closed, inside, maxStep) {
+                const out = [];
+                const n = pts.length / 2;
+                if (n < 2) return out;
+
+                let prevX = pts[0];
+                let prevY = pts[1];
+                let prevIn = inside(prevX, prevY);
+                let run = prevIn ? [prevX, prevY] : null;
+
+                const last = closed ? n : n - 1;
+                for (let i = 0; i < last; i++) {
+                    const ax = pts[i * 2];
+                    const ay = pts[i * 2 + 1];
+                    const j = (i + 1) % n;
+                    const bx = pts[j * 2];
+                    const by = pts[j * 2 + 1];
+                    const steps = Math.max(1, Math.min(4096,
+                        Math.ceil(Math.hypot(bx - ax, by - ay) / maxStep)));
+
+                    for (let s = 1; s <= steps; s++) {
+                        const t = s / steps;
+                        const x = ax + (bx - ax) * t;
+                        const y = ay + (by - ay) * t;
+                        const isIn = inside(x, y);
+
+                        if (isIn === prevIn) {
+                            if (isIn) run.push(x, y);
+                        } else if (prevIn) {
+                            const cut = bisect(prevX, prevY, x, y, true, inside);
+                            run.push(cut[0], cut[1]);
+                            if (run.length >= 4) out.push(run);
+                            run = null;
+                        } else {
+                            const cut = bisect(prevX, prevY, x, y, false, inside);
+                            run = [cut[0], cut[1], x, y];
+                        }
+
+                        prevIn = isIn;
+                        prevX = x;
+                        prevY = y;
+                    }
+                }
+
+                if (run && run.length >= 4) out.push(run);
+                return out;
+            }
+
+            return { clip };
+        })();
+
+        // --- Viewer ------------------------------------------------------------------
+        // The 3D view itself: scene, camera, renderer, orbit controls, lighting and the
+        // grid. Knows nothing about dials -- what it is shown is pushed in from outside, in
+        // millimetres.
+        const Viewer = (() => {
+            const container = Util.el('canvas-container');
+
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(Palette.BACKGROUND);
+
+            const camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.05, 3000);
+            camera.position.set(0, -40, 40);
+            // The dial is authored face-up in XY, so Z is up. This must be set before
+            // OrbitControls is constructed -- r128 captures the orbit axis from camera.up
+            // once, at that moment, and never re-reads it.
+            camera.up.set(0, 0, 1);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.05;
+            container.appendChild(renderer.domElement);
+
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.06;
+            controls.zoomSpeed = 1.6;
+            controls.minDistance = 2;
+            controls.maxDistance = 600;
+
+            // --- Environment ---------------------------------------------------------
+            // A guilloché is invisible under diffuse light. What makes the pattern read is
+            // a bright, structured surround sliding across two flanks that face a few
+            // degrees apart -- so the scene gets a real environment to reflect rather than
+            // a couple of lamps, and the highlights sweep as the dial turns.
+            function environmentTexture() {
+                const c = document.createElement('canvas');
+                c.width = 512;
+                c.height = 256;
+                const g = c.getContext('2d');
+
+                const sky = g.createLinearGradient(0, 0, 0, 256);
+                sky.addColorStop(0.00, '#ffffff');
+                sky.addColorStop(0.42, '#93a8bf');
+                sky.addColorStop(0.50, '#39404a');
+                sky.addColorStop(1.00, '#0e1113');
+                g.fillStyle = sky;
+                g.fillRect(0, 0, 512, 256);
+
+                // Softbox-shaped highlights around the upper hemisphere. Three of them, at
+                // uneven spacing, so a rotating dial never settles into a symmetry.
+                for (const [x, y, rx, ry, alpha] of [[80, 60, 70, 40, 1.0],
+                                                     [250, 34, 34, 22, 0.85],
+                                                     [400, 78, 90, 30, 0.9]]) {
+                    const blob = g.createRadialGradient(x, y, 0, x, y, Math.max(rx, ry));
+                    blob.addColorStop(0, `rgba(255,255,255,${alpha})`);
+                    blob.addColorStop(1, 'rgba(255,255,255,0)');
+                    g.save();
+                    g.translate(x, y);
+                    g.scale(1, ry / Math.max(rx, ry));
+                    g.translate(-x, -y);
+                    g.fillStyle = blob;
+                    g.fillRect(x - rx * 2, y - ry * 3, rx * 4, ry * 6);
+                    g.restore();
+                }
+
+                const tex = new THREE.CanvasTexture(c);
+                tex.mapping = THREE.EquirectangularReflectionMapping;
+                tex.encoding = THREE.sRGBEncoding;
+                return tex;
+            }
+
+            {
+                const pmrem = new THREE.PMREMGenerator(renderer);
+                pmrem.compileEquirectangularShader();
+                const source = environmentTexture();
+                scene.environment = pmrem.fromEquirectangular(source).texture;
+                source.dispose();
+                pmrem.dispose();
+            }
+
+            // Kept low: the environment does the work, and ambient light adds equally to
+            // every normal, which erases exactly the flank-to-flank difference the pattern
+            // is made of.
+            scene.add(new THREE.AmbientLight(0xffffff, 0.10));
+
+            // Rebuilt in camera space each frame. A world-fixed key leaves half the dial on
+            // the environment alone, and raking rather than head-on is what puts the steep
+            // part of the falloff across shallow relief.
+            const keyLight = new THREE.DirectionalLight(0xffffff, 0.55);
+            const fillLight = new THREE.DirectionalLight(0xdfe8ff, 0.22);
+            scene.add(keyLight, fillLight);
+
+            const LIGHT_DISTANCE = 500;
+            const camBasisX = new THREE.Vector3();
+            const camBasisY = new THREE.Vector3();
+            const camBasisZ = new THREE.Vector3();
+            const lightDir = new THREE.Vector3();
+
+            function updateLights() {
+                camera.updateMatrixWorld();
+                camera.matrixWorld.extractBasis(camBasisX, camBasisY, camBasisZ);
+
+                lightDir.copy(camBasisZ).multiplyScalar(0.70)
+                    .addScaledVector(camBasisY, 0.58)
+                    .addScaledVector(camBasisX, -0.45)
+                    .normalize();
+                keyLight.position.copy(lightDir).multiplyScalar(LIGHT_DISTANCE);
+
+                lightDir.copy(camBasisZ).multiplyScalar(0.55)
+                    .addScaledVector(camBasisY, -0.60)
+                    .addScaledVector(camBasisX, 0.52)
+                    .normalize();
+                fillLight.position.copy(lightDir).multiplyScalar(LIGHT_DISTANCE);
+            }
+
+            // --- Grid ----------------------------------------------------------------
+            const gridHelper = new THREE.GridHelper(100, 50, Palette.GRID, Palette.GRID_FAINT);
+            gridHelper.rotation.x = Math.PI / 2;   // into the XY plane, where the dial lies
+            scene.add(gridHelper);
+
+            // Also called when the sidebar folds, which changes the view's width without the
+            // window resizing. The zero guard is for a container that has not been laid out,
+            // where the aspect ratio would come out NaN and take the projection with it.
+            function resize() {
+                if (container.clientWidth === 0 || container.clientHeight === 0) return;
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            }
+
+            // The box, not the window: a phone's toolbars sliding away changes the dvh
+            // height without reliably firing a window resize. Catches both.
+            new ResizeObserver(resize).observe(container);
+
+            function frame(bounds) {
+                const sizeX = Math.max(bounds.maxX - bounds.minX, 1);
+                const sizeY = Math.max(bounds.maxY - bounds.minY, 1);
+                const centerX = (bounds.minX + bounds.maxX) / 2;
+                const centerY = (bounds.minY + bounds.maxY) / 2;
+                const maxDim = Math.max(sizeX, sizeY);
+
+                camera.near = Util.clamp(maxDim / 2000, 0.01, 0.5);
+                camera.far = Math.max(maxDim * 40, 800);
+                camera.updateProjectionMatrix();
+                controls.minDistance = maxDim * 0.05;
+                controls.maxDistance = maxDim * 15;
+
+                controls.target.set(centerX, centerY, 0);
+                // Opened close to face-on and tipped just enough that the relief catches the
+                // light: a dial read dead flat shows nothing at all.
+                camera.position.set(centerX, centerY - maxDim * 0.75, maxDim * 1.55);
+                controls.update();
+
+                const grid = Math.ceil(maxDim * 2 / 10) * 10;
+                gridHelper.scale.setScalar(grid / 100);
+            }
+
+            return {
+                container, scene, camera, renderer, controls,
+                add(obj) { scene.add(obj); },
+                remove(obj) { scene.remove(obj); },
+                render() { renderer.render(scene, camera); },
+                updateLights,
+                resize,
+                frame,
+                setGridVisible(on) { gridHelper.visible = on; }
+            };
+        })();
+
+        // --- ViewCube ----------------------------------------------------------------
+        // A navigation widget in the bottom-right of the 3D view. It is not a DOM element
+        // and not a second renderer: it is a second render pass of the same WebGL context
+        // into a scissored corner of the same canvas, which is why it costs nothing to keep
+        // in sync and cannot drift out of alignment with the view it describes.
+        //
+        // Nothing else in the file depends on this module, and it depends on nothing but
+        // Viewer -- deleting the whole block, its two calls in the animation loop and this
+        // comment would remove the feature cleanly.
+        const ViewCube = (() => {
+            const { container, renderer, camera, controls } = Viewer;
+
+            const SIZE = 88;        // css px, square
+            const INSET = 12;       // matches the overlay panels' inset
+            const TURN_MS = 420;
+            // Fraction of the half-extent past which a hit counts as being on that axis's
+            // side. 0.5 is the face edge, so this leaves the middle 60% of a face as a plain
+            // face view and the rim as the edge and corner views.
+            const RIM = 0.30;
+
+            const cubeScene = new THREE.Scene();
+            const cubeCamera = new THREE.OrthographicCamera(-1.15, 1.15, 1.15, -1.15, 0.1, 20);
+
+            // Six textured planes rather than one textured box: a BoxGeometry's UVs put the
+            // texture's "up" along +Y on four faces and along ∓Z on the other two, so labels
+            // would sit sideways on a Z-up model.
+            const FACES = [
+                { label: 'DIAL',   normal: [0, 0, 1],  up: [0, 1, 0] },
+                { label: 'BACK',   normal: [0, 0, -1], up: [0, 1, 0] },
+                { label: '6',      normal: [0, -1, 0], up: [0, 0, 1] },
+                { label: '12',     normal: [0, 1, 0],  up: [0, 0, 1] },
+                { label: '3',      normal: [1, 0, 0],  up: [0, 0, 1] },
+                { label: '9',      normal: [-1, 0, 0], up: [0, 0, 1] }
+            ];
+
+            function faceTexture(label) {
+                const c = document.createElement('canvas');
+                c.width = c.height = 128;
+                const g = c.getContext('2d');
+                g.fillStyle = '#3a3a3a';
+                g.fillRect(0, 0, 128, 128);
+                g.strokeStyle = '#565656';
+                g.lineWidth = 4;
+                g.strokeRect(2, 2, 124, 124);
+                g.fillStyle = '#e0e0e0';
+                g.font = 'bold 26px "Segoe UI", Arial, sans-serif';
+                g.textAlign = 'center';
+                g.textBaseline = 'middle';
+                g.fillText(label, 64, 64);
+                const tex = new THREE.CanvasTexture(c);
+                tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+                return tex;
+            }
+
+            const faceMeshes = [];
+            {
+                const faceGeom = new THREE.PlaneGeometry(1, 1);
+                const n = new THREE.Vector3();
+                const u = new THREE.Vector3();
+                const r = new THREE.Vector3();
+                const basis = new THREE.Matrix4();
+
+                FACES.forEach(face => {
+                    const mesh = new THREE.Mesh(faceGeom, new THREE.MeshBasicMaterial({
+                        map: faceTexture(face.label)
+                    }));
+                    // A plane's own axes are +X right, +Y up, +Z out of its face. Line those
+                    // up with the world axes this face should read against and the label is
+                    // upright from the only direction it is ever seen from.
+                    n.fromArray(face.normal);
+                    u.fromArray(face.up);
+                    r.crossVectors(u, n);
+                    basis.makeBasis(r, u, n);
+                    mesh.quaternion.setFromRotationMatrix(basis);
+                    mesh.position.copy(n).multiplyScalar(0.5);
+                    mesh.userData.face = face;
+                    cubeScene.add(mesh);
+                    faceMeshes.push(mesh);
+                });
+
+                const outline = new THREE.LineSegments(
+                    new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+                    new THREE.LineBasicMaterial({ color: 0x1a1a1a })
+                );
+                outline.scale.setScalar(1.004);   // clear of the faces, so it cannot z-fight
+                cubeScene.add(outline);
+            }
+
+            const raycaster = new THREE.Raycaster();
+            const pointer = new THREE.Vector2();
+            let hovered = null;
+            let press = null;
+            let turn = null;    // an in-progress camera swing, or null
+
+            function originX() {
+                return container.clientWidth - SIZE - INSET;
+            }
+
+            function pick(event) {
+                const rect = renderer.domElement.getBoundingClientRect();
+                const px = event.clientX - rect.left;
+                const py = event.clientY - rect.top;
+                const ox = originX();
+                const oy = container.clientHeight - SIZE - INSET;
+                if (px < ox || px > ox + SIZE) return null;
+                if (py < oy || py > oy + SIZE) return null;
+
+                pointer.x = ((px - ox) / SIZE) * 2 - 1;
+                pointer.y = -((py - oy) / SIZE) * 2 + 1;
+                raycaster.setFromCamera(pointer, cubeCamera);
+                const hits = raycaster.intersectObjects(faceMeshes, false);
+                return hits.length > 0 ? hits[0] : null;
+            }
+
+            // The cube sits at the origin unrotated, so a hit point is already in cube space
+            // and each coordinate says how far toward that side of the cube the click landed.
+            // Reading all three is what gets the 26 standard views out of six flat quads.
+            function directionFromHit(hit) {
+                const side = v => (Math.abs(v) > RIM ? Math.sign(v) : 0);
+                const dir = new THREE.Vector3(side(hit.point.x), side(hit.point.y), side(hit.point.z));
+                if (dir.lengthSq() === 0) dir.fromArray(hit.object.userData.face.normal);
+                return dir.normalize();
+            }
+
+            function goToView(dir) {
+                const from = camera.position.clone().sub(controls.target);
+                const dist = from.length();
+                if (dist < 1e-6) return;
+
+                const to = dir.clone();
+                // Straight down the orbit axis is the pole, where lookAt has no defined roll.
+                // Leaning a ten-thousandth of a radian off it costs nothing visually and pins
+                // the roll, so the face-on view of the dial always comes up with 12 at the top.
+                const alongUp = to.dot(camera.up);
+                if (Math.abs(alongUp) > 0.999) {
+                    to.y = -Math.sign(alongUp) * 1e-4;
+                    to.normalize();
+                }
+
+                turn = { from: from.normalize(), to, dist, start: performance.now() };
+            }
+
+            const turnFull = new THREE.Quaternion();
+            const turnStep = new THREE.Quaternion();
+            const turnDir = new THREE.Vector3();
+
+            // Called before controls.update(), which reads the camera position back out: a
+            // swing in progress moves the camera, and the controls then settle it as if the
+            // user had put it there.
+            function update() {
+                if (!turn) return;
+                const t = Math.min(1, (performance.now() - turn.start) / TURN_MS);
+                const eased = t * t * (3 - 2 * t);
+
+                turnFull.setFromUnitVectors(turn.from, turn.to);
+                turnStep.set(0, 0, 0, 1).slerp(turnFull, eased);
+                turnDir.copy(turn.from).applyQuaternion(turnStep);
+
+                camera.position.copy(controls.target).addScaledVector(turnDir, turn.dist);
+                if (t >= 1) turn = null;
+            }
+
+            function setHover(mesh) {
+                if (hovered === mesh) return;
+                if (hovered) hovered.material.color.setHex(0xffffff);
+                hovered = mesh;
+                if (hovered) hovered.material.color.setHex(0x7fb2ff);
+                renderer.domElement.style.cursor = mesh ? 'pointer' : '';
+            }
+
+            function render() {
+                const w = container.clientWidth;
+                const h = container.clientHeight;
+                if (w === 0 || h === 0) return;
+
+                cubeCamera.position.copy(camera.position).sub(controls.target);
+                if (cubeCamera.position.lengthSq() < 1e-12) return;
+                cubeCamera.position.normalize().multiplyScalar(4);
+                cubeCamera.up.copy(camera.up);
+                cubeCamera.lookAt(0, 0, 0);
+                cubeCamera.updateMatrixWorld();
+
+                // autoClear off so the main render survives; clearDepth inside the scissor so
+                // the cube is not buried by whatever the scene left in the depth buffer there.
+                renderer.autoClear = false;
+                renderer.setScissorTest(true);
+                renderer.setScissor(originX(), INSET, SIZE, SIZE);
+                renderer.setViewport(originX(), INSET, SIZE, SIZE);
+                // A depth clear is masked out by depthMask, and a material that turned
+                // depthWrite off would leave it masked. The state cache is updated too, so
+                // the next material that asks for depthWrite:false still gets it.
+                renderer.state.buffers.depth.setMask(true);
+                renderer.clearDepth();
+                renderer.render(cubeScene, cubeCamera);
+                renderer.setScissorTest(false);
+                renderer.setViewport(0, 0, w, h);
+                renderer.autoClear = true;
+            }
+
+            // Capture phase on the container, which is an ancestor of the canvas
+            // OrbitControls is bound to: a press that belongs to the cube is stopped before
+            // the orbit ever starts. On the canvas itself this would not work, since
+            // listeners on the same element run in the order they were added regardless of
+            // the capture flag.
+            container.addEventListener('pointerdown', (e) => {
+                const hit = pick(e);
+                if (!hit) {
+                    turn = null;    // an orbit or pan overrides a swing in flight
+                    return;
+                }
+                e.stopPropagation();
+                e.preventDefault();
+                press = { x: e.clientX, y: e.clientY, hit };
+            }, true);
+
+            container.addEventListener('pointerup', (e) => {
+                if (!press) return;
+                const started = press;
+                press = null;
+                e.stopPropagation();
+                // A drag that began on the cube was aiming at something else.
+                if (Math.hypot(e.clientX - started.x, e.clientY - started.y) > 4) return;
+                goToView(directionFromHit(pick(e) || started.hit));
+            }, true);
+
+            window.addEventListener('pointerup', () => { press = null; });
+            window.addEventListener('pointercancel', () => { press = null; });
+            container.addEventListener('pointermove', (e) => setHover((pick(e) || {}).object || null));
+            container.addEventListener('pointerleave', () => setHover(null));
+
+            return { update, render };
+        })();
+        // --- DialMesh ----------------------------------------------------------------
+        // The dial body, extruded from the loaded loops, plus the outline drawn over it.
+        // The body's top face sits at z = 0, so everything the pattern modules build can be
+        // written as "height above the face" without carrying the thickness around.
+        const DialMesh = (() => {
+            const group = new THREE.Group();
+            Viewer.add(group);
+
+            const bodyGroup = new THREE.Group();
+            const outlineGroup = new THREE.Group();
+            group.add(bodyGroup, outlineGroup);
+
+            let material = null;
+
+            function disposeChildren(parent) {
+                for (const child of parent.children) {
+                    child.geometry.dispose();
+                    if (child.material !== material) child.material.dispose();
+                }
+                parent.clear();
+            }
+
+            function makeMaterial(key) {
+                const spec = Palette.MATERIALS[key] || Palette.MATERIALS.silver;
+                const m = new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(spec.color).convertSRGBToLinear(),
+                    metalness: spec.metalness,
+                    roughness: spec.roughness,
+                    // The cut relief is built as separate geometry standing on the face
+                    // rather than carved out of it, so the two touch along every edge of
+                    // every path. A hair of polygon offset pushes the face back and stops
+                    // that shared plane flickering.
+                    polygonOffset: true,
+                    polygonOffsetFactor: 1,
+                    polygonOffsetUnits: 1
+                });
+                return m;
+            }
+
+            function toShape(loop) {
+                const shape = new THREE.Shape();
+                shape.moveTo(loop[0], loop[1]);
+                for (let i = 2; i < loop.length; i += 2) shape.lineTo(loop[i], loop[i + 1]);
+                shape.closePath();
+                return shape;
+            }
+
+            function toPath(loop) {
+                const path = new THREE.Path();
+                path.moveTo(loop[0], loop[1]);
+                for (let i = 2; i < loop.length; i += 2) path.lineTo(loop[i], loop[i + 1]);
+                path.closePath();
+                return path;
+            }
+
+            function build(boundary, openChains, thickness, materialKey) {
+                disposeChildren(bodyGroup);
+                disposeChildren(outlineGroup);
+                if (material) { material.dispose(); material = null; }
+
+                // The body needs a closed loop to extrude; the outline does not. Drawing
+                // the outline either way is what makes a drawing that failed to close
+                // diagnosable -- the red chain shows exactly where the gap is.
+                if (boundary) {
+                    material = makeMaterial(materialKey);
+
+                    const shape = toShape(boundary.outer);
+                    // Even-odd sorts nesting for the clipper, but an extrusion cannot: a
+                    // loop inside a hole would be cut away rather than left standing. Dials
+                    // that go that deep are rare enough to accept the body being
+                    // approximate while the pattern containment stays exact.
+                    for (const hole of boundary.holes) shape.holes.push(toPath(hole));
+
+                    const geometry = new THREE.ExtrudeGeometry(shape, {
+                        depth: thickness,
+                        bevelEnabled: false,
+                        steps: 1,
+                        curveSegments: 1
+                    });
+                    geometry.translate(0, 0, -thickness);   // top face onto z = 0
+                    geometry.computeVertexNormals();
+                    bodyGroup.add(new THREE.Mesh(geometry, material));
+                }
+
+                // toneMapped off, here and on the pattern lines: the renderer's filmic
+                // curve is there to make the metal read, and it has no business rolling off
+                // a flat annotation colour that is meant to match its own swatch. The
+                // sRGB->linear conversion stays, since the output pass undoes it.
+                const closedMat = new THREE.LineBasicMaterial({
+                    color: new THREE.Color(Palette.OUTLINE).convertSRGBToLinear(),
+                    toneMapped: false
+                });
+                const openMat = new THREE.LineBasicMaterial({
+                    color: new THREE.Color(Palette.OUTLINE_OPEN).convertSRGBToLinear(),
+                    toneMapped: false
+                });
+
+                const toGeometry = (pts) => {
+                    const position = new Float32Array((pts.length / 2) * 3);
+                    for (let i = 0, v = 0; i < pts.length; i += 2) {
+                        position[v++] = pts[i];
+                        position[v++] = pts[i + 1];
+                        position[v++] = 0.02;
+                    }
+                    const g = new THREE.BufferGeometry();
+                    g.setAttribute('position', new THREE.BufferAttribute(position, 3));
+                    return g;
+                };
+
+                for (const loop of (boundary ? boundary.loops : [])) {
+                    outlineGroup.add(new THREE.LineLoop(toGeometry(loop), closedMat));
+                }
+                // Drawn in the warning colour: shown so the gap can be seen, but excluded
+                // from the boundary, since a chain that does not close has no inside.
+                for (const chain of openChains) {
+                    outlineGroup.add(new THREE.Line(toGeometry(chain), openMat));
+                }
+            }
+
+            return {
+                build,
+                setBodyVisible(on) { bodyGroup.visible = on; },
+                setOutlineVisible(on) { outlineGroup.visible = on; }
+            };
+        })();
+
+        // --- PatternView -------------------------------------------------------------
+        // The generated pattern, drawn two ways over the dial face.
+        //
+        // The lines are the fast, honest view: exactly the paths a cutter would follow.
+        // The relief is the simulation -- each path becomes a length of cut profile, and
+        // the two flanks of that profile catch the environment at slightly different
+        // angles, which is the entire optical effect a guilloché is made for.
+        //
+        // The relief is built as geometry standing on the face rather than carved into it.
+        // Cutting a real groove would mean subtracting it from the body, and a boolean
+        // against a hundred thousand paths is not a thing to do between two slider moves;
+        // a raised bank throws the same highlight, updates in milliseconds, and can never
+        // disagree with the paths it was built from.
+        const PatternView = (() => {
+            // Cross sections, as (offset across the cut, height above the face), both
+            // normalised: offset spans -1..1 of the half width, height 0..1 of the relief.
+            const PROFILES = {
+                ridge:  [[-1, 0], [0, 1], [1, 0]],
+                groove: [[-1, 0], [-0.5, 1], [0, 0.05], [0.5, 1], [1, 0]],
+                round:  [[-1, 0], [-0.78, 0.48], [-0.42, 0.85], [0, 1], [0.42, 0.85], [0.78, 0.48], [1, 0]]
+            };
+
+            // Past this the relief is skipped rather than built. Roughly 60MB of vertex
+            // data, which is where a mid-range laptop starts dropping frames while orbiting.
+            const MAX_RELIEF_VERTICES = 1800000;
+
+            const lineGroup = new THREE.Group();
+            const reliefGroup = new THREE.Group();
+            Viewer.add(lineGroup);
+            Viewer.add(reliefGroup);
+
+            let reliefSkipped = false;
+
+            function disposeChildren(parent) {
+                for (const child of parent.children) {
+                    child.geometry.dispose();
+                    child.material.dispose();
+                }
+                parent.clear();
+            }
+
+            // Mitred normals, so a cut keeps its width through a corner instead of pinching.
+            // The scale is clamped: a hairpin turn has an unbounded mitre, and letting it
+            // run would fire a spike across the dial.
+            function miterNormals(pts, n) {
+                const nx = new Float64Array(n);
+                const ny = new Float64Array(n);
+                for (let i = 0; i < n; i++) {
+                    let ax = 0;
+                    let ay = 0;
+                    let count = 0;
+                    if (i > 0) {
+                        const dx = pts[i * 2] - pts[(i - 1) * 2];
+                        const dy = pts[i * 2 + 1] - pts[(i - 1) * 2 + 1];
+                        const len = Math.hypot(dx, dy) || 1;
+                        ax += -dy / len; ay += dx / len; count++;
+                    }
+                    if (i < n - 1) {
+                        const dx = pts[(i + 1) * 2] - pts[i * 2];
+                        const dy = pts[(i + 1) * 2 + 1] - pts[i * 2 + 1];
+                        const len = Math.hypot(dx, dy) || 1;
+                        ax += -dy / len; ay += dx / len; count++;
+                    }
+                    const len = Math.hypot(ax, ay);
+                    if (len < 1e-9) { nx[i] = 0; ny[i] = 1; continue; }
+                    // |n_prev + n_next| / 2 is the cosine of half the turn, so its
+                    // reciprocal is exactly the mitre length.
+                    const scale = count === 2 ? Math.min(1 / Math.max(len / 2, 0.34), 3) : 1;
+                    nx[i] = (ax / len) * scale;
+                    ny[i] = (ay / len) * scale;
+                }
+                return { nx, ny };
+            }
+
+            function countVertices(polys, profileLength) {
+                let total = 0;
+                for (const pts of polys) {
+                    const n = pts.length / 2;
+                    if (n >= 2) total += (profileLength - 1) * 2 * n;
+                }
+                return total;
+            }
+
+            // One indexed quad strip per facet of the profile. Each facet keeps its own
+            // vertices, so computeVertexNormals smooths along the length of a cut -- where
+            // the surface really is smooth -- and leaves a hard crease across it, which is
+            // what makes the two flanks read as separate planes under a moving highlight.
+            function buildRelief(polys, halfWidth, height, profile) {
+                const facets = profile.length - 1;
+                const vertexCount = countVertices(polys, profile.length);
+                if (vertexCount === 0) return null;
+
+                let triangleCount = 0;
+                for (const pts of polys) {
+                    const n = pts.length / 2;
+                    if (n >= 2) triangleCount += facets * 2 * (n - 1);
+                }
+
+                const position = new Float32Array(vertexCount * 3);
+                const index = vertexCount > 65535
+                    ? new Uint32Array(triangleCount * 3)
+                    : new Uint16Array(triangleCount * 3);
+
+                let vp = 0;
+                let ip = 0;
+                let base = 0;
+
+                for (const pts of polys) {
+                    const n = pts.length / 2;
+                    if (n < 2) continue;
+                    const { nx, ny } = miterNormals(pts, n);
+
+                    for (let f = 0; f < facets; f++) {
+                        const o0 = profile[f][0] * halfWidth;
+                        const h0 = profile[f][1] * height;
+                        const o1 = profile[f + 1][0] * halfWidth;
+                        const h1 = profile[f + 1][1] * height;
+                        const start = base;
+
+                        for (let i = 0; i < n; i++) {
+                            const x = pts[i * 2];
+                            const y = pts[i * 2 + 1];
+                            position[vp++] = x + nx[i] * o0;
+                            position[vp++] = y + ny[i] * o0;
+                            position[vp++] = h0;
+                            position[vp++] = x + nx[i] * o1;
+                            position[vp++] = y + ny[i] * o1;
+                            position[vp++] = h1;
+                        }
+
+                        // Wound so the face normal comes out along +Z: the profile runs from
+                        // the right of travel to the left, and the strip advances forward.
+                        for (let i = 0; i < n - 1; i++) {
+                            const a0 = start + i * 2;
+                            const b0 = a0 + 1;
+                            const a1 = a0 + 2;
+                            const b1 = a1 + 1;
+                            index[ip++] = a0; index[ip++] = a1; index[ip++] = b0;
+                            index[ip++] = b0; index[ip++] = a1; index[ip++] = b1;
+                        }
+                        base += n * 2;
+                    }
+                }
+
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+                geometry.setIndex(new THREE.BufferAttribute(index, 1));
+                geometry.computeVertexNormals();
+                return geometry;
+            }
+
+            function buildLines(polys, z) {
+                let segments = 0;
+                for (const pts of polys) segments += Math.max(0, pts.length / 2 - 1);
+                if (segments === 0) return null;
+
+                const position = new Float32Array(segments * 6);
+                let vp = 0;
+                for (const pts of polys) {
+                    for (let i = 0; i + 3 < pts.length; i += 2) {
+                        position[vp++] = pts[i];
+                        position[vp++] = pts[i + 1];
+                        position[vp++] = z;
+                        position[vp++] = pts[i + 2];
+                        position[vp++] = pts[i + 3];
+                        position[vp++] = z;
+                    }
+                }
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+                return geometry;
+            }
+
+            // `results` is one entry per enabled layer: its settings, and the paths that
+            // survived clipping.
+            function set(results) {
+                disposeChildren(lineGroup);
+                disposeChildren(reliefGroup);
+                reliefSkipped = false;
+
+                let reliefVertices = 0;
+                for (const result of results) {
+                    const profile = PROFILES[result.layer.profile] || PROFILES.groove;
+                    if (result.layer.depth > 0) {
+                        reliefVertices += countVertices(result.polys, profile.length);
+                    }
+                }
+                const buildRelieves = reliefVertices <= MAX_RELIEF_VERTICES;
+                reliefSkipped = !buildRelieves && reliefVertices > 0;
+
+                for (const result of results) {
+                    const { layer, polys } = result;
+                    if (!polys.length) continue;
+                    const color = new THREE.Color(layer.color).convertSRGBToLinear();
+
+                    const lineGeometry = buildLines(polys, Math.max(layer.depth, 0) + 0.015);
+                    if (lineGeometry) {
+                        lineGroup.add(new THREE.LineSegments(lineGeometry,
+                            new THREE.LineBasicMaterial({ color, toneMapped: false })));
+                    }
+
+                    if (buildRelieves && layer.depth > 0 && layer.width > 0) {
+                        const geometry = buildRelief(
+                            polys, layer.width / 2, layer.depth,
+                            PROFILES[layer.profile] || PROFILES.groove
+                        );
+                        if (geometry) {
+                            // The relief is the dial's own surface, so it wears the dial's
+                            // finish rather than the layer's colour -- the layer colour
+                            // belongs to the line preview, where it identifies the layer.
+                            const spec = Palette.MATERIALS[result.materialKey] || Palette.MATERIALS.silver;
+                            reliefGroup.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+                                color: new THREE.Color(spec.color).convertSRGBToLinear(),
+                                metalness: spec.metalness,
+                                roughness: spec.roughness,
+                                side: THREE.DoubleSide
+                            })));
+                        }
+                    }
+                }
+
+                return { reliefSkipped, reliefVertices };
+            }
+
+            return {
+                set,
+                setLinesVisible(on) { lineGroup.visible = on; },
+                setReliefVisible(on) { reliefGroup.visible = on; }
+            };
+        })();
+        // --- Layers ------------------------------------------------------------------
+        // The pattern layer stack: the document being edited. Pure state, no DOM.
+        //
+        // Each layer keeps a separate bag of parameter values per pattern type, so flipping
+        // a layer from a rosette to a hobnail and back finds the rosette exactly as it was
+        // left rather than reset to the defaults.
+        const Layers = (() => {
+            const list = [];
+            let nextId = 1;
+            let selectedId = null;
+
+            function create(type) {
+                const layer = {
+                    id: nextId++,
+                    type,
+                    name: Patterns.get(type).label,
+                    enabled: true,
+                    color: Palette.layerColor(list.length),
+                    profile: 'groove',
+                    width: 0.3,
+                    depth: 0.1,
+                    cx: 0,
+                    cy: 0,
+                    rot: 0,
+                    rMin: 0,
+                    rMax: 0,
+                    values: { [type]: Patterns.defaults(type) }
+                };
+                list.push(layer);
+                selectedId = layer.id;
+                return layer;
+            }
+
+            function duplicate(id) {
+                const source = list.find(l => l.id === id);
+                if (!source) return null;
+                const copy = JSON.parse(JSON.stringify(source));
+                copy.id = nextId++;
+                copy.color = Palette.layerColor(list.length);
+                list.splice(list.indexOf(source) + 1, 0, copy);
+                selectedId = copy.id;
+                return copy;
+            }
+
+            function remove(id) {
+                const i = list.findIndex(l => l.id === id);
+                if (i < 0) return;
+                list.splice(i, 1);
+                if (selectedId === id) selectedId = list.length ? list[Math.min(i, list.length - 1)].id : null;
+            }
+
+            function selected() {
+                return list.find(l => l.id === selectedId) || null;
+            }
+
+            // Called when a layer's pattern type changes: the values bag for the new type
+            // may never have been filled in.
+            function ensureValues(layer) {
+                if (!layer.values[layer.type]) layer.values[layer.type] = Patterns.defaults(layer.type);
+                // A schema that gained a parameter since the layer was made would otherwise
+                // read `undefined` straight into a generator.
+                const defaults = Patterns.defaults(layer.type);
+                const bag = layer.values[layer.type];
+                for (const key of Object.keys(defaults)) {
+                    if (bag[key] === undefined) bag[key] = defaults[key];
+                }
+                return bag;
+            }
+
+            return {
+                list,
+                create, duplicate, remove, selected, ensureValues,
+                select(id) { selectedId = id; },
+                get selectedId() { return selectedId; }
+            };
+        })();
+
+        // --- Sidebar -----------------------------------------------------------------
+        // The left-hand controls. It owns every field in the panel, reads them into plain
+        // values, and calls back when something changes -- it never generates or draws
+        // anything itself, and never reaches into another module's DOM.
+        const Sidebar = (() => {
+            const el = Util.el;
+
+            // Anything here changes what is generated.
+            const REGENERATE_INPUTS = [
+                'dxf-units', 'join-tol', 'edge-margin',
+                'layer-cx', 'layer-cy', 'layer-rot', 'layer-rmin', 'layer-rmax',
+                'layer-width', 'layer-depth', 'layer-profile', 'layer-color'
+            ];
+
+            // Anything here only changes what is shown, which is a toggle rather than a
+            // rebuild -- so it must not trigger one.
+            const DISPLAY_INPUTS = ['show-outline', 'show-solid', 'show-grid', 'show-relief', 'show-lines'];
+
+            // ...and these rebuild the dial body but not the pattern.
+            const DIAL_INPUTS = ['dial-thickness', 'dial-material'];
+
+            const hooks = {
+                regenerate: () => {},
+                redial: () => {},
+                display: () => {},
+                reparse: () => {}
+            };
+
+            function readNumber(id, fallback) {
+                const v = parseFloat(el(id).value);
+                return Number.isFinite(v) ? v : fallback;
+            }
+
+            function settings() {
+                return {
+                    units: el('dxf-units').value,
+                    joinTolerance: Math.max(readNumber('join-tol', 0.05), 0),
+                    margin: Math.max(readNumber('edge-margin', 0), 0),
+                    thickness: Math.max(readNumber('dial-thickness', 0.6), 0.05),
+                    material: el('dial-material').value,
+                    showOutline: el('show-outline').checked,
+                    showSolid: el('show-solid').checked,
+                    showGrid: el('show-grid').checked,
+                    showRelief: el('show-relief').checked,
+                    showLines: el('show-lines').checked,
+                    gcode: {
+                        depth: readNumber('gc-depth', 0.08),
+                        safeZ: readNumber('gc-safe', 1),
+                        feed: readNumber('gc-feed', 300),
+                        plunge: readNumber('gc-plunge', 80)
+                    }
+                };
+            }
+
+            // --- Layer list ----------------------------------------------------------
+            function renderLayerList() {
+                const host = el('layer-list');
+                if (!Layers.list.length) {
+                    host.innerHTML = '<div class="hint hint-muted">No layers. Add one to start a pattern.</div>';
+                    return;
+                }
+                host.innerHTML = Layers.list.map(layer => `
+                    <div class="layer-row${layer.id === Layers.selectedId ? ' selected' : ''}${layer.enabled ? '' : ' disabled'}" data-id="${layer.id}">
+                        <input type="checkbox" data-role="enable" ${layer.enabled ? 'checked' : ''}
+                               title="Include this layer" aria-label="Include this layer">
+                        <span class="layer-swatch" style="background:${Util.escapeHtml(layer.color)}"></span>
+                        <span class="layer-name">${Util.escapeHtml(layer.name)}</span>
+                        <button type="button" class="layer-del" data-role="delete"
+                                title="Delete layer" aria-label="Delete layer">&#10005;</button>
+                    </div>
+                `).join('');
+            }
+
+            // --- Layer parameters ----------------------------------------------------
+            function renderLayerPanel() {
+                const layer = Layers.selected();
+                const typeSelect = el('layer-type');
+                const params = el('layer-params');
+
+                if (!layer) {
+                    el('layer-title').textContent = 'Layer Settings';
+                    el('layer-desc').textContent = 'Add a layer to choose a pattern.';
+                    params.innerHTML = '';
+                    typeSelect.disabled = true;
+                    return;
+                }
+
+                typeSelect.disabled = false;
+                typeSelect.value = layer.type;
+                el('layer-title').textContent = layer.name;
+                el('layer-desc').textContent = Patterns.get(layer.type).note;
+
+                el('layer-cx').value = layer.cx;
+                el('layer-cy').value = layer.cy;
+                el('layer-rot').value = layer.rot;
+                el('layer-rmin').value = layer.rMin;
+                el('layer-rmax').value = layer.rMax;
+                el('layer-profile').value = layer.profile;
+                el('layer-color').value = layer.color;
+                el('layer-width').value = layer.width;
+                el('layer-depth').value = layer.depth;
+
+                const values = Layers.ensureValues(layer);
+                params.innerHTML = Patterns.get(layer.type).params.map(param => {
+                    const id = `param-${param.k}`;
+                    const help = param.help
+                        ? `<span class="help" tabindex="0">?<span class="help-bubble">${Util.escapeHtml(param.help)}</span></span>`
+                        : '';
+                    if (param.type === 'check') {
+                        return `<label class="check-row">
+                                    <input type="checkbox" id="${id}" data-param="${param.k}" ${values[param.k] ? 'checked' : ''}>
+                                    <span>${Util.escapeHtml(param.label)}</span>
+                                </label>`;
+                    }
+                    if (param.type === 'select') {
+                        const options = param.options.map(([v, label]) =>
+                            `<option value="${v}"${values[param.k] === v ? ' selected' : ''}>${Util.escapeHtml(label)}</option>`
+                        ).join('');
+                        return `<div class="control-group">
+                                    <div class="label-row"><label for="${id}">${Util.escapeHtml(param.label)}</label>${help}</div>
+                                    <select id="${id}" data-param="${param.k}">${options}</select>
+                                </div>`;
+                    }
+                    const attrs = [
+                        param.min !== undefined ? `min="${param.min}"` : '',
+                        param.max !== undefined ? `max="${param.max}"` : '',
+                        `step="${param.step === undefined ? 'any' : param.step}"`
+                    ].join(' ');
+                    return `<div class="control-group">
+                                <div class="label-row"><label for="${id}">${Util.escapeHtml(param.label)}</label>${help}</div>
+                                <input type="number" id="${id}" data-param="${param.k}" value="${values[param.k]}" ${attrs}>
+                            </div>`;
+                }).join('');
+            }
+
+            function refresh() {
+                renderLayerList();
+                renderLayerPanel();
+            }
+
+            // --- Wiring --------------------------------------------------------------
+            {
+                const typeSelect = el('layer-type');
+                typeSelect.innerHTML = Patterns.ORDER.map(type =>
+                    `<option value="${type}">${Util.escapeHtml(Patterns.get(type).label)}</option>`
+                ).join('');
+            }
+
+            // `input` rather than `change` so a held arrow key or a typed digit updates the
+            // view as it goes; App debounces, so the cost of that is one regeneration after
+            // the typing stops.
+            for (const id of REGENERATE_INPUTS) {
+                el(id).addEventListener('input', () => {
+                    const layer = Layers.selected();
+                    if (layer) {
+                        layer.cx = readNumber('layer-cx', 0);
+                        layer.cy = readNumber('layer-cy', 0);
+                        layer.rot = readNumber('layer-rot', 0);
+                        layer.rMin = Math.max(readNumber('layer-rmin', 0), 0);
+                        layer.rMax = Math.max(readNumber('layer-rmax', 0), 0);
+                        layer.width = Math.max(readNumber('layer-width', 0.3), 0);
+                        layer.depth = Math.max(readNumber('layer-depth', 0.1), 0);
+                        layer.profile = el('layer-profile').value;
+                        layer.color = el('layer-color').value;
+                    }
+                    // The join tolerance and the unit choice change how the file is read,
+                    // not how the pattern is drawn, so they go back further than the rest.
+                    if (id === 'join-tol' || id === 'dxf-units') hooks.reparse();
+                    else {
+                        if (id === 'layer-color') renderLayerList();
+                        hooks.regenerate();
+                    }
+                });
+            }
+
+            for (const id of DIAL_INPUTS) {
+                el(id).addEventListener('input', () => hooks.redial());
+            }
+
+            for (const id of DISPLAY_INPUTS) {
+                el(id).addEventListener('change', () => hooks.display());
+            }
+
+            el('layer-type').addEventListener('change', () => {
+                const layer = Layers.selected();
+                if (!layer) return;
+                const previousLabel = Patterns.get(layer.type).label;
+                layer.type = el('layer-type').value;
+                Layers.ensureValues(layer);
+                // The name follows the pattern unless it has been renamed by hand -- which
+                // it cannot be yet, but leaving the rule stated costs nothing and keeps a
+                // rename field from having to remember it later.
+                if (layer.name === previousLabel) layer.name = Patterns.get(layer.type).label;
+                refresh();
+                hooks.regenerate();
+            });
+
+            // Delegated, because the fields are rebuilt every time the pattern changes.
+            el('layer-params').addEventListener('input', (e) => {
+                const key = e.target.dataset.param;
+                if (!key) return;
+                const layer = Layers.selected();
+                if (!layer) return;
+                const values = Layers.ensureValues(layer);
+                if (e.target.type === 'checkbox') values[key] = e.target.checked;
+                else if (e.target.tagName === 'SELECT') values[key] = e.target.value;
+                else {
+                    const v = parseFloat(e.target.value);
+                    // An empty or half-typed field ("-", "1e") must not be read as 0 and
+                    // regenerate the whole dial from nothing; the old value stands until
+                    // the field parses again.
+                    if (Number.isFinite(v)) values[key] = v;
+                }
+                hooks.regenerate();
+            });
+
+            el('layer-list').addEventListener('click', (e) => {
+                const row = e.target.closest('.layer-row');
+                if (!row) return;
+                const id = Number(row.dataset.id);
+                const role = e.target.dataset.role;
+
+                if (role === 'delete') {
+                    Layers.remove(id);
+                    refresh();
+                    hooks.regenerate();
+                    return;
+                }
+                if (role === 'enable') {
+                    const layer = Layers.list.find(l => l.id === id);
+                    if (layer) layer.enabled = e.target.checked;
+                    refresh();
+                    hooks.regenerate();
+                    return;
+                }
+                Layers.select(id);
+                refresh();
+            });
+
+            el('btn-layer-add').addEventListener('click', () => {
+                Layers.create(Patterns.ORDER[0]);
+                refresh();
+                hooks.regenerate();
+            });
+
+            el('btn-layer-dup').addEventListener('click', () => {
+                if (!Layers.selected()) return;
+                Layers.duplicate(Layers.selectedId);
+                refresh();
+                hooks.regenerate();
+            });
+
+            // --- Narrow-width drawer -------------------------------------------------
+            const setCollapsed = (collapsed) => {
+                document.body.classList.toggle('sidebar-collapsed', collapsed);
+                el('sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
+                el('sidebar-open').setAttribute('aria-expanded', String(!collapsed));
+                Viewer.resize();
+            };
+            el('sidebar-toggle').addEventListener('click', () => setCollapsed(true));
+            el('sidebar-open').addEventListener('click', () => setCollapsed(false));
+            el('sidebar-backdrop').addEventListener('click', () => setCollapsed(true));
+
+            // --- Readouts ------------------------------------------------------------
+            function setDialInfo(info) {
+                el('dial-file').textContent = info.name;
+                el('dial-size').textContent = info.size;
+                el('dial-loops').textContent = info.loops;
+                const warning = el('dial-warning');
+                warning.hidden = !info.warning;
+                warning.textContent = info.warning || '';
+                warning.className = info.error ? 'hint hint-bad' : 'hint';
+                el('ov-dial').textContent = info.size;
+            }
+
+            function setStats(stats) {
+                el('stat-status').textContent = stats.status;
+                el('stat-paths').textContent = Util.count(stats.paths);
+                el('stat-segments').textContent = Util.count(stats.segments);
+                el('stat-length').textContent = stats.length >= 1000
+                    ? `${(stats.length / 1000).toFixed(2)} m`
+                    : Util.mm(stats.length, 1);
+                el('stat-time').textContent = stats.ms === null ? '—' : `${Math.round(stats.ms)} ms`;
+                el('ov-layers').textContent = stats.layers;
+                el('ov-segments').textContent = Util.count(stats.segments);
+            }
+
+            function setReliefWarning(text) {
+                const warning = el('relief-warning');
+                warning.hidden = !text;
+                warning.textContent = text || '';
+            }
+
+            function setBusy(on) {
+                el('busy').hidden = !on;
+            }
+
+            return {
+                hooks, settings, refresh,
+                setDialInfo, setStats, setReliefWarning, setBusy
+            };
+        })();
+        // --- Exporter ----------------------------------------------------------------
+        // The generated pattern, written out three ways. All three re-origin the drawing on
+        // the dial's centre: the incoming DXF may have been drawn anywhere on a sheet, and
+        // a dial is always fixtured about its own axis.
+        const Exporter = (() => {
+            function bounds(boundary) {
+                return {
+                    ox: boundary.centerX,
+                    oy: boundary.centerY,
+                    minX: boundary.minX - boundary.centerX,
+                    maxX: boundary.maxX - boundary.centerX,
+                    minY: boundary.minY - boundary.centerY,
+                    maxY: boundary.maxY - boundary.centerY
+                };
+            }
+
+            function svg(results, boundary) {
+                const b = bounds(boundary);
+                const pad = 1;
+                const width = (b.maxX - b.minX) + pad * 2;
+                const height = (b.maxY - b.minY) + pad * 2;
+                // SVG's Y runs down the page and the drawing's runs up it, so the whole
+                // thing is flipped once here rather than at every point.
+                const flip = (y) => b.maxY - y + pad;
+                const shift = (x) => x - b.minX + pad;
+
+                const parts = [
+                    `<?xml version="1.0" encoding="UTF-8"?>`,
+                    `<svg xmlns="http://www.w3.org/2000/svg" width="${width.toFixed(3)}mm" height="${height.toFixed(3)}mm" viewBox="0 0 ${width.toFixed(3)} ${height.toFixed(3)}">`,
+                    `<g fill="none" stroke-width="0.08" stroke-linecap="round" stroke-linejoin="round">`
+                ];
+
+                for (const loop of boundary.loops) {
+                    const d = [];
+                    for (let i = 0; i < loop.length; i += 2) {
+                        d.push(`${shift(loop[i] - b.ox).toFixed(3)},${flip(loop[i + 1] - b.oy).toFixed(3)}`);
+                    }
+                    parts.push(`<polygon stroke="#c00000" points="${d.join(' ')}"/>`);
+                }
+
+                for (const result of results) {
+                    parts.push(`<g stroke="${result.layer.color}">`);
+                    for (const pts of result.polys) {
+                        const d = [];
+                        for (let i = 0; i < pts.length; i += 2) {
+                            d.push(`${shift(pts[i] - b.ox).toFixed(3)},${flip(pts[i + 1] - b.oy).toFixed(3)}`);
+                        }
+                        parts.push(`<polyline points="${d.join(' ')}"/>`);
+                    }
+                    parts.push(`</g>`);
+                }
+
+                parts.push('</g></svg>');
+                return parts.join('\n');
+            }
+
+            // R12-flavoured ASCII: POLYLINE/VERTEX rather than LWPOLYLINE, because every
+            // CAM package still reads it and nothing here needs the newer entity.
+            function dxf(results, boundary) {
+                const b = bounds(boundary);
+                const out = ['0', 'SECTION', '2', 'ENTITIES'];
+
+                const write = (pts, layerName, closed) => {
+                    out.push('0', 'POLYLINE', '8', layerName, '66', '1', '70', closed ? '1' : '0');
+                    for (let i = 0; i < pts.length; i += 2) {
+                        out.push('0', 'VERTEX', '8', layerName,
+                            '10', (pts[i] - b.ox).toFixed(4),
+                            '20', (pts[i + 1] - b.oy).toFixed(4),
+                            '30', '0.0');
+                    }
+                    out.push('0', 'SEQEND', '8', layerName);
+                };
+
+                for (const loop of boundary.loops) write(loop, 'DIAL_OUTLINE', true);
+                results.forEach((result, i) => {
+                    const name = `GUILLOCHE_${i + 1}`;
+                    for (const pts of result.polys) write(pts, name, false);
+                });
+
+                out.push('0', 'ENDSEC', '0', 'EOF');
+                return out.join('\n');
+            }
+
+            function gcode(results, boundary, options) {
+                const b = bounds(boundary);
+                const depth = Math.abs(options.depth);
+                const out = [
+                    '(Guilloche pattern)',
+                    `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
+                    '(Origin: dial centre. Z0 = dial face.)',
+                    'G21 G90 G17',
+                    'G94',
+                    `G0 Z${options.safeZ.toFixed(3)}`
+                ];
+
+                for (const result of results) {
+                    out.push(`(layer: ${result.layer.name})`);
+                    for (const pts of result.polys) {
+                        if (pts.length < 4) continue;
+                        out.push(`G0 X${(pts[0] - b.ox).toFixed(4)} Y${(pts[1] - b.oy).toFixed(4)}`);
+                        out.push(`G1 Z${(-depth).toFixed(3)} F${options.plunge.toFixed(0)}`);
+                        // The feed is stated once per path rather than on every line: the
+                        // files run to hundreds of thousands of moves, and a repeated F word
+                        // is a fifth of the file for nothing.
+                        out.push(`G1 X${(pts[2] - b.ox).toFixed(4)} Y${(pts[3] - b.oy).toFixed(4)} F${options.feed.toFixed(0)}`);
+                        for (let i = 4; i < pts.length; i += 2) {
+                            out.push(`G1 X${(pts[i] - b.ox).toFixed(4)} Y${(pts[i + 1] - b.oy).toFixed(4)}`);
+                        }
+                        out.push(`G0 Z${options.safeZ.toFixed(3)}`);
+                    }
+                }
+
+                out.push('G0 X0 Y0', 'M30', '');
+                return out.join('\n');
+            }
+
+            return { svg, dxf, gcode };
+        })();
+
+        // --- App ---------------------------------------------------------------------
+        // The wiring: what happens when, and in what order.
+        const App = (() => {
+            // One drawing unit, in millimetres. What $INSUNITS is resolved against, and
+            // what the manual override picks from.
+            const UNIT_SCALE = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 };
+
+            // Across all layers, before clipping. A pattern this dense is already past what
+            // any of the views can show; the cap is what stops a mistyped 0.001 spacing
+            // taking the tab down with it.
+            const MAX_GENERATED_POINTS = 1400000;
+
+            let sourcePaths = [];        // as parsed, in file units
+            let sourceUnits = null;      // what the file said, or null
+            let sourceName = '—';
+            let boundary = null;
+            let openChains = [];
+            let results = [];
+            let regenerateTimer = null;
+
+            // --- The sample dial -----------------------------------------------------
+            // Drawn in millimetres, in the same shape the parser hands back, so it travels
+            // the identical path through the program as a loaded file. A 34mm dial with a
+            // centre hole for the hands and a date window at three o'clock: enough to show
+            // that the pattern respects every loop, not only the outer one.
+            function sampleDial() {
+                const ring = (cx, cy, r, steps) => {
+                    const pts = [];
+                    for (let i = 0; i < steps; i++) {
+                        const a = (i / steps) * Math.PI * 2;
+                        pts.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+                    }
+                    return { pts, closed: true };
+                };
+
+                const roundedRect = (cx, cy, w, h, r) => {
+                    const pts = [];
+                    const hw = w / 2 - r;
+                    const hh = h / 2 - r;
+                    const corners = [[hw, hh, 0], [-hw, hh, Math.PI / 2], [-hw, -hh, Math.PI], [hw, -hh, -Math.PI / 2]];
+                    for (const [ox, oy, start] of corners) {
+                        for (let i = 0; i <= 12; i++) {
+                            const a = start + (i / 12) * (Math.PI / 2);
+                            pts.push(cx + ox + Math.cos(a) * r, cy + oy + Math.sin(a) * r);
+                        }
+                    }
+                    return { pts, closed: true };
+                };
+
+                return [
+                    ring(0, 0, 17, 480),
+                    ring(0, 0, 1.6, 96),
+                    roundedRect(11.6, 0, 5.4, 3.6, 0.4)
+                ];
+            }
+
+            // --- Loading -------------------------------------------------------------
+            function unitScale(settings) {
+                if (settings.units !== 'auto') return UNIT_SCALE[settings.units] || 1;
+                return UNIT_SCALE[sourceUnits] || 1;
+            }
+
+            // Re-reads the paths already in hand under the current units and join
+            // tolerance, then rebuilds everything downstream. Separate from loading so
+            // nudging the tolerance to close a gap does not need the file again.
+            function rebuildBoundary() {
+                const settings = Sidebar.settings();
+                const scale = unitScale(settings);
+
+                const scaled = sourcePaths.map(path => {
+                    if (scale === 1) return path;
+                    const pts = new Array(path.pts.length);
+                    for (let i = 0; i < path.pts.length; i++) pts[i] = path.pts[i] * scale;
+                    return { pts, closed: path.closed };
+                });
+
+                const tolerance = Math.max(settings.joinTolerance, 1e-6);
+                const built = Loops.build(scaled, tolerance);
+                openChains = built.open;
+                boundary = Boundary.create(built.loops);
+
+                let warning = '';
+                let error = false;
+                if (!built.loops.length) {
+                    warning = openChains.length
+                        ? 'No closed loop in this drawing, so there is no inside to contain a pattern. ' +
+                          'Raise the join tolerance, or close the outline in CAD.'
+                        : 'Nothing drawable was found in this file.';
+                    error = true;
+                } else if (openChains.length) {
+                    warning = `${openChains.length} open chain${openChains.length === 1 ? '' : 's'} ignored ` +
+                              '(shown in red). Raise the join tolerance if they should have closed.';
+                }
+
+                Sidebar.setDialInfo({
+                    name: sourceName,
+                    size: boundary
+                        ? `${boundary.width.toFixed(2)} × ${boundary.height.toFixed(2)} mm`
+                        : '—',
+                    loops: built.loops.length,
+                    warning, error
+                });
+
+                DialMesh.build(boundary, openChains, settings.thickness, settings.material);
+                applyDisplay();
+            }
+
+            function rebuildDial() {
+                const settings = Sidebar.settings();
+                DialMesh.build(boundary, openChains, settings.thickness, settings.material);
+                applyDisplay();
+                // The relief wears the dial's finish, so a change of material has to go
+                // through the pattern as well.
+                scheduleRegenerate();
+            }
+
+            function loadPaths(paths, units, name, frameView) {
+                sourcePaths = paths;
+                sourceUnits = units;
+                sourceName = name;
+                rebuildBoundary();
+                if (frameView && boundary) Viewer.frame(boundary);
+                scheduleRegenerate();
+            }
+
+            function loadFile(file) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        const parsed = DxfParser.parse(String(reader.result));
+                        if (!parsed.paths.length) throw new Error('No 2D geometry found in this DXF.');
+                        loadPaths(parsed.paths, parsed.units, file.name, true);
+                    } catch (err) {
+                        Sidebar.setDialInfo({
+                            name: file.name, size: '—', loops: 0,
+                            warning: err.message, error: true
+                        });
+                    }
+                };
+                reader.onerror = () => {
+                    Sidebar.setDialInfo({
+                        name: file.name, size: '—', loops: 0,
+                        warning: 'The file could not be read.', error: true
+                    });
+                };
+                reader.readAsText(file);
+            }
+
+            // --- Generation ----------------------------------------------------------
+            function scheduleRegenerate() {
+                if (regenerateTimer !== null) return;
+                Sidebar.setBusy(true);
+                // Two frames, not one: the first lets the browser paint the busy panel, and
+                // the generation that follows blocks the main thread until it is done.
+                regenerateTimer = requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        regenerateTimer = null;
+                        regenerate();
+                        Sidebar.setBusy(false);
+                    });
+                });
+            }
+
+            function regenerate() {
+                const settings = Sidebar.settings();
+                const started = performance.now();
+                results = [];
+
+                if (!boundary) {
+                    PatternView.set([]);
+                    Sidebar.setStats({ status: 'No dial outline', paths: 0, segments: 0, length: 0, ms: null, layers: 0 });
+                    Sidebar.setReliefWarning('');
+                    return;
+                }
+
+                let budget = MAX_GENERATED_POINTS;
+                const ctxFor = (reach) => ({
+                    reach,
+                    room: () => budget > 0,
+                    left: () => Math.max(budget, 0),
+                    spend: (n) => { budget -= n; }
+                });
+
+                // Fine enough that a cut lands within a few microns of the true crossing
+                // once the bisection has run, coarse enough that a dial's worth of pattern
+                // is a few tens of milliseconds.
+                const maxStep = Util.clamp(boundary.diagonal / 400, 0.05, 1);
+
+                let totalPaths = 0;
+                let totalSegments = 0;
+                let totalLength = 0;
+                let truncated = false;
+
+                for (const layer of Layers.list) {
+                    if (!layer.enabled) continue;
+                    const definition = Patterns.get(layer.type);
+                    if (!definition) continue;
+
+                    const cx = boundary.centerX + layer.cx;
+                    const cy = boundary.centerY + layer.cy;
+
+                    // How far the generator may have to draw to cover the dial from this
+                    // layer's own centre: the furthest corner of the outline's box.
+                    let reach = 0;
+                    for (const [x, y] of [[boundary.minX, boundary.minY], [boundary.maxX, boundary.minY],
+                                          [boundary.minX, boundary.maxY], [boundary.maxX, boundary.maxY]]) {
+                        reach = Math.max(reach, Math.hypot(x - cx, y - cy));
+                    }
+                    if (layer.rMax > 0) reach = Math.min(reach, layer.rMax);
+
+                    const before = budget;
+                    const local = definition.generate(Layers.ensureValues(layer), ctxFor(reach));
+                    if (budget <= 0 && before > 0) truncated = true;
+
+                    // The containment rule, assembled: inside the outline, clear of every
+                    // edge by the margin, and inside this layer's own band. One predicate,
+                    // handed to the clipper, which is the only code that acts on it.
+                    const rMin2 = layer.rMin * layer.rMin;
+                    const rMax2 = layer.rMax * layer.rMax;
+                    const margin = settings.margin;
+                    const inside = (x, y) => {
+                        const dx = x - cx;
+                        const dy = y - cy;
+                        const d2 = dx * dx + dy * dy;
+                        if (d2 < rMin2) return false;
+                        if (layer.rMax > 0 && d2 > rMax2) return false;
+                        if (!boundary.contains(x, y)) return false;
+                        return !(margin > 0 && boundary.nearEdge(x, y, margin));
+                    };
+
+                    const angle = layer.rot * Math.PI / 180;
+                    const ca = Math.cos(angle);
+                    const sa = Math.sin(angle);
+                    const polys = [];
+
+                    for (const path of local) {
+                        // Into world coordinates, in place: the generator's output is
+                        // private to this loop and nothing else will read it.
+                        const pts = path.pts;
+                        for (let i = 0; i < pts.length; i += 2) {
+                            const x = pts[i];
+                            const y = pts[i + 1];
+                            pts[i] = cx + x * ca - y * sa;
+                            pts[i + 1] = cy + x * sa + y * ca;
+                        }
+                        for (const clipped of Clipper.clip(pts, path.closed, inside, maxStep)) {
+                            polys.push(clipped);
+                        }
+                    }
+
+                    for (const pts of polys) {
+                        totalPaths++;
+                        for (let i = 0; i + 3 < pts.length; i += 2) {
+                            totalSegments++;
+                            totalLength += Math.hypot(pts[i + 2] - pts[i], pts[i + 3] - pts[i + 1]);
+                        }
+                    }
+
+                    results.push({ layer, polys, materialKey: settings.material });
+                }
+
+                const view = PatternView.set(results);
+                applyDisplay();
+
+                Sidebar.setStats({
+                    status: truncated ? 'Truncated — pattern too dense' : 'Ready',
+                    paths: totalPaths,
+                    segments: totalSegments,
+                    length: totalLength,
+                    ms: performance.now() - started,
+                    layers: results.length
+                });
+
+                Sidebar.setReliefWarning(view.reliefSkipped
+                    ? 'Relief skipped: this pattern needs more geometry than the viewer will build. ' +
+                      'Increase the spacing, or turn off some layers.'
+                    : (truncated
+                        ? 'The point budget ran out before every path was drawn. Increase the spacing.'
+                        : ''));
+            }
+
+            function applyDisplay() {
+                const settings = Sidebar.settings();
+                DialMesh.setBodyVisible(settings.showSolid);
+                DialMesh.setOutlineVisible(settings.showOutline);
+                Viewer.setGridVisible(settings.showGrid);
+                PatternView.setLinesVisible(settings.showLines);
+                PatternView.setReliefVisible(settings.showRelief);
+            }
+
+            // --- Export --------------------------------------------------------------
+            function exportAs(kind) {
+                if (!boundary) return;
+                const base = sourceName.replace(/\.[^.]+$/, '') || 'dial';
+                const settings = Sidebar.settings();
+                if (kind === 'svg') {
+                    Util.download(`${base}-guilloche.svg`, Exporter.svg(results, boundary), 'image/svg+xml');
+                } else if (kind === 'dxf') {
+                    Util.download(`${base}-guilloche.dxf`, Exporter.dxf(results, boundary), 'application/dxf');
+                } else {
+                    Util.download(`${base}-guilloche.nc`, Exporter.gcode(results, boundary, settings.gcode), 'text/plain');
+                }
+            }
+
+            // --- Wiring --------------------------------------------------------------
+            Sidebar.hooks.regenerate = scheduleRegenerate;
+            Sidebar.hooks.redial = rebuildDial;
+            Sidebar.hooks.display = applyDisplay;
+            Sidebar.hooks.reparse = () => { rebuildBoundary(); scheduleRegenerate(); };
+
+            Util.el('dxf-file').addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) loadFile(file);
+                // Cleared so re-picking the same file after editing it in CAD still fires.
+                e.target.value = '';
+            });
+
+            Util.el('btn-sample').addEventListener('click', () => {
+                loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true);
+            });
+
+            Util.el('btn-export-svg').addEventListener('click', () => exportAs('svg'));
+            Util.el('btn-export-dxf').addEventListener('click', () => exportAs('dxf'));
+            Util.el('btn-export-gcode').addEventListener('click', () => exportAs('gcode'));
+
+            // Drag and drop, on the window rather than the canvas: a file dropped on the
+            // sidebar is just as clearly meant for the dial.
+            {
+                const hint = Util.el('drop-hint');
+                let depth = 0;   // dragenter/leave fire per element, so they are counted
+                window.addEventListener('dragenter', (e) => {
+                    e.preventDefault();
+                    depth++;
+                    hint.hidden = false;
+                });
+                window.addEventListener('dragover', (e) => e.preventDefault());
+                window.addEventListener('dragleave', () => {
+                    depth = Math.max(0, depth - 1);
+                    if (depth === 0) hint.hidden = true;
+                });
+                window.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    depth = 0;
+                    hint.hidden = true;
+                    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+                    if (file) loadFile(file);
+                });
+            }
+
+            // --- Animation loop ------------------------------------------------------
+            function animate() {
+                requestAnimationFrame(animate);
+                ViewCube.update();       // before update(), which reads the camera back out
+                Viewer.controls.update();
+                Viewer.updateLights();
+                Viewer.render();
+                ViewCube.render();
+            }
+
+            function start() {
+                // A layer up front, so the first thing on screen is a guilloché rather than
+                // an empty disc and a set of controls with nothing to act on.
+                const layer = Layers.create('rosette-spiral');
+                layer.values[layer.type].lobes = 40;
+                layer.values[layer.type].amplitude = 0.28;
+                layer.values[layer.type].pitch = 0.42;
+                Sidebar.refresh();
+
+                loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true);
+                animate();
+            }
+
+            return { start };
+        })();
+
+        App.start();
+    </script>
+</body>
+</html>
