@@ -399,12 +399,34 @@
             background-color: #24313c;
         }
 
+        /* The swatch is the control: clicking it opens the browser's colour picker. Sized
+           and stripped back to the plain square it used to be -- a colour input's default
+           dress is a bordered button several times this big. The nested pseudo-elements
+           are the only way at the padding the UA sheet puts around the colour itself, and
+           each engine spells them differently. */
         .layer-row .layer-swatch {
             flex: 0 0 auto;
-            width: 12px;
-            height: 12px;
-            border-radius: 2px;
+            width: 15px;
+            height: 15px;
+            padding: 0;
             border: 1px solid #00000060;
+            border-radius: 3px;
+            background: none;
+            cursor: pointer;
+        }
+
+        .layer-row .layer-swatch::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        .layer-row .layer-swatch::-webkit-color-swatch {
+            border: none;
+            border-radius: 2px;
+        }
+
+        .layer-row .layer-swatch::-moz-color-swatch {
+            border: none;
+            border-radius: 2px;
         }
 
         /* Takes the free space so the delete button sits hard right, and wraps rather
@@ -801,12 +823,6 @@
                     </select>
                 </div>
                 <div class="control-group">
-                    <label for="layer-color">Line Colour</label>
-                    <input type="color" id="layer-color" value="#ffc94a">
-                </div>
-            </div>
-            <div class="field-pair">
-                <div class="control-group">
                     <div class="label-row">
                         <label for="layer-depth">Tip Depth (mm)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">How far the tip
@@ -816,6 +832,8 @@
                     </div>
                     <input type="number" id="layer-depth" value="0.12" min="0" step="0.02">
                 </div>
+            </div>
+            <div class="field-pair">
                 <div class="control-group" id="cutter-angle-group">
                     <div class="label-row">
                         <label for="layer-angle">Included Angle (&deg;)</label>
@@ -3628,7 +3646,7 @@
             const REGENERATE_INPUTS = [
                 'dxf-units', 'join-tol', 'edge-margin',
                 'layer-cx', 'layer-cy', 'layer-rot', 'layer-rmin', 'layer-rmax',
-                'layer-cutter', 'layer-depth', 'layer-angle', 'layer-radius', 'layer-color'
+                'layer-cutter', 'layer-depth', 'layer-angle', 'layer-radius'
             ];
 
             // ...and these rebuild the dial body but not the pattern.
@@ -3671,7 +3689,9 @@
                     <div class="layer-row${layer.id === Layers.selectedId ? ' selected' : ''}${layer.enabled ? '' : ' disabled'}" data-id="${layer.id}">
                         <input type="checkbox" data-role="enable" ${layer.enabled ? 'checked' : ''}
                                title="Include this layer" aria-label="Include this layer">
-                        <span class="layer-swatch" style="background:${Util.escapeHtml(layer.color)}"></span>
+                        <input type="color" class="layer-swatch" data-role="color"
+                               value="${Util.escapeHtml(layer.color)}"
+                               title="Path colour" aria-label="Path colour">
                         <span class="layer-name">${Util.escapeHtml(layer.name)}</span>
                         <button type="button" class="layer-del" data-role="delete"
                                 title="Delete layer" aria-label="Delete layer">&#10005;</button>
@@ -3719,7 +3739,6 @@
                 el('layer-rmin').value = layer.rMin;
                 el('layer-rmax').value = layer.rMax;
                 el('layer-cutter').value = layer.cutter;
-                el('layer-color').value = layer.color;
                 el('layer-depth').value = layer.depth;
                 el('layer-angle').value = layer.angle;
                 el('layer-radius').value = layer.radius;
@@ -3787,16 +3806,12 @@
                         layer.depth = Math.max(readNumber('layer-depth', 0.12), 0);
                         layer.angle = Util.clamp(readNumber('layer-angle', 90), 1, 179);
                         layer.radius = Math.max(readNumber('layer-radius', 0.15), 0.005);
-                        layer.color = el('layer-color').value;
                         updateCutterFields();
                     }
                     // The join tolerance and the unit choice change how the file is read,
                     // not how the pattern is drawn, so they go back further than the rest.
                     if (id === 'join-tol' || id === 'dxf-units') hooks.reparse();
-                    else {
-                        if (id === 'layer-color') renderLayerList();
-                        hooks.regenerate();
-                    }
+                    else hooks.regenerate();
                 });
             }
 
@@ -3856,8 +3871,28 @@
                     hooks.regenerate();
                     return;
                 }
+                // The swatch is a colour input, and this click is what opens its picker.
+                // Selecting the row would rebuild the list, taking the element the picker
+                // is attached to with it -- so the swatch is a colour control and nothing
+                // else. Picking a colour on a layer you are not editing works, which is
+                // the behaviour you want from a list of swatches anyway.
+                if (role === 'color') return;
+
                 Layers.select(id);
                 refresh();
+            });
+
+            // Fires continuously while the picker is open, so the view follows the colour
+            // as it is chosen. Deliberately does not re-render the list: the swatch *is*
+            // the live input, and replacing it mid-drag would close the picker.
+            el('layer-list').addEventListener('input', (e) => {
+                if (e.target.dataset.role !== 'color') return;
+                const row = e.target.closest('.layer-row');
+                if (!row) return;
+                const layer = Layers.list.find(l => l.id === Number(row.dataset.id));
+                if (!layer) return;
+                layer.color = e.target.value;
+                hooks.regenerate();
             });
 
             el('btn-layer-add').addEventListener('click', () => {
