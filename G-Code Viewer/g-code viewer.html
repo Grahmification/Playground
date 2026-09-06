@@ -357,7 +357,18 @@
             gap: 8px;
         }
 
+        /* Operation names and tool descriptions come out of the file and have no bound on
+           their length, so they wrap. Without this the panel clips them mid-word, which is
+           only ever visible at the narrow width the legend is held to on a phone. */
+        .legend-item span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
         .color-box {
+            /* Square whatever the label does: a flex item shrinks by default, and a wrapped
+               label leaves the row short of space. */
+            flex: 0 0 auto;
             width: 12px;
             height: 12px;
             border-radius: 2px;
@@ -426,10 +437,13 @@
             max-height: calc(100% - 24px);
         }
 
+        /* The 100% is what the stack can spare, as on #gcode-line: a flex item is not
+           otherwise held to its container's width, so the 280 alone would let a wide legend
+           reach past the stack and into the ViewCube. */
         #legend-stack .overlay-panel {
             display: flex;
             flex-direction: column;
-            max-width: 280px;
+            max-width: min(280px, 100%);
             overflow: hidden;
         }
 
@@ -1060,11 +1074,21 @@
                 display: block;
             }
 
-            /* Out from under the floating button, which takes the corner the legend
-               normally sits in. */
-            body.sidebar-collapsed #legend-stack {
-                top: 56px;
-                max-height: calc(100% - 68px);
+            /* Down to the bottom-left, out of the top strip the status panel needs. The
+               corner it lands in is hemmed in on three sides, and each number below is one
+               of them: 62px up from the bottom clears the playback bar (40px tall at a
+               12px inset, plus a gap of its own); 132px off the width clears the ViewCube,
+               which is 96px square at the same inset and reaches up past the bar; and the
+               height stops 200px short of the full view so a long legend, which grows
+               upward from here, stops below the status panel rather than under it.
+
+               `top: auto` matters -- an absolutely positioned box with both offsets set
+               stretches between them instead of sizing to its contents. */
+            #legend-stack {
+                top: auto;
+                bottom: 62px;
+                max-width: calc(100vw - 132px);
+                max-height: calc(100% - 200px);
             }
 
             /* Stops short of the floating sidebar button rather than the edge of the view:
