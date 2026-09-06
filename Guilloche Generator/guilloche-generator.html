@@ -130,6 +130,13 @@
             gap: 6px;
         }
 
+        /* A rule setting `display` outranks the browser's own [hidden] rule, so hiding a
+           field has to be spelled out or it never goes away. Used by the cutter panel,
+           where the angle and the radius are the same slot. */
+        .control-group[hidden] {
+            display: none;
+        }
+
         .control-group label {
             font-size: 0.85rem;
             color: #aaaaaa;
@@ -742,15 +749,21 @@
             </div>
 
             <div class="panel-title panel-title-row" style="margin-top:2px">
-                <span>Cut Profile</span>
+                <span>Engraving Cutter</span>
             </div>
             <div class="field-pair">
                 <div class="control-group">
-                    <label for="layer-profile">Profile</label>
-                    <select id="layer-profile">
-                        <option value="groove" selected>Groove</option>
-                        <option value="ridge">V Ridge</option>
-                        <option value="round">Rounded</option>
+                    <div class="label-row">
+                        <label for="layer-cutter">Cutter</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">The tool that
+                            cuts this layer. A chamfer mill leaves the V its point is ground to; a
+                            ball nose leaves the arc of its tip. The width of the cut is not a
+                            setting &mdash; it follows from the tool and how deep it is
+                            taken.</span></span>
+                    </div>
+                    <select id="layer-cutter">
+                        <option value="vee" selected>V / Chamfer Mill</option>
+                        <option value="ball">Ball Nose</option>
                     </select>
                 </div>
                 <div class="control-group">
@@ -760,20 +773,37 @@
             </div>
             <div class="field-pair">
                 <div class="control-group">
-                    <label for="layer-width">Width (mm)</label>
-                    <input type="number" id="layer-width" value="0.3" min="0.01" step="0.05">
-                </div>
-                <div class="control-group">
                     <div class="label-row">
-                        <label for="layer-depth">Relief (mm)</label>
-                        <span class="help" tabindex="0">?<span class="help-bubble">How far the cut
-                            profile stands off the dial face. Real guilloch&eacute; is a few
-                            hundredths of a millimetre deep; exaggerate it here to read the pattern
+                        <label for="layer-depth">Tip Depth (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">How far the tip
+                            of the cutter drops below the dial face. Real guilloch&eacute; runs a
+                            few hundredths of a millimetre deep; exaggerate it to read the pattern
                             on screen.</span></span>
                     </div>
-                    <input type="number" id="layer-depth" value="0.1" min="0" step="0.02">
+                    <input type="number" id="layer-depth" value="0.12" min="0" step="0.02">
+                </div>
+                <div class="control-group" id="cutter-angle-group">
+                    <div class="label-row">
+                        <label for="layer-angle">Included Angle (&deg;)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">The full angle
+                            between the two flanks of the chamfer mill &mdash; 90&deg; and 60&deg;
+                            are the usual grinds. A narrower point cuts a narrower groove at the
+                            same depth.</span></span>
+                    </div>
+                    <input type="number" id="layer-angle" value="90" min="1" max="179" step="5">
+                </div>
+                <div class="control-group" id="cutter-radius-group" hidden>
+                    <div class="label-row">
+                        <label for="layer-radius">Tip Radius (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">The ball's
+                            radius, so half the cutter diameter. Taken deeper than the radius the
+                            groove stops widening &mdash; a ball nose cannot open a cut wider than
+                            the tool.</span></span>
+                    </div>
+                    <input type="number" id="layer-radius" value="0.15" min="0.005" step="0.01">
                 </div>
             </div>
+            <div class="stats-row"><span>Cut width:</span> <span id="cut-width" class="stats-value">&mdash;</span></div>
         </div>
 
         <!-- Containment -->
@@ -812,7 +842,7 @@
             </div>
             <label class="check-row">
                 <input type="checkbox" id="show-relief" checked>
-                <span>Simulate cut relief</span>
+                <span>Simulate engraved cut</span>
             </label>
             <label class="check-row">
                 <input type="checkbox" id="show-lines">
@@ -844,24 +874,20 @@
             </div>
             <div class="field-pair">
                 <div class="control-group">
-                    <label for="gc-depth">Cut Depth (mm)</label>
-                    <input type="number" id="gc-depth" value="0.08" min="0.001" step="0.01">
-                </div>
-                <div class="control-group">
                     <label for="gc-safe">Safe Z (mm)</label>
                     <input type="number" id="gc-safe" value="1" step="0.5">
                 </div>
-            </div>
-            <div class="field-pair">
                 <div class="control-group">
                     <label for="gc-feed">Feed (mm/min)</label>
                     <input type="number" id="gc-feed" value="300" min="1" step="10">
                 </div>
-                <div class="control-group">
-                    <label for="gc-plunge">Plunge (mm/min)</label>
-                    <input type="number" id="gc-plunge" value="80" min="1" step="10">
-                </div>
             </div>
+            <div class="control-group">
+                <label for="gc-plunge">Plunge Feed (mm/min)</label>
+                <input type="number" id="gc-plunge" value="80" min="1" step="10">
+            </div>
+            <div class="hint hint-muted">Each layer is cut to its own tip depth, with the
+                cutter it was given.</div>
             <button id="btn-export-gcode" class="btn btn-secondary" type="button">G-Code</button>
         </div>
     </div>
@@ -896,12 +922,13 @@
              Loops         polylines -> closed loops, chained end to end
              Boundary      a set of loops, indexed for "inside?" and "how near an edge?"
              Waveform      the rosette cams, shared by several patterns
+             Cutter        the engraving tool, as the cross-section it leaves
              Patterns      the pattern generators and their parameter schemas
              Clipper       a polyline -> the parts of it that survive the boundary
              Viewer        scene, camera, renderer, controls, lighting, grid
              ViewCube      the corner navigation widget -- self-contained
              DialMesh      the dial body, extruded from the loaded loops
-             PatternView   the generated pattern, as lines and as cut relief
+             PatternView   the generated pattern, as lines and as an engraved cut
              Layers        the pattern layer stack: the document being edited
              Sidebar       the left-hand controls: values in, states out
              Exporter      SVG / DXF / G-code writers
@@ -1771,8 +1798,19 @@
                     radius = Math.max(radius, Math.hypot(outer[i] - centroid[0], outer[i + 1] - centroid[1]));
                 }
 
+                // The square the cut mask is rendered over, and the same square the dial
+                // body's UVs are laid out in. Both DialMesh and PatternView need it and
+                // they must agree to the pixel -- a disagreement puts the punched-out
+                // corridors somewhere other than the cuts -- so it is stated once, here,
+                // rather than derived twice.
+                const frame = {
+                    x: (minX + maxX) / 2,
+                    y: (minY + maxY) / 2,
+                    half: Math.max(width, height) / 2 * 1.02
+                };
+
                 return {
-                    loops, outer, holes,
+                    loops, outer, holes, frame,
                     minX, minY, maxX, maxY, width, height, diagonal,
                     centerX: centroid[0], centerY: centroid[1],
                     radius, edgeCount,
@@ -1816,6 +1854,68 @@
             ];
 
             return { of, OPTIONS };
+        })();
+
+        // --- Cutter ------------------------------------------------------------------
+        // The engraving tool, as the cross-section it leaves behind.
+        //
+        // The width of a cut is not a setting here, and that is the point: on a machine you
+        // choose a tool and a depth, and the width is whatever those two give you. A 90°
+        // chamfer mill dropped 0.1mm leaves a 0.2mm groove; grind the point to 60° and the
+        // same depth leaves 0.115mm. A ball nose behaves differently again -- it widens
+        // fast at first and then stops dead at the tool's own diameter, because past its
+        // equator there is nothing but shank.
+        //
+        // Every height is <= 0. The cut is in the metal, not on it.
+        const Cutter = (() => {
+            const DEG = Math.PI / 180;
+            const BALL_SEGMENTS = 12;
+
+            // Half the width of the groove the cut opens at the face.
+            function halfWidth(spec) {
+                const depth = Math.max(spec.depth, 0);
+                if (depth <= 0) return 0;
+                if (spec.cutter === 'ball') {
+                    const r = Math.max(spec.radius, 1e-4);
+                    // Chord of the ball at the face, until the face reaches the equator.
+                    return depth >= r ? r : Math.sqrt(depth * (2 * r - depth));
+                }
+                return Math.tan(Util.clamp(spec.angle, 1, 179) / 2 * DEG) * depth;
+            }
+
+            // Left rim to right rim, as (offset across the cut, height relative to the
+            // face). Null when the layer is set to no depth at all, which is how a layer
+            // asks to be a line preview and nothing more.
+            function profile(spec) {
+                const depth = Math.max(spec.depth, 0);
+                if (depth <= 0) return null;
+
+                if (spec.cutter === 'ball') {
+                    const r = Math.max(spec.radius, 1e-4);
+                    const centre = r - depth;   // the ball's centre, relative to the face
+                    // Stopped at the equator: the arc past it would lean back in over the
+                    // groove, and the real tool has a cylindrical shank there instead.
+                    const sweep = Math.min(Math.PI / 2, Math.acos(Util.clamp(centre / r, -1, 1)));
+                    const points = [];
+                    if (depth > r) points.push([-r, 0]);
+                    const steps = BALL_SEGMENTS * 2;
+                    for (let i = 0; i <= steps; i++) {
+                        const phi = -sweep + (i / steps) * (2 * sweep);
+                        points.push([r * Math.sin(phi), centre - r * Math.cos(phi)]);
+                    }
+                    if (depth > r) points.push([r, 0]);
+                    return points;
+                }
+
+                const half = halfWidth(spec);
+                return [[-half, 0], [0, -depth], [half, 0]];
+            }
+
+            return {
+                profile,
+                halfWidth,
+                width(spec) { return halfWidth(spec) * 2; }
+            };
         })();
         // --- Patterns ----------------------------------------------------------------
         // The generators, each with the schema of its own parameters. A generator draws in
@@ -2758,7 +2858,14 @@
         // --- DialMesh ----------------------------------------------------------------
         // The dial body, extruded from the loaded loops, plus the outline drawn over it.
         // The body's top face sits at z = 0, so everything the pattern modules build can be
-        // written as "height above the face" without carrying the thickness around.
+        // written as "depth below the face" without carrying the thickness around.
+        //
+        // The body also carries the cut mask. An engraved groove is below the face, and a
+        // flat opaque face would simply hide it -- so the face is punched out along every
+        // cut instead, by an alpha map that PatternView renders from the paths themselves
+        // and an alpha test that discards rather than blends. The body's UVs are laid out
+        // planar over the dial, in the square the boundary defines, so the hole in the face
+        // lands exactly over the cut that opened it.
         const DialMesh = (() => {
             const group = new THREE.Group();
             Viewer.add(group);
@@ -2779,19 +2886,40 @@
 
             function makeMaterial(key) {
                 const spec = Palette.MATERIALS[key] || Palette.MATERIALS.silver;
-                const m = new THREE.MeshStandardMaterial({
+                return new THREE.MeshStandardMaterial({
                     color: new THREE.Color(spec.color).convertSRGBToLinear(),
                     metalness: spec.metalness,
                     roughness: spec.roughness,
-                    // The cut relief is built as separate geometry standing on the face
-                    // rather than carved out of it, so the two touch along every edge of
-                    // every path. A hair of polygon offset pushes the face back and stops
-                    // that shared plane flickering.
+                    // The mask punches through the bottom face and not only the top, since
+                    // both share the same planar UV. Nothing should ever be visible through
+                    // those holes but the walls of the cut -- so the body renders its inside
+                    // too, and a ray that finds its way in through the open end of a groove
+                    // meets dark metal rather than the background.
+                    side: THREE.DoubleSide,
+                    // The cut's rim vertices sit exactly on the face's plane. The mask is
+                    // cut narrower than the cut itself, so the two genuinely overlap in a
+                    // thin band along every path; a hair of polygon offset stops that shared
+                    // plane flickering.
                     polygonOffset: true,
                     polygonOffsetFactor: 1,
                     polygonOffsetUnits: 1
                 });
-                return m;
+            }
+
+            // Planar, over the square the boundary set aside for the mask. Overwrites what
+            // ExtrudeGeometry generated, which maps the walls by their own arc length and
+            // would smear the mask around the rim.
+            function applyPlanarUv(geometry, frame) {
+                const position = geometry.attributes.position;
+                const uv = geometry.attributes.uv;
+                if (!uv) return;
+                const span = frame.half * 2;
+                const originX = frame.x - frame.half;
+                const originY = frame.y - frame.half;
+                for (let i = 0; i < position.count; i++) {
+                    uv.setXY(i, (position.getX(i) - originX) / span, (position.getY(i) - originY) / span);
+                }
+                uv.needsUpdate = true;
             }
 
             function toShape(loop) {
@@ -2836,6 +2964,7 @@
                     });
                     geometry.translate(0, 0, -thickness);   // top face onto z = 0
                     geometry.computeVertexNormals();
+                    applyPlanarUv(geometry, boundary.frame);
                     bodyGroup.add(new THREE.Mesh(geometry, material));
                 }
 
@@ -2876,6 +3005,20 @@
 
             return {
                 build,
+
+                // The alpha map that opens the face along every cut. Swapping a texture in
+                // or out of a material changes which shader it needs, so the flag is not
+                // optional here.
+                setMask(texture) {
+                    if (!material) return;
+                    if (material.alphaMap === (texture || null)) return;
+                    material.alphaMap = texture || null;
+                    // A hard cut, not a blend: the face is either there or it is a hole,
+                    // and a transparent material would sort against the cut walls behind it.
+                    material.alphaTest = texture ? 0.5 : 0;
+                    material.needsUpdate = true;
+                },
+
                 setBodyVisible(on) { bodyGroup.visible = on; },
                 setOutlineVisible(on) { outlineGroup.visible = on; }
             };
@@ -2885,34 +3028,50 @@
         // The generated pattern, drawn two ways over the dial face.
         //
         // The lines are the fast, honest view: exactly the paths a cutter would follow.
-        // The relief is the simulation -- each path becomes a length of cut profile, and
-        // the two flanks of that profile catch the environment at slightly different
-        // angles, which is the entire optical effect a guilloché is made for.
+        // The cut is the simulation -- each path becomes a length of the groove its cutter
+        // would leave, and the two flanks of that groove catch the environment at slightly
+        // different angles, which is the entire optical effect a guilloché is made for.
         //
-        // The relief is built as geometry standing on the face rather than carved into it.
-        // Cutting a real groove would mean subtracting it from the body, and a boolean
-        // against a hundred thousand paths is not a thing to do between two slider moves;
-        // a raised bank throws the same highlight, updates in milliseconds, and can never
-        // disagree with the paths it was built from.
+        // A cut is *below* the face, and that is the whole difficulty: a flat opaque face
+        // would hide every groove under it. Subtracting the grooves from the body would be
+        // the honest fix, and a boolean against a hundred thousand paths is not a thing to
+        // do between two slider moves. So the face is opened instead. This module renders
+        // the cut corridors, straight down, into a black-on-white texture; DialMesh wears
+        // it as an alpha map and discards the face wherever a cut runs. What is left is a
+        // real recess -- correct from any angle, and rebuilt in milliseconds.
         const PatternView = (() => {
-            // Cross sections, as (offset across the cut, height above the face), both
-            // normalised: offset spans -1..1 of the half width, height 0..1 of the relief.
-            const PROFILES = {
-                ridge:  [[-1, 0], [0, 1], [1, 0]],
-                groove: [[-1, 0], [-0.5, 1], [0, 0.05], [0.5, 1], [1, 0]],
-                round:  [[-1, 0], [-0.78, 0.48], [-0.42, 0.85], [0, 1], [0.42, 0.85], [0.78, 0.48], [1, 0]]
-            };
-
-            // Past this the relief is skipped rather than built. Roughly 60MB of vertex
-            // data, which is where a mid-range laptop starts dropping frames while orbiting.
+            // Past this the cut geometry is skipped rather than built. Roughly 60MB of
+            // vertex data, which is where a mid-range laptop starts dropping frames.
             const MAX_RELIEF_VERTICES = 1800000;
+
+            // The mask corridor is drawn narrower than the groove it opens. Its edge is a
+            // hard alpha test on a texture, so it is aliased; cut short, it always lands
+            // *underneath* the groove's own geometry, where nothing can see it. Erring the
+            // other way would leave a pinhole straight through the dial.
+            const MASK_SHRINK = 0.88;
+            const MASK_MIN_SIZE = 512;
+            const MASK_MAX_SIZE = 4096;
+            const MASK_TEXELS_ACROSS = 6;   // across the narrowest cut on the dial
 
             const lineGroup = new THREE.Group();
             const reliefGroup = new THREE.Group();
             Viewer.add(lineGroup);
             Viewer.add(reliefGroup);
 
-            let reliefSkipped = false;
+            // The mask pass: its own scene, rendered once per regeneration through an
+            // orthographic camera looking straight down at the dial. White is metal, black
+            // is a hole.
+            const maskScene = new THREE.Scene();
+            maskScene.background = new THREE.Color(0xffffff);
+            const maskCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+            const maskGroup = new THREE.Group();
+            maskScene.add(maskGroup);
+            const maskMaterial = new THREE.MeshBasicMaterial({
+                color: 0x000000,
+                toneMapped: false,   // the filmic curve would lift the holes off zero
+                side: THREE.DoubleSide
+            });
+            let maskTarget = null;
 
             function disposeChildren(parent) {
                 for (const child of parent.children) {
@@ -2955,11 +3114,13 @@
                 return { nx, ny };
             }
 
+            // What one path costs in cut geometry: a quad strip for every facet of the
+            // profile, and a closing fan at each end.
             function countVertices(polys, profileLength) {
                 let total = 0;
                 for (const pts of polys) {
                     const n = pts.length / 2;
-                    if (n >= 2) total += (profileLength - 1) * 2 * n;
+                    if (n >= 2) total += (profileLength - 1) * 2 * n + 2 * profileLength;
                 }
                 return total;
             }
@@ -2968,16 +3129,26 @@
             // vertices, so computeVertexNormals smooths along the length of a cut -- where
             // the surface really is smooth -- and leaves a hard crease across it, which is
             // what makes the two flanks read as separate planes under a moving highlight.
-            function buildRelief(polys, halfWidth, height, profile) {
-                const facets = profile.length - 1;
-                const vertexCount = countVertices(polys, profile.length);
-                if (vertexCount === 0) return null;
+            // On a ball-nosed cut that crease is spread over a dozen facets and the groove
+            // comes out round, which is the whole difference between the two cutters.
+            //
+            // Both ends are capped. An open end is a hole into the inside of the dial, and
+            // the face above it is already punched out by the mask -- so a glancing look
+            // along a groove would otherwise see daylight through the middle of the dial.
+            function buildRelief(polys, profile) {
+                const points = profile.length;
+                const facets = points - 1;
+                const capTriangles = points - 2;
 
+                let vertexCount = 0;
                 let triangleCount = 0;
                 for (const pts of polys) {
                     const n = pts.length / 2;
-                    if (n >= 2) triangleCount += facets * 2 * (n - 1);
+                    if (n < 2) continue;
+                    vertexCount += facets * 2 * n + 2 * points;
+                    triangleCount += facets * 2 * (n - 1) + 2 * capTriangles;
                 }
+                if (vertexCount === 0) return null;
 
                 const position = new Float32Array(vertexCount * 3);
                 const index = vertexCount > 65535
@@ -2994,10 +3165,10 @@
                     const { nx, ny } = miterNormals(pts, n);
 
                     for (let f = 0; f < facets; f++) {
-                        const o0 = profile[f][0] * halfWidth;
-                        const h0 = profile[f][1] * height;
-                        const o1 = profile[f + 1][0] * halfWidth;
-                        const h1 = profile[f + 1][1] * height;
+                        const o0 = profile[f][0];
+                        const z0 = profile[f][1];
+                        const o1 = profile[f + 1][0];
+                        const z1 = profile[f + 1][1];
                         const start = base;
 
                         for (let i = 0; i < n; i++) {
@@ -3005,14 +3176,15 @@
                             const y = pts[i * 2 + 1];
                             position[vp++] = x + nx[i] * o0;
                             position[vp++] = y + ny[i] * o0;
-                            position[vp++] = h0;
+                            position[vp++] = z0;
                             position[vp++] = x + nx[i] * o1;
                             position[vp++] = y + ny[i] * o1;
-                            position[vp++] = h1;
+                            position[vp++] = z1;
                         }
 
-                        // Wound so the face normal comes out along +Z: the profile runs from
-                        // the right of travel to the left, and the strip advances forward.
+                        // Wound so the face normal comes out of the groove rather than into
+                        // it: the profile runs right-to-left across the path, and the strip
+                        // advances forward along it.
                         for (let i = 0; i < n - 1; i++) {
                             const a0 = start + i * 2;
                             const b0 = a0 + 1;
@@ -3023,6 +3195,29 @@
                         }
                         base += n * 2;
                     }
+
+                    // The two end caps. The profile is a closed polygon on its own -- both
+                    // rims sit on the face -- so a fan from its first point covers it.
+                    for (const end of [0, n - 1]) {
+                        const x = pts[end * 2];
+                        const y = pts[end * 2 + 1];
+                        const start = base;
+                        for (let k = 0; k < points; k++) {
+                            position[vp++] = x + nx[end] * profile[k][0];
+                            position[vp++] = y + ny[end] * profile[k][0];
+                            position[vp++] = profile[k][1];
+                        }
+                        // The fan's natural winding faces along the path, so the cap at the
+                        // start is wound the other way to face back out of it.
+                        for (let k = 1; k < points - 1; k++) {
+                            if (end === 0) {
+                                index[ip++] = start; index[ip++] = start + k + 1; index[ip++] = start + k;
+                            } else {
+                                index[ip++] = start; index[ip++] = start + k; index[ip++] = start + k + 1;
+                            }
+                        }
+                        base += points;
+                    }
                 }
 
                 const geometry = new THREE.BufferGeometry();
@@ -3030,6 +3225,101 @@
                 geometry.setIndex(new THREE.BufferAttribute(index, 1));
                 geometry.computeVertexNormals();
                 return geometry;
+            }
+
+            // The flat footprint of a cut, at the face's own level: what the mask pass
+            // paints black so DialMesh can open the face there.
+            function buildMaskRibbon(polys, halfWidth) {
+                let vertexCount = 0;
+                let triangleCount = 0;
+                for (const pts of polys) {
+                    const n = pts.length / 2;
+                    if (n < 2) continue;
+                    vertexCount += 2 * n;
+                    triangleCount += 2 * (n - 1);
+                }
+                if (vertexCount === 0) return null;
+
+                const position = new Float32Array(vertexCount * 3);
+                const index = vertexCount > 65535
+                    ? new Uint32Array(triangleCount * 3)
+                    : new Uint16Array(triangleCount * 3);
+
+                let vp = 0;
+                let ip = 0;
+                let base = 0;
+
+                for (const pts of polys) {
+                    const n = pts.length / 2;
+                    if (n < 2) continue;
+                    const { nx, ny } = miterNormals(pts, n);
+                    for (let i = 0; i < n; i++) {
+                        const x = pts[i * 2];
+                        const y = pts[i * 2 + 1];
+                        position[vp++] = x - nx[i] * halfWidth;
+                        position[vp++] = y - ny[i] * halfWidth;
+                        position[vp++] = 0;
+                        position[vp++] = x + nx[i] * halfWidth;
+                        position[vp++] = y + ny[i] * halfWidth;
+                        position[vp++] = 0;
+                    }
+                    for (let i = 0; i < n - 1; i++) {
+                        const a0 = base + i * 2;
+                        const b0 = a0 + 1;
+                        const a1 = a0 + 2;
+                        const b1 = a1 + 1;
+                        index[ip++] = a0; index[ip++] = a1; index[ip++] = b0;
+                        index[ip++] = b0; index[ip++] = a1; index[ip++] = b1;
+                    }
+                    base += n * 2;
+                }
+
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+                geometry.setIndex(new THREE.BufferAttribute(index, 1));
+                return geometry;
+            }
+
+            // Sized to the narrowest cut on the dial rather than to a fixed number: a
+            // 0.05mm hairline on a 40mm dial needs four times the texture a 0.2mm groove
+            // does, and paying for that when nothing on the dial is that fine is waste.
+            function renderMask(boundary, narrowestCut) {
+                const frame = boundary.frame;
+                const span = frame.half * 2;
+                const wanted = Math.ceil(span / Math.max(narrowestCut, 1e-4) * MASK_TEXELS_ACROSS);
+                let size = MASK_MIN_SIZE;
+                while (size < wanted && size < MASK_MAX_SIZE) size *= 2;
+
+                if (!maskTarget || maskTarget.width !== size) {
+                    if (maskTarget) maskTarget.dispose();
+                    maskTarget = new THREE.WebGLRenderTarget(size, size, {
+                        // No mipmaps, and so no mipmap filter: a minifying filter on a
+                        // target that never had its mip chain built samples undefined, and
+                        // "undefined" here means the whole dial face blinks out.
+                        minFilter: THREE.LinearFilter,
+                        magFilter: THREE.LinearFilter,
+                        format: THREE.RGBAFormat,
+                        depthBuffer: false,
+                        stencilBuffer: false
+                    });
+                    maskTarget.texture.generateMipmaps = false;
+                }
+
+                maskCamera.left = -frame.half;
+                maskCamera.right = frame.half;
+                maskCamera.top = frame.half;
+                maskCamera.bottom = -frame.half;
+                maskCamera.up.set(0, 1, 0);
+                maskCamera.position.set(frame.x, frame.y, 10);
+                maskCamera.lookAt(frame.x, frame.y, 0);
+                maskCamera.updateProjectionMatrix();
+
+                const renderer = Viewer.renderer;
+                const previous = renderer.getRenderTarget();
+                renderer.setRenderTarget(maskTarget);
+                renderer.render(maskScene, maskCamera);
+                renderer.setRenderTarget(previous);
+                return maskTarget.texture;
             }
 
             function buildLines(polys, z) {
@@ -3055,54 +3345,76 @@
             }
 
             // `results` is one entry per enabled layer: its settings, and the paths that
-            // survived clipping.
-            function set(results) {
+            // survived clipping. Returns the mask its caller must hand to DialMesh -- the
+            // cut geometry is only half of a recess, and the hole in the face is the other.
+            function set(results, boundary) {
                 disposeChildren(lineGroup);
                 disposeChildren(reliefGroup);
-                reliefSkipped = false;
+                // The mask ribbons all share one material, which must outlive them.
+                for (const child of maskGroup.children) child.geometry.dispose();
+                maskGroup.clear();
+
+                // The cutter is read once per layer, here: the profile it leaves and the
+                // width that profile opens. Nothing downstream sees an angle or a radius.
+                const cuts = results.map(result => ({
+                    result,
+                    profile: Cutter.profile(result.layer),
+                    halfWidth: Cutter.halfWidth(result.layer)
+                }));
 
                 let reliefVertices = 0;
-                for (const result of results) {
-                    const profile = PROFILES[result.layer.profile] || PROFILES.groove;
-                    if (result.layer.depth > 0) {
-                        reliefVertices += countVertices(result.polys, profile.length);
-                    }
+                for (const cut of cuts) {
+                    if (cut.profile) reliefVertices += countVertices(cut.result.polys, cut.profile.length);
                 }
-                const buildRelieves = reliefVertices <= MAX_RELIEF_VERTICES;
-                reliefSkipped = !buildRelieves && reliefVertices > 0;
+                const withinBudget = reliefVertices <= MAX_RELIEF_VERTICES;
+                const reliefSkipped = !withinBudget && reliefVertices > 0;
 
-                for (const result of results) {
-                    const { layer, polys } = result;
+                let narrowestCut = Infinity;
+
+                for (const cut of cuts) {
+                    const { layer, polys } = cut.result;
                     if (!polys.length) continue;
-                    const color = new THREE.Color(layer.color).convertSRGBToLinear();
 
-                    const lineGeometry = buildLines(polys, Math.max(layer.depth, 0) + 0.015);
+                    const lineGeometry = buildLines(polys, 0.02);
                     if (lineGeometry) {
-                        lineGroup.add(new THREE.LineSegments(lineGeometry,
-                            new THREE.LineBasicMaterial({ color, toneMapped: false })));
+                        lineGroup.add(new THREE.LineSegments(lineGeometry, new THREE.LineBasicMaterial({
+                            color: new THREE.Color(layer.color).convertSRGBToLinear(),
+                            toneMapped: false
+                        })));
                     }
 
-                    if (buildRelieves && layer.depth > 0 && layer.width > 0) {
-                        const geometry = buildRelief(
-                            polys, layer.width / 2, layer.depth,
-                            PROFILES[layer.profile] || PROFILES.groove
-                        );
-                        if (geometry) {
-                            // The relief is the dial's own surface, so it wears the dial's
-                            // finish rather than the layer's colour -- the layer colour
-                            // belongs to the line preview, where it identifies the layer.
-                            const spec = Palette.MATERIALS[result.materialKey] || Palette.MATERIALS.silver;
-                            reliefGroup.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-                                color: new THREE.Color(spec.color).convertSRGBToLinear(),
-                                metalness: spec.metalness,
-                                roughness: spec.roughness,
-                                side: THREE.DoubleSide
-                            })));
-                        }
+                    if (!cut.profile || cut.halfWidth <= 0) continue;
+                    narrowestCut = Math.min(narrowestCut, cut.halfWidth * 2);
+
+                    // The mask goes in whether or not the walls did. Skipping the geometry
+                    // and still opening the face would leave holes through the dial.
+                    if (!withinBudget) continue;
+
+                    const ribbon = buildMaskRibbon(polys, cut.halfWidth * MASK_SHRINK);
+                    if (ribbon) maskGroup.add(new THREE.Mesh(ribbon, maskMaterial));
+
+                    const geometry = buildRelief(polys, cut.profile);
+                    if (geometry) {
+                        // The walls of a cut are the dial's own metal, so they wear the
+                        // dial's finish rather than the layer's colour -- the layer colour
+                        // belongs to the line preview, where it identifies the layer.
+                        const spec = Palette.MATERIALS[cut.result.materialKey] || Palette.MATERIALS.silver;
+                        reliefGroup.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+                            color: new THREE.Color(spec.color).convertSRGBToLinear(),
+                            metalness: spec.metalness,
+                            roughness: spec.roughness,
+                            side: THREE.DoubleSide
+                        })));
                     }
                 }
 
-                return { reliefSkipped, reliefVertices };
+                if (!Number.isFinite(narrowestCut)) narrowestCut = boundary ? boundary.diagonal / 200 : 1;
+                // Always re-rendered, even with nothing to draw: an empty pass paints the
+                // mask white, which is how the face gets closed up again after the last
+                // layer is deleted.
+                const mask = boundary ? renderMask(boundary, narrowestCut) : null;
+
+                return { reliefSkipped, reliefVertices, mask };
             }
 
             return {
@@ -3111,6 +3423,7 @@
                 setReliefVisible(on) { reliefGroup.visible = on; }
             };
         })();
+
         // --- Layers ------------------------------------------------------------------
         // The pattern layer stack: the document being edited. Pure state, no DOM.
         //
@@ -3129,9 +3442,12 @@
                     name: Patterns.get(type).label,
                     enabled: true,
                     color: Palette.layerColor(list.length),
-                    profile: 'groove',
-                    width: 0.3,
-                    depth: 0.1,
+                    // The cutter, and how deep it is taken. What that leaves behind -- the
+                    // profile of the groove and its width at the face -- is Cutter's to say.
+                    cutter: 'vee',
+                    depth: 0.12,
+                    angle: 90,
+                    radius: 0.15,
                     cx: 0,
                     cy: 0,
                     rot: 0,
@@ -3199,7 +3515,7 @@
             const REGENERATE_INPUTS = [
                 'dxf-units', 'join-tol', 'edge-margin',
                 'layer-cx', 'layer-cy', 'layer-rot', 'layer-rmin', 'layer-rmax',
-                'layer-width', 'layer-depth', 'layer-profile', 'layer-color'
+                'layer-cutter', 'layer-depth', 'layer-angle', 'layer-radius', 'layer-color'
             ];
 
             // Anything here only changes what is shown, which is a toggle rather than a
@@ -3234,7 +3550,6 @@
                     showRelief: el('show-relief').checked,
                     showLines: el('show-lines').checked,
                     gcode: {
-                        depth: readNumber('gc-depth', 0.08),
                         safeZ: readNumber('gc-safe', 1),
                         feed: readNumber('gc-feed', 300),
                         plunge: readNumber('gc-plunge', 80)
@@ -3262,6 +3577,20 @@
             }
 
             // --- Layer parameters ----------------------------------------------------
+            // The angle and the radius share one slot: a chamfer mill has no radius and a
+            // ball nose has no included angle, and offering both at once would invite
+            // setting the one the cutter ignores. The resulting width is a readout beside
+            // them, because it is the number the eye actually judges the pattern by.
+            function updateCutterFields() {
+                const layer = Layers.selected();
+                const ball = !!layer && layer.cutter === 'ball';
+                el('cutter-angle-group').hidden = ball;
+                el('cutter-radius-group').hidden = !ball;
+                el('cut-width').textContent = layer && layer.depth > 0
+                    ? Util.mm(Cutter.width(layer), 3)
+                    : '—';
+            }
+
             function renderLayerPanel() {
                 const layer = Layers.selected();
                 const typeSelect = el('layer-type');
@@ -3272,6 +3601,7 @@
                     el('layer-desc').textContent = 'Add a layer to choose a pattern.';
                     params.innerHTML = '';
                     typeSelect.disabled = true;
+                    updateCutterFields();
                     return;
                 }
 
@@ -3285,10 +3615,12 @@
                 el('layer-rot').value = layer.rot;
                 el('layer-rmin').value = layer.rMin;
                 el('layer-rmax').value = layer.rMax;
-                el('layer-profile').value = layer.profile;
+                el('layer-cutter').value = layer.cutter;
                 el('layer-color').value = layer.color;
-                el('layer-width').value = layer.width;
                 el('layer-depth').value = layer.depth;
+                el('layer-angle').value = layer.angle;
+                el('layer-radius').value = layer.radius;
+                updateCutterFields();
 
                 const values = Layers.ensureValues(layer);
                 params.innerHTML = Patterns.get(layer.type).params.map(param => {
@@ -3348,10 +3680,12 @@
                         layer.rot = readNumber('layer-rot', 0);
                         layer.rMin = Math.max(readNumber('layer-rmin', 0), 0);
                         layer.rMax = Math.max(readNumber('layer-rmax', 0), 0);
-                        layer.width = Math.max(readNumber('layer-width', 0.3), 0);
-                        layer.depth = Math.max(readNumber('layer-depth', 0.1), 0);
-                        layer.profile = el('layer-profile').value;
+                        layer.cutter = el('layer-cutter').value;
+                        layer.depth = Math.max(readNumber('layer-depth', 0.12), 0);
+                        layer.angle = Util.clamp(readNumber('layer-angle', 90), 1, 179);
+                        layer.radius = Math.max(readNumber('layer-radius', 0.15), 0.005);
                         layer.color = el('layer-color').value;
+                        updateCutterFields();
                     }
                     // The join tolerance and the unit choice change how the file is read,
                     // not how the pattern is drawn, so they go back further than the rest.
@@ -3575,7 +3909,6 @@
 
             function gcode(results, boundary, options) {
                 const b = bounds(boundary);
-                const depth = Math.abs(options.depth);
                 const out = [
                     '(Guilloche pattern)',
                     `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
@@ -3586,7 +3919,16 @@
                 ];
 
                 for (const result of results) {
-                    out.push(`(layer: ${result.layer.name})`);
+                    // Each layer is cut to its own tip depth with its own tool: the depth
+                    // here and the recess on screen are the same number, so what is
+                    // simulated is what gets cut.
+                    const layer = result.layer;
+                    const depth = Math.max(layer.depth, 0);
+                    const tool = layer.cutter === 'ball'
+                        ? `ball nose R${layer.radius}`
+                        : `${layer.angle} deg chamfer`;
+                    out.push(`(layer: ${layer.name} - ${tool}, width ${Cutter.width(layer).toFixed(3)}mm)`);
+                    if (depth <= 0) continue;
                     for (const pts of result.polys) {
                         if (pts.length < 4) continue;
                         out.push(`G0 X${(pts[0] - b.ox).toFixed(4)} Y${(pts[1] - b.oy).toFixed(4)}`);
@@ -3627,6 +3969,7 @@
             let boundary = null;
             let openChains = [];
             let results = [];
+            let cutMask = null;          // the face's alpha map, or null for a solid face
             let regenerateTimer = null;
 
             // --- The sample dial -----------------------------------------------------
@@ -3712,6 +4055,10 @@
                     warning, error
                 });
 
+                // The old mask was laid out over the old outline's square, so it means
+                // nothing against this one. The regeneration that always follows will put a
+                // matching one back.
+                cutMask = null;
                 DialMesh.build(boundary, openChains, settings.thickness, settings.material);
                 applyDisplay();
             }
@@ -3778,7 +4125,9 @@
                 results = [];
 
                 if (!boundary) {
-                    PatternView.set([]);
+                    PatternView.set([], null);
+                    cutMask = null;
+                    applyDisplay();
                     Sidebar.setStats({ status: 'No dial outline', paths: 0, segments: 0, length: 0, ms: null, layers: 0 });
                     Sidebar.setReliefWarning('');
                     return;
@@ -3870,7 +4219,11 @@
                     results.push({ layer, polys, materialKey: settings.material });
                 }
 
-                const view = PatternView.set(results);
+                // The cut and the hole it opens in the face are one thing in two halves.
+                // applyDisplay puts them on together, and takes them off together -- a face
+                // left punched out with the cut walls hidden would be a sieve.
+                const view = PatternView.set(results, boundary);
+                cutMask = view.mask;
                 applyDisplay();
 
                 Sidebar.setStats({
@@ -3883,8 +4236,8 @@
                 });
 
                 Sidebar.setReliefWarning(view.reliefSkipped
-                    ? 'Relief skipped: this pattern needs more geometry than the viewer will build. ' +
-                      'Increase the spacing, or turn off some layers.'
+                    ? 'Cut simulation skipped: this pattern needs more geometry than the viewer ' +
+                      'will build. Increase the spacing, or turn off some layers.'
                     : (truncated
                         ? 'The point budget ran out before every path was drawn. Increase the spacing.'
                         : ''));
@@ -3894,6 +4247,9 @@
                 const settings = Sidebar.settings();
                 DialMesh.setBodyVisible(settings.showSolid);
                 DialMesh.setOutlineVisible(settings.showOutline);
+                // The mask goes with the cut walls, never without them: the holes in the
+                // face are only ever there so the walls below can be seen through them.
+                DialMesh.setMask(settings.showRelief ? cutMask : null);
                 Viewer.setGridVisible(settings.showGrid);
                 PatternView.setLinesVisible(settings.showLines);
                 PatternView.setReliefVisible(settings.showRelief);
