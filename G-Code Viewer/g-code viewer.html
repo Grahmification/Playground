@@ -12,9 +12,21 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
 
+        /* overscroll-behavior stops the rubber-band drag peeling the app off the top of a
+           phone screen mid-orbit. */
+        html {
+            height: 100%;
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
+
         body {
             display: flex;
+            /* 100vh is the height with a phone's toolbars retracted, so it hangs below the
+               fold while they show and takes the scrubber with it. dvh is what is on
+               screen now; vh is the fallback. */
             height: 100vh;
+            height: 100dvh;
             overflow: hidden;
             background-color: #1a1a1a;
             color: #e0e0e0;
@@ -72,6 +84,44 @@
         .sidebar-toggle:hover {
             background-color: #3c3c3c;
             color: #ffffff;
+        }
+
+        /* The only part of the sidebar left on screen once it is collapsed, and likewise
+           shown only by the narrow-width rules. Floats over the 3D view, so it is opaque
+           enough to stay legible against whatever is drawn behind it. */
+        .sidebar-open {
+            display: none;
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 20;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            background-color: rgba(37, 37, 38, 0.92);
+            color: #e0e0e0;
+            font-size: 1.1rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .sidebar-open:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Dismisses the drawer, and darkens the view behind it so it reads as covered
+           rather than merely obscured. Same narrow-widths-only story. */
+        #sidebar-backdrop {
+            display: none;
+            position: absolute;
+            inset: 0;
+            z-index: 25;
+            background-color: rgba(0, 0, 0, 0.5);
         }
 
         .control-group {
@@ -307,7 +357,18 @@
             gap: 8px;
         }
 
+        /* Operation names and tool descriptions come out of the file and have no bound on
+           their length, so they wrap. Without this the panel clips them mid-word, which is
+           only ever visible at the narrow width the legend is held to on a phone. */
+        .legend-item span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
         .color-box {
+            /* Square whatever the label does: a flex item shrinks by default, and a wrapped
+               label leaves the row short of space. */
+            flex: 0 0 auto;
             width: 12px;
             height: 12px;
             border-radius: 2px;
@@ -354,8 +415,10 @@
             gap: 8px;
             pointer-events: none;
             /* The expanded line list grows until it runs out of 3D view: the 12px inset at
-               the top, mirrored at the bottom. */
+               the top, mirrored at the bottom. Same rule across, since the stack is anchored
+               by its right edge and a panel too wide for the view would run off the left. */
             max-height: calc(100% - 24px);
+            max-width: calc(100% - 24px);
         }
 
         /* Mirror of #overlay-stack down the other side of the view. Its own stack rather
@@ -374,10 +437,13 @@
             max-height: calc(100% - 24px);
         }
 
+        /* The 100% is what the stack can spare, as on #gcode-line: a flex item is not
+           otherwise held to its container's width, so the 280 alone would let a wide legend
+           reach past the stack and into the ViewCube. */
         #legend-stack .overlay-panel {
             display: flex;
             flex-direction: column;
-            max-width: 280px;
+            max-width: min(280px, 100%);
             overflow: hidden;
         }
 
@@ -440,6 +506,9 @@
             /* When the stack runs out of height it is the line list that gives way, never
                this -- otherwise a long lookahead would squeeze the status rows shut. */
             flex: 0 0 auto;
+            /* Held to the stack for the same reason #gcode-line is: a flex item is not
+               otherwise clamped to its container's width. */
+            max-width: 100%;
         }
 
         /* The rows are grouping only -- the spans themselves are the grid items, so the
@@ -468,17 +537,22 @@
 
            Collapsed it shrinks to whatever the one line needs, capped so a long line wraps
            instead of running across the view. Expanded it takes the full width, since the
-           list underneath is sized by the file rather than by the current line. */
+           list underneath is sized by the file rather than by the current line.
+
+           380px is the width it wants; the 100% is what the stack can actually spare, which
+           is less than that on a phone. A flex item is not otherwise held to its container's
+           width, so without it the panel keeps the 380 and hangs off the left of the view. */
         #gcode-line {
             display: flex;
             flex-direction: column;
-            max-width: 380px;
+            max-width: min(380px, 100%);
             font-family: monospace;
             overflow: hidden;
         }
 
         #gcode-line.expanded {
             width: 380px;
+            max-width: 100%;
         }
 
         #gcode-line-head {
@@ -622,13 +696,16 @@
             cursor: pointer;
         }
 
-        /* HSMWorks-style playback scrubber pinned under the 3D view. */
+        /* HSMWorks-style playback scrubber pinned under the 3D view. It sits on the screen's
+           bottom edge, so the padding clears a home indicator where there is one; env()
+           resolves to 0 where there is not. */
         #timeline-bar {
             flex: 0 0 auto;
             display: flex;
             align-items: center;
             gap: 12px;
             padding: 10px 16px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
             background-color: #252526;
             border-top: 1px solid #3c3c3c;
             position: relative;
@@ -952,40 +1029,104 @@
             color: #aaaaaa;
         }
 
-        /* Narrow widths. A 320px sidebar is most of a phone screen, so it folds down to a
-           strip holding nothing but the button that brings it back. It stays in flow rather
-           than sliding over the view: #viewport is its flex sibling and simply takes the
-           width back, which an overlay would not give it. */
+        /* Narrow widths. A 320px sidebar is most of a phone screen, so it becomes a drawer
+           that slides over the 3D view and is dismissed by the backdrop behind it. Out of
+           flow, so #viewport keeps the whole screen in both states and the canvas never
+           resizes; collapsed, nothing of it is left on screen but #sidebar-open. */
         @media (max-width: 700px) {
+            /* The drawer and backdrop measure against this. Not `fixed`: that would
+               measure the layout viewport and run under the browser's toolbars. */
+            body {
+                position: relative;
+            }
+
             .sidebar-toggle {
                 display: flex;
             }
 
             #sidebar {
-                flex: 0 0 auto;
-                width: min(320px, 80vw);
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                z-index: 30;
+                width: min(320px, 85vw);
+                /* Reaches the bottom edge of the screen, so like the scrubber it has to
+                   clear a home indicator where there is one. */
+                padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+                box-shadow: 0 0 24px rgba(0, 0, 0, 0.5);
+                transition: transform 0.2s ease, visibility 0s;
             }
 
-            /* 8px padding either side of the 32px button, plus the 1px border the global
-               border-box sizing counts in here. */
+            /* visibility is what takes the fields out of the tab order once they are off
+               screen, held back until the slide finishes so it does not cut it short. */
             body.sidebar-collapsed #sidebar {
-                width: 49px;
-                padding: 8px;
-                gap: 0;
+                transform: translateX(-100%);
+                visibility: hidden;
+                transition: transform 0.2s ease, visibility 0s linear 0.2s;
+            }
+
+            body.sidebar-collapsed .sidebar-open {
+                display: flex;
+            }
+
+            body:not(.sidebar-collapsed) #sidebar-backdrop {
+                display: block;
+            }
+
+            /* Down to the bottom-left, out of the top strip the status panel needs. The
+               corner it lands in is hemmed in on three sides, and each number below is one
+               of them: 62px up from the bottom clears the playback bar (40px tall at a
+               12px inset, plus a gap of its own); 132px off the width clears the ViewCube,
+               which is 96px square at the same inset and reaches up past the bar; and the
+               height stops 200px short of the full view so a long legend, which grows
+               upward from here, stops below the status panel rather than under it.
+
+               `top: auto` matters -- an absolutely positioned box with both offsets set
+               stretches between them instead of sizing to its contents. */
+            #legend-stack {
+                top: auto;
+                bottom: 62px;
+                max-width: calc(100vw - 132px);
+                max-height: calc(100% - 200px);
+            }
+
+            /* Stops short of the floating sidebar button rather than the edge of the view:
+               12px of inset on the right, then the button's 40px and its own 12px on the
+               left. minmax(0, auto) lets the value column shrink past its content, which an
+               auto track will not do -- without it the panel would simply overflow the cap
+               instead of the text being cut. */
+            #readout {
+                grid-template-columns: auto minmax(0, auto);
+                max-width: calc(100vw - 64px);
+            }
+
+            #readout .readout-row span:last-child {
+                min-width: 0;
+                white-space: nowrap;
                 overflow: hidden;
+                text-overflow: ellipsis;
             }
 
-            body.sidebar-collapsed #sidebar > *:not(.sidebar-head) {
-                display: none;
+            /* The one value worth wrapping instead of cutting: an ellipsis here would eat a
+               coordinate. The padding inside an axis is non-breaking, so the break lands
+               between axes and never between Z and its number. Written with the panel's id
+               in front to outrank the rule above, which is specific enough to reach this
+               span on its own. */
+            #readout #sim-pos {
+                white-space: pre-wrap;
             }
 
-            body.sidebar-collapsed .sidebar-head {
-                border-bottom: none;
-                padding-bottom: 0;
+            /* The panel is only a phone wide here, so the ellipsis the wide layout uses
+               would swallow most of a line. Wrapping instead costs rows off the bottom of
+               the list, which is the cheaper thing to lose. The number keeps its own
+               column, so the continuation lines hang under the text they belong to. */
+            #gcode-lookahead div {
+                white-space: pre-wrap;
             }
 
-            body.sidebar-collapsed .sidebar-head h1 {
-                display: none;
+            #gcode-lookahead .la-text {
+                overflow-wrap: anywhere;
             }
 
             /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
@@ -1018,6 +1159,18 @@
             #tool-grid .tool-cell.off {
                 display: none;
             }
+
+            /* The percentage already says what the label says, and the space is worth more
+               to the 3D view. */
+            #timeline-bar {
+                gap: 10px;
+                padding: 8px 12px;
+                padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+            }
+
+            #timeline-bar .timeline-label {
+                display: none;
+            }
         }
     </style>
     <!-- Three.js and OrbitControls -->
@@ -1025,6 +1178,12 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
+
+    <!-- Both are narrow widths only, where the sidebar is a drawer: the button that brings
+         it back, and the backdrop that sends it away. -->
+    <button id="sidebar-open" class="sidebar-open" type="button"
+            title="Show sidebar" aria-label="Show sidebar" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
+    <div id="sidebar-backdrop"></div>
 
     <div id="sidebar">
         <div class="sidebar-head">
@@ -1157,10 +1316,12 @@
             </div>
             <div id="overlay-stack">
                 <div id="readout" class="overlay-panel">
-                    <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
-                    <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
+                    <div class="readout-row"><span>Tool</span> <span id="sim-tool">&mdash;</span></div>
+                    <div class="readout-row"><span>Feed</span> <span id="sim-feed">0 mm/min</span></div>
                     <div class="readout-row"><span>Spindle</span> <span id="sim-spindle">Off</span></div>
-                    <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X   0.000 Y   0.000 Z   0.000</span></div>
+                    <!-- Non-breaking padding, exactly as Util.formatAxis writes it, so the
+                         placeholder wraps where a real reading would. -->
+                    <div class="readout-row"><span>Pos</span> <span id="sim-pos">X&nbsp;&nbsp;&nbsp;0.000 Y&nbsp;&nbsp;&nbsp;0.000 Z&nbsp;&nbsp;&nbsp;0.000</span></div>
                 </div>
                 <div id="gcode-line" class="overlay-panel">
                     <div id="gcode-line-head">
@@ -1301,9 +1462,10 @@
 
             // Wide enough for a sign and three digits either side of the point
             // (-123.432), so the three axes keep their columns instead of shuffling as
-            // the tool moves.
+            // the tool moves. The padding is non-breaking, so where the readout is narrow
+            // enough to wrap it breaks between axes rather than inside one.
             function formatAxis(v) {
-                return v.toFixed(3).padStart(8);
+                return v.toFixed(3).padStart(8, ' ');
             }
 
             function el(id) {
@@ -2548,7 +2710,9 @@
                 renderer.setSize(container.clientWidth, container.clientHeight);
             }
 
-            window.addEventListener('resize', resize);
+            // The box, not the window: a phone's toolbars sliding away changes the dvh
+            // height without reliably firing a window resize. Catches both.
+            new ResizeObserver(resize).observe(container);
 
             function frameBounds(bounds) {
                 const sizeX = bounds.maxX - bounds.minX;
@@ -4717,18 +4881,27 @@
                     collapseEl.title = detailsExpanded ? 'Hide stock settings' : 'Show stock settings';
                 });
 
-                // Narrow widths only: the whole panel folds down to the button that brings it
-                // back. #viewport is its flex sibling and simply takes the width, so the 3D
-                // view has to be told its size changed even though the window did not.
-                const toggleEl = el('sidebar-toggle');
+                // Narrow widths only, where the panel is a drawer over the 3D view. Three
+                // ways in and out of the same state, so they share one setter: the button
+                // in the drawer's head and the backdrop both close it, and only the
+                // floating button opens it. Each is visible in exactly one of the two
+                // states, so none of them needs a glyph that changes.
+                const closeEl = el('sidebar-toggle');
+                const openEl = el('sidebar-open');
 
-                toggleEl.addEventListener('click', () => {
-                    const collapsed = document.body.classList.toggle('sidebar-collapsed');
-                    toggleEl.setAttribute('aria-expanded', String(!collapsed));
-                    toggleEl.innerHTML = collapsed ? '&#9654;' : '&#9664;';
-                    toggleEl.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
-                    handlers.onLayoutChanged();
-                });
+                function setSidebar(collapsed) {
+                    document.body.classList.toggle('sidebar-collapsed', collapsed);
+                    closeEl.setAttribute('aria-expanded', String(!collapsed));
+                    openEl.setAttribute('aria-expanded', String(!collapsed));
+                    // Moving focus to whichever button the user is left with keeps the
+                    // keyboard where the pointer is, and off a control that just went
+                    // `visibility: hidden` underneath it.
+                    (collapsed ? openEl : closeEl).focus();
+                }
+
+                closeEl.addEventListener('click', () => setSidebar(true));
+                openEl.addEventListener('click', () => setSidebar(false));
+                el('sidebar-backdrop').addEventListener('click', () => setSidebar(true));
             }
 
             return {
@@ -5794,9 +5967,7 @@
                         if (!Program.isEmpty()) Sidebar.setStockExtents(Stock.suggestExtents());
                         Sidebar.resetMargin();
                         rebuildStock();
-                    },
-
-                    onLayoutChanged: Viewer.resize
+                    }
                 });
 
                 // Every row of the dialog, and every field in a row, means the same thing to
