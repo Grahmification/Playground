@@ -4364,14 +4364,20 @@
 
             function applyDisplay() {
                 const settings = Sidebar.settings();
+                // The cut is a shape cut *into* the body -- walls of the dial's own metal,
+                // standing in a hole in its face. With the body gone there is nothing for
+                // it to be cut into, and it would read as a pattern of floating troughs, so
+                // hiding the body takes the cut with it whatever the cut's own box says.
+                const showCut = settings.showSolid && settings.showRelief;
+
                 DialMesh.setBodyVisible(settings.showSolid);
                 DialMesh.setOutlineVisible(settings.showOutline);
                 // The mask goes with the cut walls, never without them: the holes in the
                 // face are only ever there so the walls below can be seen through them.
-                DialMesh.setMask(settings.showRelief ? cutMask : null);
+                DialMesh.setMask(showCut ? cutMask : null);
                 Viewer.setGridVisible(settings.showGrid);
                 PatternView.setLinesVisible(settings.showLines);
-                PatternView.setReliefVisible(settings.showRelief);
+                PatternView.setReliefVisible(showCut);
             }
 
             // --- Export --------------------------------------------------------------
