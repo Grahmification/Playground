@@ -331,6 +331,26 @@
             gap: 8px;
         }
 
+        .panel-toggle {
+            margin-left: auto;
+            flex: 0 0 auto;
+            width: 18px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #aaaaaa;
+            font-family: inherit;
+            font-size: 0.75rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .panel-toggle:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
         /* Repeats the panel's own column so the rows keep their spacing once nested, and
            spells out the hidden case -- a display rule outranks the browser's [hidden]. */
         .panel-body {
@@ -681,66 +701,74 @@
                     title="Hide sidebar" aria-expanded="true" aria-controls="sidebar">&#9664;</button>
         </div>
 
-        <div class="file-input-wrapper">
-            <label for="dxf-file" class="btn">Load Dial Outline (DXF)</label>
-            <input type="file" id="dxf-file" accept=".dxf,.DXF,text/plain">
-        </div>
-        <button id="btn-sample" class="btn btn-secondary" type="button">Use Sample Dial</button>
-
         <!-- Dial -->
         <div class="panel">
             <div class="panel-title panel-title-row">
                 <span>Dial</span>
+                <button id="dial-collapse" class="panel-toggle" type="button"
+                        title="Hide dial settings" aria-expanded="true" aria-controls="dial-body">&#9652;</button>
             </div>
-            <div class="stats-row"><span>Outline:</span> <span id="dial-file" class="stats-value">&mdash;</span></div>
-            <div class="stats-row"><span>Size:</span> <span id="dial-size" class="stats-value">&mdash;</span></div>
-            <div class="stats-row"><span>Closed loops:</span> <span id="dial-loops" class="stats-value">0</span></div>
+            <!-- Left outside the collapsible part: a drawing that failed to close is
+                 exactly the thing you must not be able to fold away, and it costs nothing
+                 while there is nothing wrong. -->
             <div id="dial-warning" class="hint" hidden></div>
 
-            <div class="field-pair">
-                <div class="control-group">
-                    <div class="label-row">
-                        <label for="dxf-units">File Units</label>
-                        <span class="help" tabindex="0">?<span class="help-bubble">What one drawing
-                            unit in the DXF means. <b>Auto</b> reads $INSUNITS from the file header
-                            and falls back to millimetres when the file does not say.</span></span>
-                    </div>
-                    <select id="dxf-units">
-                        <option value="auto" selected>Auto</option>
-                        <option value="mm">Millimetres</option>
-                        <option value="cm">Centimetres</option>
-                        <option value="m">Metres</option>
-                        <option value="in">Inches</option>
-                    </select>
+            <div id="dial-body" class="panel-body">
+                <div class="file-input-wrapper">
+                    <label for="dxf-file" class="btn">Load Dial Outline (DXF)</label>
+                    <input type="file" id="dxf-file" accept=".dxf,.DXF,text/plain">
                 </div>
-                <div class="control-group">
-                    <div class="label-row">
-                        <label for="join-tol">Join Tol. (mm)</label>
-                        <span class="help" tabindex="0">?<span class="help-bubble">How far apart two
-                            entity ends may be and still be treated as the same point when the
-                            outline is chained into closed loops. Raise it if a drawing comes in
-                            with gaps at the corners.</span></span>
-                    </div>
-                    <input type="number" id="join-tol" value="0.05" min="0" step="0.01">
-                </div>
-            </div>
+                <button id="btn-sample" class="btn btn-secondary" type="button">Use Sample Dial</button>
 
-            <div class="field-pair">
-                <div class="control-group">
-                    <label for="dial-thickness">Thickness (mm)</label>
-                    <input type="number" id="dial-thickness" value="0.6" min="0.05" step="0.05">
+                <div class="stats-row"><span>Outline:</span> <span id="dial-file" class="stats-value">&mdash;</span></div>
+                <div class="stats-row"><span>Size:</span> <span id="dial-size" class="stats-value">&mdash;</span></div>
+                <div class="stats-row"><span>Closed loops:</span> <span id="dial-loops" class="stats-value">0</span></div>
+
+                <div class="field-pair">
+                    <div class="control-group">
+                        <div class="label-row">
+                            <label for="dxf-units">File Units</label>
+                            <span class="help" tabindex="0">?<span class="help-bubble">What one drawing
+                                unit in the DXF means. <b>Auto</b> reads $INSUNITS from the file header
+                                and falls back to millimetres when the file does not say.</span></span>
+                        </div>
+                        <select id="dxf-units">
+                            <option value="auto" selected>Auto</option>
+                            <option value="mm">Millimetres</option>
+                            <option value="cm">Centimetres</option>
+                            <option value="m">Metres</option>
+                            <option value="in">Inches</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <div class="label-row">
+                            <label for="join-tol">Join Tol. (mm)</label>
+                            <span class="help" tabindex="0">?<span class="help-bubble">How far apart two
+                                entity ends may be and still be treated as the same point when the
+                                outline is chained into closed loops. Raise it if a drawing comes in
+                                with gaps at the corners.</span></span>
+                        </div>
+                        <input type="number" id="join-tol" value="0.05" min="0" step="0.01">
+                    </div>
                 </div>
-                <div class="control-group">
-                    <label for="dial-material">Finish</label>
-                    <select id="dial-material">
-                        <option value="silver" selected>Rhodium / Steel</option>
-                        <option value="gold">Yellow Gold</option>
-                        <option value="rose">Rose Gold</option>
-                        <option value="brass">Brass</option>
-                        <option value="blue">Flame Blue</option>
-                        <option value="black">Black</option>
-                        <option value="white">Silvered White</option>
-                    </select>
+
+                <div class="field-pair">
+                    <div class="control-group">
+                        <label for="dial-thickness">Thickness (mm)</label>
+                        <input type="number" id="dial-thickness" value="0.6" min="0.05" step="0.05">
+                    </div>
+                    <div class="control-group">
+                        <label for="dial-material">Finish</label>
+                        <select id="dial-material">
+                            <option value="silver" selected>Rhodium / Steel</option>
+                            <option value="gold">Yellow Gold</option>
+                            <option value="rose">Rose Gold</option>
+                            <option value="brass">Brass</option>
+                            <option value="blue">Flame Blue</option>
+                            <option value="black">Black</option>
+                            <option value="white">Silvered White</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3911,6 +3939,22 @@
                 refresh();
                 hooks.regenerate();
             });
+
+            // --- Collapsing the Dial panel -------------------------------------------
+            // It is set once per drawing and then only takes up room above the controls
+            // that are actually being worked. Nothing is disabled by folding it away --
+            // the fields keep their values, they are simply out of sight.
+            {
+                const button = el('dial-collapse');
+                const body = el('dial-body');
+                button.addEventListener('click', () => {
+                    const opening = body.hidden;
+                    body.hidden = !opening;
+                    button.setAttribute('aria-expanded', String(opening));
+                    button.title = opening ? 'Hide dial settings' : 'Show dial settings';
+                    button.innerHTML = opening ? '&#9652;' : '&#9662;';
+                });
+            }
 
             // --- Narrow-width drawer -------------------------------------------------
             const setCollapsed = (collapsed) => {
