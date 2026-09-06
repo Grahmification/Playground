@@ -1255,6 +1255,53 @@
                 return `${v.toFixed(digits)} mm`;
             }
 
+            // Drops the points that lie on the straight line between their neighbours.
+            //
+            // The clipper does not keep the vertices it was handed. To find where a path
+            // crosses the dial's edge it walks each segment at a fixed step and emits its
+            // own samples -- so a cross-hatch line the generator drew as two points arrives
+            // as four hundred, every one of them exactly on the line between the first and
+            // the last. That is four hundred G1 blocks, four hundred rows of cut geometry,
+            // and four hundred entries in every count, all saying what two points said.
+            //
+            // The tolerance is what makes this safe rather than a judgement call. At a
+            // ten-thousandth of a micron it is orders of magnitude above the rounding in
+            // the interpolation that produced these points, and orders below anything the
+            // machine could position to or the screen could show. It removes exactly the
+            // points that carry no information; it cannot touch a curve.
+            function collapseCollinear(pts, tolerance) {
+                const n = pts.length / 2;
+                if (n < 3) return pts;
+
+                const out = [pts[0], pts[1]];
+                // The last point kept, not the last point read: a whole collinear run
+                // collapses against the point it started from.
+                let ax = pts[0];
+                let ay = pts[1];
+
+                for (let i = 1; i < n - 1; i++) {
+                    const bx = pts[i * 2];
+                    const by = pts[i * 2 + 1];
+                    const ux = pts[i * 2 + 2] - ax;
+                    const uy = pts[i * 2 + 3] - ay;
+                    const span = ux * ux + uy * uy;
+                    // Twice the triangle's area is |u x (b - a)|, and its height over that
+                    // base is that divided by |u|. Comparing the squares instead keeps both
+                    // a square root and a division out of the inner loop -- and a base of
+                    // zero length falls through to keeping the point, which is right: there
+                    // is no line to be on.
+                    const cross = ux * (by - ay) - uy * (bx - ax);
+                    if (span > 0 && cross * cross <= tolerance * tolerance * span) continue;
+
+                    out.push(bx, by);
+                    ax = bx;
+                    ay = by;
+                }
+
+                out.push(pts[(n - 1) * 2], pts[(n - 1) * 2 + 1]);
+                return out;
+            }
+
             function gcd(a, b) {
                 a = Math.abs(Math.round(a));
                 b = Math.abs(Math.round(b));
@@ -1277,7 +1324,7 @@
                 requestAnimationFrame(() => URL.revokeObjectURL(url));
             }
 
-            return { clamp, el, escapeHtml, count, mm, gcd, download };
+            return { clamp, el, escapeHtml, count, mm, gcd, collapseCollinear, download };
         })();
 
         // --- Palette -----------------------------------------------------------------
@@ -4878,6 +4925,13 @@
             // taking the tab down with it.
             const MAX_GENERATED_POINTS = 1400000;
 
+            // How far off the line between its neighbours a point has to be to be worth
+            // keeping, in millimetres. A ten-thousandth of a micron: chosen to sit far
+            // above the floating-point rounding in the clipper's own interpolation and far
+            // below anything a machine can position to, so collapsing is a removal of
+            // redundancy rather than an approximation with a tolerance to argue about.
+            const COLLINEAR_TOLERANCE = 1e-7;
+
             let sourcePaths = [];        // as parsed, in file units
             let sourceUnits = null;      // what the file said, or null
             let sourceName = '—';
@@ -5144,9 +5198,17 @@
                                 pts[i + 1] = cy + x * sa + y * ca;
                             }
                         }
-                        if (!contained) { polys.push(pts); continue; }
+                        // Collapsed here, once, rather than in the exporter: everything
+                        // downstream reads `polys`, so the cut geometry, the mask, the line
+                        // preview, all three exports and the statistics all get the shorter
+                        // list. On a straight-line pattern that is most of the geometry
+                        // budget back, not just a smaller file.
+                        if (!contained) {
+                            polys.push(Util.collapseCollinear(pts, COLLINEAR_TOLERANCE));
+                            continue;
+                        }
                         for (const clipped of Clipper.clip(pts, path.closed, inside, maxStep)) {
-                            polys.push(clipped);
+                            polys.push(Util.collapseCollinear(clipped, COLLINEAR_TOLERANCE));
                         }
                     }
 
