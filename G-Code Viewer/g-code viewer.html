@@ -492,6 +492,9 @@
             /* When the stack runs out of height it is the line list that gives way, never
                this -- otherwise a long lookahead would squeeze the status rows shut. */
             flex: 0 0 auto;
+            /* Held to the stack for the same reason #gcode-line is: a flex item is not
+               otherwise clamped to its container's width. */
+            max-width: 100%;
         }
 
         /* The rows are grouping only -- the spans themselves are the grid items, so the
@@ -1064,6 +1067,32 @@
                 max-height: calc(100% - 68px);
             }
 
+            /* Stops short of the floating sidebar button rather than the edge of the view:
+               12px of inset on the right, then the button's 40px and its own 12px on the
+               left. minmax(0, auto) lets the value column shrink past its content, which an
+               auto track will not do -- without it the panel would simply overflow the cap
+               instead of the text being cut. */
+            #readout {
+                grid-template-columns: auto minmax(0, auto);
+                max-width: calc(100vw - 64px);
+            }
+
+            #readout .readout-row span:last-child {
+                min-width: 0;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            /* The one value worth wrapping instead of cutting: an ellipsis here would eat a
+               coordinate. The padding inside an axis is non-breaking, so the break lands
+               between axes and never between Z and its number. Written with the panel's id
+               in front to outrank the rule above, which is specific enough to reach this
+               span on its own. */
+            #readout #sim-pos {
+                white-space: pre-wrap;
+            }
+
             /* The panel is only a phone wide here, so the ellipsis the wide layout uses
                would swallow most of a line. Wrapping instead costs rows off the bottom of
                the list, which is the cheaper thing to lose. The number keeps its own
@@ -1263,10 +1292,12 @@
             </div>
             <div id="overlay-stack">
                 <div id="readout" class="overlay-panel">
-                    <div class="readout-row"><span>Active Tool</span> <span id="sim-tool">&mdash;</span></div>
-                    <div class="readout-row"><span>Current Feed</span> <span id="sim-feed">0 mm/min</span></div>
+                    <div class="readout-row"><span>Tool</span> <span id="sim-tool">&mdash;</span></div>
+                    <div class="readout-row"><span>Feed</span> <span id="sim-feed">0 mm/min</span></div>
                     <div class="readout-row"><span>Spindle</span> <span id="sim-spindle">Off</span></div>
-                    <div class="readout-row"><span>Tool Pos</span> <span id="sim-pos">X   0.000 Y   0.000 Z   0.000</span></div>
+                    <!-- Non-breaking padding, exactly as Util.formatAxis writes it, so the
+                         placeholder wraps where a real reading would. -->
+                    <div class="readout-row"><span>Pos</span> <span id="sim-pos">X&nbsp;&nbsp;&nbsp;0.000 Y&nbsp;&nbsp;&nbsp;0.000 Z&nbsp;&nbsp;&nbsp;0.000</span></div>
                 </div>
                 <div id="gcode-line" class="overlay-panel">
                     <div id="gcode-line-head">
@@ -1407,9 +1438,10 @@
 
             // Wide enough for a sign and three digits either side of the point
             // (-123.432), so the three axes keep their columns instead of shuffling as
-            // the tool moves.
+            // the tool moves. The padding is non-breaking, so where the readout is narrow
+            // enough to wrap it breaks between axes rather than inside one.
             function formatAxis(v) {
-                return v.toFixed(3).padStart(8);
+                return v.toFixed(3).padStart(8, ' ');
             }
 
             function el(id) {
