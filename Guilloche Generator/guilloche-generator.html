@@ -483,6 +483,151 @@
             text-decoration: line-through;
         }
 
+        /* --- Export G-Code dialog -----------------------------------------------
+           The one modal here, and the only place the machining setup is described.
+           Opened with showModal(), which puts it in the top layer: it clears every
+           z-index in this sheet without joining the race, and it makes the rest of the
+           page inert -- so OrbitControls, bound to the canvas underneath, provably never
+           sees a press that starts in here. */
+        #gcode-dialog {
+            padding: 0;
+            width: min(520px, 94vw);
+            max-height: 86vh;
+            overflow: hidden;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            background-color: #252526;
+            color: #e0e0e0;
+            /* Centred here rather than by the UA sheet, whose `margin: auto` the
+               `* { margin: 0 }` at the top of this file overrides -- author beats UA at any
+               specificity, which is what parks the panel in the top-left corner. */
+            inset: 0;
+            margin: auto;
+            height: fit-content;
+        }
+
+        /* Only the open state carries `display`. A bare `dialog { display: flex }` would
+           outrank the UA sheet's `display: none` for the closed state and leave the panel
+           on screen for ever. */
+        #gcode-dialog[open] {
+            display: flex;
+            flex-direction: column;
+        }
+
+        #gcode-dialog::backdrop {
+            background-color: rgba(0, 0, 0, 0.55);
+        }
+
+        .dialog-head {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            border-bottom: 1px solid #3c3c3c;
+        }
+
+        /* The title takes the free space, so every control after it sits together right. */
+        .dialog-head h2 {
+            margin-right: auto;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .dialog-close {
+            flex: 0 0 auto;
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 0.8rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .dialog-close:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        .dialog-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            /* Scrolled, unlike the overlay panels -- those are clipped because a scroller
+               over the canvas eats wheel events meant for the 3D view, and a modal that has
+               already taken the pointer is exempt from that. */
+            overflow-y: auto;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            font-size: 0.85rem;
+        }
+
+        .dialog-foot {
+            flex: 0 0 auto;
+            display: flex;
+            gap: 10px;
+            padding: 12px 16px;
+            border-top: 1px solid #3c3c3c;
+        }
+
+        .dialog-foot .btn {
+            width: auto;
+            flex: 1;
+        }
+
+        /* One grid for the whole list rather than one per row, so a tool number sits in the
+           same column whatever the layer above it is called. */
+        #gcode-tools {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) 6.5em;
+            align-items: center;
+            gap: 8px 10px;
+        }
+
+        /* Grouping only: the cells are the grid items, which is what keeps the columns
+           aligned across rows. */
+        #gcode-tools .tool-row {
+            display: contents;
+        }
+
+        #gcode-tools .tool-head {
+            font-size: 0.75rem;
+            color: #aaaaaa;
+        }
+
+        #gcode-tools .tool-name {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
+        /* What the layer is cut with, under its name: the number in the box beside it is a
+           tool, and this is what that tool has to be. */
+        #gcode-tools .tool-note {
+            display: block;
+            font-size: 0.72rem;
+            color: #808080;
+        }
+
+        #gcode-tools .tool-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            border: 1px solid #00000060;
+        }
+
+        /* Spans the grid: "nothing to cut" is not a row of tool fields. */
+        #gcode-tools .tool-empty {
+            grid-column: 1 / -1;
+            padding: 8px 0;
+            color: #aaaaaa;
+        }
+
         #viewport {
             flex: 1 1 auto;
             position: relative;
@@ -944,23 +1089,7 @@
                 <button id="btn-export-svg" class="btn btn-secondary" type="button">SVG</button>
                 <button id="btn-export-dxf" class="btn btn-secondary" type="button">DXF</button>
             </div>
-            <div class="field-pair">
-                <div class="control-group">
-                    <label for="gc-safe">Safe Z (mm)</label>
-                    <input type="number" id="gc-safe" value="1" step="0.5">
-                </div>
-                <div class="control-group">
-                    <label for="gc-feed">Feed (mm/min)</label>
-                    <input type="number" id="gc-feed" value="300" min="1" step="10">
-                </div>
-            </div>
-            <div class="control-group">
-                <label for="gc-plunge">Plunge Feed (mm/min)</label>
-                <input type="number" id="gc-plunge" value="80" min="1" step="10">
-            </div>
-            <div class="hint hint-muted">Each layer is cut to its own tip depth, with the
-                cutter it was given.</div>
-            <button id="btn-export-gcode" class="btn btn-secondary" type="button">G-Code</button>
+            <button id="btn-export-gcode" class="btn btn-secondary" type="button">G-Code&hellip;</button>
         </div>
     </div>
 
@@ -985,6 +1114,49 @@
         </div>
         <div id="drop-hint" hidden>Drop a .dxf outline, or a saved .json</div>
     </div>
+
+    <!-- Export G-Code. The tool rows are deliberately absent here: they are built from the
+         layer stack every time the dialog opens, so there is no markup to keep in step with
+         it. A sibling of #viewport rather than a child, so the ViewCube's capture-phase
+         listeners on #canvas-container never see its clicks. -->
+    <dialog id="gcode-dialog">
+        <div class="dialog-head">
+            <h2>Export G-Code</h2>
+            <button id="gcode-dialog-close" class="dialog-close" type="button"
+                    title="Close" aria-label="Close">&#10005;</button>
+        </div>
+        <div class="dialog-body">
+            <div class="field-pair">
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="gc-safe">Safe Z (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">Height for
+                            rapids between cuts, measured from the dial face. The tool is sent
+                            here after every path and after every tool change.</span></span>
+                    </div>
+                    <input type="number" id="gc-safe" value="1" step="0.5">
+                </div>
+                <div class="control-group">
+                    <label for="gc-feed">Feed (mm/min)</label>
+                    <input type="number" id="gc-feed" value="300" min="1" step="10">
+                </div>
+            </div>
+            <div class="control-group">
+                <label for="gc-plunge">Plunge Feed (mm/min)</label>
+                <input type="number" id="gc-plunge" value="80" min="1" step="10">
+            </div>
+
+            <div class="panel-title">Tools</div>
+            <div class="hint hint-muted">Each layer is cut to its own tip depth with the cutter
+                it was given, so each needs a tool. Layers sharing a number are cut without a
+                tool change between them.</div>
+            <div id="gcode-tools"></div>
+        </div>
+        <div class="dialog-foot">
+            <button id="gcode-cancel" class="btn btn-secondary" type="button">Cancel</button>
+            <button id="gcode-write" class="btn" type="button">Write G-Code</button>
+        </div>
+    </dialog>
 
     <script>
         /* ============================================================================
@@ -1012,6 +1184,7 @@
              Layers        the pattern layer stack: the document being edited
              Sidebar       the left-hand controls: values in, states out
              ViewToggles   the "what is drawn" panel floated over the 3D view
+             GCodeDialog   the machining setup, asked for at the moment it is needed
              Preset        the saved design, to and from JSON
              Exporter      SVG / DXF / G-code writers
              App           the wiring: what happens when, and in what order
@@ -3630,6 +3803,10 @@
                     depth: 0.12,
                     angle: 90,
                     radius: 0.15,
+                    // Which tool cuts this layer, for the G-code. A new layer gets a number
+                    // of its own, since a new layer usually means a different cutter -- two
+                    // layers only share a tool if they are set to.
+                    tool: list.length + 1,
                     cx: 0,
                     cy: 0,
                     rot: 0,
@@ -3738,12 +3915,7 @@
                     joinTolerance: Math.max(readNumber('join-tol', 0.05), 0),
                     margin: Math.max(readNumber('edge-margin', 0), 0),
                     thickness: Math.max(readNumber('dial-thickness', 0.6), 0.05),
-                    material: el('dial-material').value,
-                    gcode: {
-                        safeZ: readNumber('gc-safe', 1),
-                        feed: readNumber('gc-feed', 300),
-                        plunge: readNumber('gc-plunge', 80)
-                    }
+                    material: el('dial-material').value
                 };
             }
 
@@ -3769,13 +3941,8 @@
                 setNumber('edge-margin', saved.margin);
                 setNumber('dial-thickness', saved.thickness);
                 setChoice('dial-material', saved.material);
-
-                const gcode = saved.gcode;
-                if (gcode && typeof gcode === 'object') {
-                    setNumber('gc-safe', gcode.safeZ);
-                    setNumber('gc-feed', gcode.feed);
-                    setNumber('gc-plunge', gcode.plunge);
-                }
+                // The machining settings belong to the export dialog, which restores its
+                // own -- this module owns only the fields in the sidebar.
             }
 
             // --- Layer list ----------------------------------------------------------
@@ -4124,6 +4291,110 @@
 
             return { hooks, state };
         })();
+        // --- GCodeDialog -------------------------------------------------------------
+        // The machining setup, asked for at the moment it is needed rather than kept in the
+        // sidebar. It is answered once per export and never while designing, and the tool
+        // list cannot be written down in markup at all: it is one row per layer, built from
+        // the stack every time the dialog opens.
+        //
+        // The tool numbers are written back onto the layers, not held here -- a layer's
+        // tool belongs to the layer, travels in a saved design with it, and has to survive
+        // the dialog being closed.
+        const GCodeDialog = (() => {
+            const dialog = Util.el('gcode-dialog');
+            const rows = Util.el('gcode-tools');
+            const writeButton = Util.el('gcode-write');
+            let onConfirm = null;
+
+            function readNumber(id, fallback) {
+                const value = parseFloat(Util.el(id).value);
+                return Number.isFinite(value) ? value : fallback;
+            }
+
+            function settings() {
+                return {
+                    safeZ: readNumber('gc-safe', 1),
+                    feed: Math.max(readNumber('gc-feed', 300), 1),
+                    plunge: Math.max(readNumber('gc-plunge', 80), 1)
+                };
+            }
+
+            function applySettings(saved) {
+                if (!saved || typeof saved !== 'object') return;
+                const set = (id, value) => {
+                    if (Number.isFinite(value)) Util.el(id).value = value;
+                };
+                set('gc-safe', saved.safeZ);
+                set('gc-feed', saved.feed);
+                set('gc-plunge', saved.plunge);
+            }
+
+            // What the tool in the box beside it has to be.
+            function describe(layer) {
+                const shape = layer.cutter === 'ball'
+                    ? `${(layer.radius * 2).toFixed(2)} mm ball nose`
+                    : `${layer.angle}° chamfer`;
+                return `${shape} · ${layer.depth.toFixed(3)} mm deep · cuts ${Cutter.width(layer).toFixed(3)} mm wide`;
+            }
+
+            // Only the layers that are switched on: those are the only ones the export will
+            // contain, and offering a tool for a layer that will not be cut invites setting
+            // one and wondering where it went.
+            function render() {
+                const layers = Layers.list.filter(layer => layer.enabled && layer.depth > 0);
+                writeButton.disabled = layers.length === 0;
+
+                if (!layers.length) {
+                    rows.innerHTML = '<div class="tool-empty">No layer is switched on with a ' +
+                        'depth to cut, so there is nothing to write.</div>';
+                    return;
+                }
+
+                rows.innerHTML = `
+                    <div class="tool-row">
+                        <span class="tool-head"></span>
+                        <span class="tool-head">Layer</span>
+                        <span class="tool-head">Tool</span>
+                    </div>
+                ` + layers.map(layer => `
+                    <div class="tool-row">
+                        <span class="tool-swatch" style="background:${Util.escapeHtml(layer.color)}"></span>
+                        <span class="tool-name">${Util.escapeHtml(layer.name)}<span
+                            class="tool-note">${Util.escapeHtml(describe(layer))}</span></span>
+                        <input type="number" class="tool-number" data-id="${layer.id}"
+                               min="1" max="999" step="1" value="${layer.tool}"
+                               aria-label="Tool number for ${Util.escapeHtml(layer.name)}">
+                    </div>
+                `).join('');
+            }
+
+            function commit() {
+                for (const input of rows.querySelectorAll('.tool-number')) {
+                    const layer = Layers.list.find(l => l.id === Number(input.dataset.id));
+                    if (!layer) continue;
+                    const value = parseInt(input.value, 10);
+                    if (Number.isFinite(value)) layer.tool = Util.clamp(value, 1, 999);
+                }
+                const options = settings();
+                dialog.close();
+                if (onConfirm) onConfirm(options);
+            }
+
+            Util.el('gcode-dialog-close').addEventListener('click', () => dialog.close());
+            Util.el('gcode-cancel').addEventListener('click', () => dialog.close());
+            writeButton.addEventListener('click', commit);
+
+            return {
+                settings,
+                applySettings,
+                open(callback) {
+                    onConfirm = callback;
+                    render();
+                    dialog.showModal();
+                }
+            };
+        })();
+
         // --- Preset ------------------------------------------------------------------
         // The saved design, to and from JSON. Pure data in, pure data out: it reads no
         // field and draws nothing, so App stays the only place that knows what to do with
@@ -4181,6 +4452,7 @@
                     depth: Math.max(finite(raw.depth, 0.12), 0),
                     angle: Util.clamp(finite(raw.angle, 90), 1, 179),
                     radius: Math.max(finite(raw.radius, 0.15), 0.005),
+                    tool: Util.clamp(Math.round(finite(raw.tool, index + 1)), 1, 999),
                     cx: finite(raw.cx, 0),
                     cy: finite(raw.cy, 0),
                     rot: finite(raw.rot, 0),
@@ -4326,16 +4598,27 @@
                 return out.join('\n');
             }
 
+            // Parentheses delimit a comment, and they do not nest: a pattern label like
+            // "Rosette Spiral (Rose Engine)" carries a pair of its own, and dropped into a
+            // comment verbatim it would end that comment early and leave the rest of the
+            // line to be read as code.
+            function comment(text) {
+                return String(text).replace(/[()]/g, '');
+            }
+
             function gcode(results, boundary, options) {
                 const b = bounds(boundary);
+                const safeZ = options.safeZ.toFixed(3);
                 const out = [
                     '(Guilloche pattern)',
                     `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
                     '(Origin: dial centre. Z0 = dial face.)',
                     'G21 G90 G17',
                     'G94',
-                    `G0 Z${options.safeZ.toFixed(3)}`
+                    `G0 Z${safeZ}`
                 ];
+
+                let loadedTool = null;
 
                 for (const result of results) {
                     // Each layer is cut to its own tip depth with its own tool: the depth
@@ -4343,11 +4626,25 @@
                     // simulated is what gets cut.
                     const layer = result.layer;
                     const depth = Math.max(layer.depth, 0);
-                    const tool = layer.cutter === 'ball'
+                    if (depth <= 0 || !result.polys.length) continue;
+
+                    const description = layer.cutter === 'ball'
                         ? `ball nose R${layer.radius}`
                         : `${layer.angle} deg chamfer`;
-                    out.push(`(layer: ${layer.name} - ${tool}, width ${Cutter.width(layer).toFixed(3)}mm)`);
-                    if (depth <= 0) continue;
+                    const tool = `T${String(layer.tool).padStart(2, '0')}`;
+
+                    // Only where it actually changes: consecutive layers set to the same
+                    // tool are cut in one go, which is the reason for letting them share a
+                    // number at all. The retract is because a tool change leaves the
+                    // machine at a height most controls will not promise anything about.
+                    if (tool !== loadedTool) {
+                        out.push(`${tool} M6 (${comment(description)})`);
+                        out.push(`G0 Z${safeZ}`);
+                        loadedTool = tool;
+                    }
+
+                    out.push(`(layer: ${comment(layer.name)} - ${comment(description)}, ` +
+                             `width ${Cutter.width(layer).toFixed(3)}mm)`);
                     for (const pts of result.polys) {
                         if (pts.length < 4) continue;
                         out.push(`G0 X${(pts[0] - b.ox).toFixed(4)} Y${(pts[1] - b.oy).toFixed(4)}`);
@@ -4720,7 +5017,7 @@
                         margin: settings.margin,
                         thickness: settings.thickness,
                         material: settings.material,
-                        gcode: settings.gcode
+                        gcode: GCodeDialog.settings()
                     },
                     Layers.list,
                     Layers.indexOfSelected()
@@ -4735,6 +5032,7 @@
                 // read, so they have to be in their fields before the dial is rebuilt from
                 // it -- rebuildBoundary reads them back out of the sidebar.
                 Sidebar.applySettings(doc.settings);
+                GCodeDialog.applySettings(doc.settings && doc.settings.gcode);
                 Layers.replace(doc.layers, doc.selectedIndex);
                 Sidebar.refresh();
 
@@ -4770,17 +5068,24 @@
             }
 
             // --- Export --------------------------------------------------------------
+            function baseName() {
+                return sourceName.replace(/\.[^.]+$/, '') || 'dial';
+            }
+
             function exportAs(kind) {
                 if (!boundary) return;
-                const base = sourceName.replace(/\.[^.]+$/, '') || 'dial';
-                const settings = Sidebar.settings();
                 if (kind === 'svg') {
-                    Util.download(`${base}-guilloche.svg`, Exporter.svg(results, boundary), 'image/svg+xml');
-                } else if (kind === 'dxf') {
-                    Util.download(`${base}-guilloche.dxf`, Exporter.dxf(results, boundary), 'application/dxf');
+                    Util.download(`${baseName()}-guilloche.svg`, Exporter.svg(results, boundary), 'image/svg+xml');
                 } else {
-                    Util.download(`${base}-guilloche.nc`, Exporter.gcode(results, boundary, settings.gcode), 'text/plain');
+                    Util.download(`${baseName()}-guilloche.dxf`, Exporter.dxf(results, boundary), 'application/dxf');
                 }
+            }
+
+            // Called back by the dialog, with what was set in it.
+            function exportGcode(options) {
+                if (!boundary) return;
+                Util.download(`${baseName()}-guilloche.nc`,
+                    Exporter.gcode(results, boundary, options), 'text/plain');
             }
 
             // --- Wiring --------------------------------------------------------------
@@ -4810,7 +5115,9 @@
 
             Util.el('btn-export-svg').addEventListener('click', () => exportAs('svg'));
             Util.el('btn-export-dxf').addEventListener('click', () => exportAs('dxf'));
-            Util.el('btn-export-gcode').addEventListener('click', () => exportAs('gcode'));
+            Util.el('btn-export-gcode').addEventListener('click', () => {
+                if (boundary) GCodeDialog.open(exportGcode);
+            });
 
             // Drag and drop, on the window rather than the canvas: a file dropped on the
             // sidebar is just as clearly meant for the dial.
