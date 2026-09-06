@@ -733,6 +733,193 @@
             font-weight: 500;
         }
 
+        /* --- Manage Tools dialog ------------------------------------------------
+           The viewer's one modal, and the only place a tool's geometry is described.
+           Opened with showModal(), which puts it in the top layer: it clears every
+           z-index in this sheet without joining the race, and it makes the rest of the
+           page inert -- so OrbitControls, bound to the canvas underneath, provably
+           never sees a press that starts in here.
+
+           That is the exact inverse of the rule the overlay stacks follow. They are
+           pointer-events: none so they can never steal an orbit drag; this one is meant
+           to steal it, because while it is open nothing behind it should move. */
+        #tool-dialog {
+            padding: 0;
+            max-width: min(900px, 94vw);
+            max-height: 86vh;
+            overflow: hidden;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            background-color: #252526;
+            color: #e0e0e0;
+            /* Centred here rather than by the UA sheet, whose `margin: auto` the
+               `* { margin: 0 }` at the top of this file overrides -- author beats UA at any
+               specificity, which is what parks the panel in the top-left corner. The
+               fit-content sizes belong to the same rule: an `auto` size between two zero
+               insets stretches to fill instead, leaving no margin to centre with. */
+            inset: 0;
+            margin: auto;
+            width: fit-content;
+            height: fit-content;
+        }
+
+        /* Only the open state carries `display`. A bare `dialog { display: flex }` would
+           outrank the UA sheet's `display: none` for the closed state and leave the panel
+           on screen for ever -- the same trap already spelled out for #stock-details and
+           the legend panels above. */
+        #tool-dialog[open] {
+            display: flex;
+            flex-direction: column;
+        }
+
+        #tool-dialog::backdrop {
+            background-color: rgba(0, 0, 0, 0.55);
+        }
+
+        .dialog-head {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            border-bottom: 1px solid #3c3c3c;
+        }
+
+        .dialog-head h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .dialog-close {
+            margin-left: auto;
+            flex: 0 0 auto;
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 0.8rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .dialog-close:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* One grid for the whole list rather than one per row, so a diameter sits in the
+           same column whatever the row above it chose. Reading the table down a column is
+           the entire reason this is a table and not N stacked copies of the single-tool
+           panel it replaced. */
+        #tool-grid {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: auto minmax(8.5em, 1fr) 6em 6em 8.5em 6em;
+            align-items: center;
+            gap: 6px 10px;
+            padding: 0 16px 16px;
+            /* Scrolled, unlike the overlay panels -- those are clipped because a scroller
+               over the canvas eats wheel events meant for the 3D view, and a modal that
+               has already taken the pointer is exempt from that. */
+            overflow-y: auto;
+        }
+
+        /* Grouping only: the cells are the grid items, which is what keeps the columns
+           aligned across rows. The same trick #readout uses for its label/value pairs. */
+        #tool-grid .tool-row {
+            display: contents;
+        }
+
+        /* Sticky rather than lifted out into a second grid, which would need its own copy
+           of the column template and would drift out of step with this one. Sticky also
+           makes the cell a containing block, so the help bubble below hangs off the header
+           cell exactly as .label-row would have made it. */
+        #tool-grid .tool-head {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            padding: 12px 0 4px;
+            background-color: #252526;
+            font-size: 0.75rem;
+            color: #aaaaaa;
+        }
+
+        #tool-grid .tool-num {
+            font-family: monospace;
+            color: #e0e0e0;
+            white-space: nowrap;
+        }
+
+        /* The file's own words for a tool, shown only while they disagree with the
+           dropdown -- a header "M6 tap" is cut as a plain cylinder, and relabelling it
+           "Flat End Mill" without saying so would be a lie. */
+        #tool-grid .tool-note {
+            display: block;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 0.7rem;
+            color: #808080;
+        }
+
+        /* A grid item will not shrink below its own min-content, and a number input's is
+           the browser's default field width -- around twice these tracks. Without this the
+           fixed columns are the only thing holding still and the inputs spill straight out
+           through them. */
+        #tool-grid .tool-cell {
+            min-width: 0;
+        }
+
+        /* Hidden, not removed. Taking a cell out of an auto-placed grid slides every later
+           cell of that row into the wrong column; leaving the box in place means a type
+           change reflows nothing at all -- and visibility:hidden also drops the field out
+           of the tab order and out of hit-testing, which `disabled` alone would not. It
+           keeps the value, too, so bull -> flat -> bull gives back the corner radius. */
+        #tool-grid .tool-cell.off {
+            visibility: hidden;
+        }
+
+        /* The angle column carries two conventions, so each row states which one its own
+           number is in, right beside the number. */
+        #tool-grid .angle-cell {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* Same reason as .tool-cell above, one level down: the input is a flex item here,
+           and a flex item will not shrink past its min-content either. */
+        #tool-grid .angle-cell input {
+            min-width: 0;
+        }
+
+        #tool-grid .angle-tag {
+            flex: 0 0 auto;
+            width: 2.4em;
+            font-size: 0.7rem;
+            color: #808080;
+        }
+
+        /* The sidebar's bubble spans its whole row; an 8.5em grid cell is far too narrow
+           for that, so this one is given a width and hung off the cell's right edge. It
+           still opens downward -- upward would be clipped by the scroller the header
+           sits in. */
+        #tool-grid .help-bubble {
+            left: auto;
+            right: 0;
+            width: 250px;
+        }
+
+        /* Spans the grid: "no file open" is not a row of tool fields. */
+        #tool-grid .tool-empty {
+            grid-column: 1 / -1;
+            padding: 16px 0;
+            color: #aaaaaa;
+        }
+
         /* Narrow widths. A 320px sidebar is most of a phone screen, so it folds down to a
            strip holding nothing but the button that brings it back. It stays in flow rather
            than sliding over the view: #viewport is its flex sibling and simply takes the
@@ -766,6 +953,37 @@
             }
 
             body.sidebar-collapsed .sidebar-head h1 {
+                display: none;
+            }
+
+            /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
+               its neighbours -- at this width there is no alignment left to protect -- and
+               becomes its own little grid under its own label. The header goes with it,
+               since it labelled columns that no longer exist, and the hidden fields are
+               taken out of flow rather than left as gaps, which is safe now that each row
+               places its own cells. */
+            #tool-grid {
+                grid-template-columns: 1fr;
+            }
+
+            #tool-grid .tool-head {
+                display: none;
+            }
+
+            #tool-grid .tool-row {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px 10px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #3c3c3c;
+            }
+
+            #tool-grid .tool-num,
+            #tool-grid .tool-type-cell {
+                grid-column: 1 / -1;
+            }
+
+            #tool-grid .tool-cell.off {
                 display: none;
             }
         }
@@ -817,19 +1035,18 @@
                 <button id="stock-collapse" class="panel-toggle" type="button"
                         title="Hide stock settings" aria-expanded="true">&#9652;</button>
             </div>
-            <!-- Left out of the collapsible part: with the section folded away this is the
-                 one control still worth reaching. -->
+            <!-- Left out of the collapsible part, both of them: with the section folded away
+                 these are the controls still worth reaching. Manage Tools especially, since
+                 the tool table also decides which cutter the playback marker wears, and so is
+                 worth opening with no block on screen at all. -->
             <label class="check-row">
                 <input type="checkbox" id="stock-enabled">
                 <span>Show stock &amp; simulate cutting</span>
             </label>
+            <button id="btn-manage-tools" class="btn btn-secondary" type="button">Manage Tools&hellip;</button>
+            <div id="file-tools-hint" class="hint hint-muted">Open a file to set up its tools.</div>
             <div id="stock-details">
-                <div id="stock-hint" class="hint" style="display: none;">Enter a tool diameter under Manual Tool below to remove material.</div>
-                <label class="check-row">
-                    <input type="checkbox" id="use-file-tools" disabled>
-                    <span>Use tool geometry from G-code file</span>
-                </label>
-                <div id="file-tools-hint" class="hint hint-muted">Open a file whose header lists its tools.</div>
+                <div id="stock-hint" class="hint" style="display: none;">Set a tool under Manage Tools to remove material.</div>
                 <div class="control-group">
                     <label for="stock-res">Stock Resolution</label>
                     <select id="stock-res">
@@ -870,39 +1087,6 @@
                     </div>
                 </div>
                 <button id="btn-stock-fit" class="btn btn-secondary">Reset Stock To Fit Job</button>
-            </div>
-        </div>
-
-        <!-- Manual Tool. Only in play when the file has no tool table, or when the
-             "use tool geometry from G-code file" box above is cleared. -->
-        <div class="panel">
-            <div class="panel-title">Manual Tool</div>
-            <div class="control-group">
-                <label for="tool-diameter">Tool Diameter (mm) [Optional]</label>
-                <input type="number" id="tool-diameter" placeholder="e.g. 6" min="0.1" step="0.1">
-            </div>
-            <div class="control-group">
-                <label for="tool-type">Tool Type</label>
-                <select id="tool-type">
-                    <option value="flat" selected>Flat End Mill</option>
-                    <option value="ball">Ball Nose</option>
-                    <option value="bull">Bull Nose</option>
-                    <option value="chamfer">Chamfer / V-Bit</option>
-                </select>
-            </div>
-            <div class="control-group" id="row-corner-radius">
-                <label for="tool-corner-radius">Corner Radius (mm)</label>
-                <input type="number" id="tool-corner-radius" value="1" min="0" step="0.1">
-            </div>
-            <div class="control-group" id="row-wall-angle">
-                <label for="tool-wall-angle">Wall Angle from Axis (deg)</label>
-                <input type="number" id="tool-wall-angle" value="45" min="1" max="89" step="1">
-                <div class="hint hint-muted">45&deg; cuts a 45&deg; chamfer.</div>
-            </div>
-            <div class="control-group" id="row-tip-diameter">
-                <label for="tool-tip-diameter">Tip Diameter (mm)</label>
-                <input type="number" id="tool-tip-diameter" value="0" min="0" step="0.1">
-                <div class="hint hint-muted">0 for a sharp V-bit.</div>
             </div>
         </div>
 
@@ -991,6 +1175,20 @@
         </div>
     </div>
 
+    <!-- Manage Tools. Deliberately empty here: the rows are built from the loaded
+         program every time it opens, so there is no markup to keep in step with it. A
+         sibling of #viewport rather than a child, so it covers the sidebar too and so
+         the ViewCube's capture-phase listeners on #canvas-container never see its
+         clicks. -->
+    <dialog id="tool-dialog">
+        <div class="dialog-head">
+            <h2>Manage Tools</h2>
+            <button id="tool-dialog-close" class="dialog-close" type="button"
+                    title="Close" aria-label="Close">&#10005;</button>
+        </div>
+        <div id="tool-grid"></div>
+    </dialog>
+
     <script>
         /* ============================================================================
            3D G-Code Toolpath Viewer & Simulator
@@ -1006,7 +1204,7 @@
              ToolGeometry  cutter shapes: a spec becomes a carve-ready tool
              GCodeParser   program text -> plain data. No DOM, no three.js
              Program       the loaded program, and the lookups over it
-             ToolSource    which tool cuts a given segment (file table vs. sidebar)
+             ToolTable     what each tool number cuts with: the file's, then edited
              Viewer        scene, camera, renderer, controls, lighting, grid, origin
              ViewCube      the corner navigation widget -- self-contained
              Toolpath      the program drawn as coloured lines
@@ -1016,6 +1214,7 @@
              Stock         the height-map block, and the material removal itself
              Simulation    the playback clock
              Sidebar       the left-hand controls: values in, states out
+             ToolDialog    the Manage Tools modal: one row per tool number
              FileInfo      the file / status / size readouts
              Readout       the tool-state overlay panel
              GCodeOverlay  the current-line overlay panel and its lookahead
@@ -1024,11 +1223,16 @@
              Playback      the play / seek / speed bar
              App           the wiring: what happens when, and in what order
 
-           `Program` is the one piece of shared mutable state. App is the only writer;
-           everything else reads it. Modules never reach for each other's DOM, and the
-           view modules never read a control directly -- App passes what they need, which
-           is what keeps the ordering rules in the animation loop and the load sequence
-           readable in one place.
+           `Program` and `ToolTable` are the shared mutable state, and App is the only
+           writer of either. `ToolTable` is derived: a function of the loaded program plus
+           whatever the dialog has been told, so it can never disagree with `Program`
+           without App having put it there. Everything else reads.
+
+           Modules never reach for each other's DOM -- the Manage Tools button sits in the
+           sidebar and so belongs to `Sidebar`, while `ToolDialog` owns only the modal --
+           and the view modules never read a control directly. App passes what they need,
+           which is what keeps the ordering rules in the animation loop and the load
+           sequence readable in one place.
            ============================================================================ */
 
         // --- Util --------------------------------------------------------------------
@@ -1072,12 +1276,7 @@
                 return document.getElementById(id);
             }
 
-            function numberFrom(id, fallback) {
-                const val = parseFloat(el(id).value);
-                return isNaN(val) ? fallback : val;
-            }
-
-            return { clamp, cssHex, escapeHtml, formatDuration, formatAxis, el, numberFrom };
+            return { clamp, cssHex, escapeHtml, formatDuration, formatAxis, el };
         })();
 
         // --- Palette -----------------------------------------------------------------
@@ -1166,6 +1365,13 @@
 
             const CONE_FAMILIES = { chamfer: 1, spot: 1, drill: 1, countersink: 1 };
 
+            // Whether a family is cut as a cone rather than as a flat bottom with an
+            // optional corner. Exported because the tool dialog needs the same answer to
+            // decide which fields a row shows, and this is the one table that decides it.
+            function isCone(fam) {
+                return !!CONE_FAMILIES[fam];
+            }
+
             // The posted TAPER= value reuses one word for two different conventions, and
             // the example files prove both. A drill's 118 and a spot drill's 90 are
             // *included* tip angles (a 90 deg spot drill read as a half angle would have a
@@ -1211,9 +1417,11 @@
                 };
 
                 if (isCone) {
-                    // `halfAngleDeg` is the already-resolved angle from the tool axis (what
-                    // the sidebar's Wall Angle field means); `taperDeg` is the raw posted
-                    // value that still needs the included-vs-from-axis rule applied.
+                    // `halfAngleDeg` is the already-resolved angle from the tool axis (what a
+                    // chamfer row in the tool dialog means); `taperDeg` is the raw posted
+                    // value that still needs the included-vs-from-axis rule applied. They are
+                    // not interchangeable -- see ToolTable.toGeometrySpec, which is the one
+                    // place that decides which of the two a given family sends.
                     const half = clamp(
                         isFinite(spec.halfAngleDeg) ? spec.halfAngleDeg : coneHalfAngle(fam, spec.taperDeg),
                         1, 89
@@ -1250,7 +1458,7 @@
                 return `${num}${dia}${kind ? ' ' + kind : ''}`;
             }
 
-            return { family, build, heightAt, describe };
+            return { family, isCone, build, heightAt, describe };
         })();
 
         // --- GCodeParser -------------------------------------------------------------
@@ -1962,6 +2170,10 @@
                 get segments() { return data.segments; },
                 get lines() { return data.lines; },
                 get operations() { return data.operations; },
+                // What the header declared, and only that. ToolTable is the one thing that
+                // reads it for geometry -- as the starting point for its rows, which the
+                // dialog is then free to overrule -- so nothing downstream should reach past
+                // ToolTable to ask the file directly.
                 get fileTools() { return data.fileTools; },
                 get toolColorIndex() { return data.toolColorIndex; },
                 get bounds() { return data.bounds; },
@@ -1983,33 +2195,207 @@
             };
         })();
 
-        // --- ToolSource --------------------------------------------------------------
-        // Which tool cuts a given segment. In file mode a T number missing from the header
-        // falls back to the sidebar inputs, and to nothing at all if those are empty too --
-        // that segment then simply removes no material.
-        const ToolSource = (() => {
-            // The sidebar's tool, rebuilt whenever one of its fields changes. null when no
-            // valid diameter is entered: no cutting, marker sphere, stock hint.
-            let manual = null;
-            let useFile = false;
+        // --- ToolTable ---------------------------------------------------------------
+        // What each tool number in the loaded program cuts with. One row per T number the
+        // program actually uses, pre-filled from the header comment block where the file
+        // declares one and left at "none" where it does not. The Manage Tools dialog edits
+        // the rows; everything downstream only ever looks a segment up.
+        //
+        // Two maps per row, and the split is the point. The spec is what the user typed --
+        // including the fields the current type does not use, so bull -> flat -> bull gives
+        // the corner radius back rather than a zero. The tool is that spec run through
+        // ToolGeometry.build, once, at edit time.
+        //
+        // Which matters because **forSegment is a pure lookup and has to stay one**.
+        // Stock.carveTo calls it once per segment inside the carve loop, and Cutter
+        // compares what comes back by identity to decide whether to re-lathe its mesh -- so
+        // a table that built on demand would allocate per segment per replay and rebuild
+        // the cutter's geometry every frame. Construction happens in update() and rebuild()
+        // and nowhere else.
+        //
+        // Rows are keyed by the segment's own `toolNum`, taken verbatim: `null` for a move
+        // made before any T word -- its own row, since plenty of files never state one --
+        // and otherwise whatever number the file wrote, which the parser reads with
+        // parseFloat and so need not be an integer.
+        const ToolTable = (() => {
+            // Dropdown order, and the only families a row can hold.
+            const FAMILIES = ['none', 'flat', 'ball', 'bull', 'chamfer', 'drill', 'spot', 'countersink'];
+
+            // The header's vocabulary is wider than the list above, because the carve models
+            // fewer shapes than a post can name. A tap, a reamer and a boring bar are all cut
+            // as plain cylinders, which is exactly what a flat end mill is here -- so they
+            // land on `flat`, and the row keeps the file's own words beside the dropdown to
+            // say that is what happened.
+            const IMPORT_FAMILY = {
+                ball: 'ball', bull: 'bull',
+                chamfer: 'chamfer', drill: 'drill', spot: 'spot', countersink: 'countersink'
+            };
+
+            let rows = [];
+            const tools = new Map();
+
+            // A row with nothing in it. The geometry fields start as NaN rather than 0 so
+            // that build() rejects them: an empty diameter has to mean "this cuts nothing",
+            // not "this cuts a zero-width slot".
+            function blankSpec(family) {
+                return {
+                    family: family,
+                    diameter: NaN, cornerRadius: NaN, angle: NaN, tipDiameter: NaN,
+                    fileText: ''
+                };
+            }
+
+            // The one place a row's numbers become a ToolGeometry spec, and the one place
+            // the two angle conventions are resolved.
+            //
+            // build() takes the angle under two different names and they are not
+            // interchangeable. `halfAngleDeg` is used as it stands and then clamped to 89;
+            // `taperDeg` goes through coneHalfAngle's included-vs-from-axis rule first. A
+            // chamfer mill's 45 is already measured from the axis, so it belongs in the
+            // first. A drill's 118 is an included point angle, so it has to go in the
+            // second -- put through the first it would clamp to 89 and cut a nearly flat
+            // bottom, with no error and no way to see it but the shape of the stock.
+            //
+            // A blank field sends NaN into the second, which is what lets coneHalfAngle's
+            // per-family fallbacks (45 from axis, 118 included, 90 included) supply the
+            // default rather than restating them here.
+            function toGeometrySpec(key, spec) {
+                const out = { diameter: spec.diameter, family: spec.family, toolNum: key };
+
+                if (spec.family === 'ball') {
+                    out.cornerRadius = spec.diameter / 2;
+                } else if (spec.family === 'bull') {
+                    out.cornerRadius = spec.cornerRadius;
+                } else if (ToolGeometry.isCone(spec.family)) {
+                    if (spec.family === 'chamfer') out.halfAngleDeg = spec.angle;
+                    else out.taperDeg = spec.angle;
+                    out.tipRadius = isFinite(spec.tipDiameter) ? spec.tipDiameter / 2 : 0;
+                }
+                return out;
+            }
+
+            function buildTool(key, spec) {
+                if (spec.family === 'none') return null;
+                const tool = ToolGeometry.build(toGeometrySpec(key, spec));
+                if (!tool) return null;
+
+                // build() does not carry typeText forward, so this is the only place the
+                // header's own words can be reattached -- and the only place they can be
+                // withheld. Kept while they still describe the shape on screen, dropped the
+                // moment the user picks something else, so ToolGeometry.describe cannot end
+                // up calling a ball nose a flat end mill.
+                if (spec.fileText && ToolGeometry.family(spec.fileText) === spec.family) {
+                    tool.typeText = spec.fileText;
+                }
+                return tool;
+            }
+
+            // A header-declared tool turned back into a row. The angle is read off the built
+            // tool rather than re-parsed from the file: parseToolTable has already applied
+            // the included-vs-from-axis rule, and tool.halfAngle is its answer -- so undoing
+            // it here is the one halving or doubling, and a drill declared TAPER=118deg
+            // comes back as 118 while a chamfer's TAPER=45deg comes back as 45, each in the
+            // convention its own row is labelled with.
+            //
+            // tool.zmin is dropped on the way through, which is safe: parseToolTable is the
+            // only thing that ever wrote it and nothing has ever read it.
+            function importSpec(tool) {
+                const family = IMPORT_FAMILY[tool.family] || 'flat';
+                const spec = blankSpec(family);
+                spec.diameter = tool.diameter;
+                spec.fileText = tool.typeText || '';
+
+                if (tool.isCone) {
+                    spec.angle = family === 'chamfer' ? tool.halfAngle : tool.halfAngle * 2;
+                    spec.tipDiameter = tool.flatRadius * 2;
+                } else {
+                    spec.cornerRadius = tool.cornerRadius;
+                }
+                return spec;
+            }
+
+            function makeRow(key) {
+                const declared = key === null ? undefined : Program.fileTools.get(key);
+                return {
+                    key: key,
+                    // The same words the stock legend uses for the surfaces these moves
+                    // leave behind, so the two read as one idea rather than two.
+                    label: key === null ? 'No tool specified' : `T${key}`,
+                    spec: declared ? importSpec(declared) : blankSpec('none')
+                };
+            }
 
             function forSegment(seg) {
-                if (!seg) return manual;
-                if (useFile && seg.toolNum != null) {
-                    return Program.fileTools.get(seg.toolNum) || manual;
-                }
-                return manual;
+                return seg ? (tools.get(seg.toolNum) || null) : null;
             }
 
             return {
-                get manual() { return manual; },
-                set manual(tool) { manual = tool; },
-                get useFile() { return useFile; },
-                set useFile(on) { useFile = on; },
+                FAMILIES,
+
+                // The rows the loaded program needs -- not the header's list. A file can
+                // commit a tool with a bare `T3 M6` and never describe it, and a header can
+                // declare a tool the program never selects; both belong here, the first so
+                // it can be given a shape at all, the second so its absence from the model
+                // is a row set to something rather than a mystery.
+                //
+                // The unnumbered row appears only when a segment really carries no tool
+                // number, which after the parser's post-pass is rarer than it looks: the
+                // synthetic approach move adopts the first real tool, so a file with any T
+                // word in it leaves nothing behind for that row to cover.
+                //
+                // Called on load only, so nothing is carried over from the previous file --
+                // a tool number means whatever the new program says it means.
+                rebuild() {
+                    const keys = new Set();
+                    Program.segments.forEach(seg => keys.add(seg.toolNum));
+                    Program.fileTools.forEach((tool, num) => keys.add(num));
+
+                    let unnumbered = false;
+                    const numbered = [];
+                    keys.forEach(key => {
+                        if (key === null) unnumbered = true;
+                        else numbered.push(key);
+                    });
+                    // Ascending, deliberately unlike Program.toolColorIndex, which is in
+                    // order of first cut so the legend reads in machining order. This is a
+                    // settings table and it is scanned by number.
+                    numbered.sort((a, b) => a - b);
+
+                    rows = [];
+                    if (unnumbered) rows.push(makeRow(null));
+                    numbered.forEach(key => rows.push(makeRow(key)));
+
+                    tools.clear();
+                    rows.forEach(row => tools.set(row.key, buildTool(row.key, row.spec)));
+                },
+
+                // One row edited. Only that row's tool becomes a new object, which is what
+                // keeps Cutter's identity comparison meaningful -- editing T4 must not
+                // re-lathe the mesh while the simulation is sitting inside T7.
+                update(key, patch) {
+                    const row = rows.find(r => r.key === key);
+                    if (!row) return;
+                    Object.assign(row.spec, patch);
+                    tools.set(key, buildTool(key, row.spec));
+                },
+
+                rows() { return rows; },
+                toolFor(key) { return tools.get(key) || null; },
+
+                // Pure lookups. See the note at the top of the module.
                 forSegment,
                 at(dist) {
-                    if (Program.isEmpty()) return manual;
+                    if (Program.isEmpty()) return null;
                     return forSegment(Program.segmentAt(dist));
+                },
+
+                // Whether anything in the table can remove material at all, which is the
+                // whole of the question the sidebar's "nothing is being cut" hint asks.
+                anyCuts() {
+                    for (const tool of tools.values()) {
+                        if (tool) return true;
+                    }
+                    return false;
                 }
             };
         })();
@@ -2739,8 +3125,12 @@
             return {
                 // Takes the tool explicitly so the displayed cutter can follow a tool change
                 // as the simulation scrubs. Compared by identity, so this rebuilds the lathe
-                // once per tool change rather than once per frame. Null is a real case --
-                // this runs before any file is loaded -- so the sphere fallback has to survive.
+                // once per tool change rather than once per frame.
+                //
+                // Null is a real case, and now two of them: before any file is loaded, and
+                // for a tool number the Manage Tools table has been left at "none". The
+                // sphere has to survive both, and it says the same thing either way -- a
+                // tool that removes nothing has no shape worth drawing.
                 showTool(tool) {
                     if (tool === lastDrawn) return;
                     lastDrawn = tool;
@@ -3943,8 +4333,8 @@
             }
 
             function carveTo(dist) {
-                // The manual tool may legitimately be null in file-tool mode; the per-segment
-                // lookup below decides whether anything can cut.
+                // No tool check up front: a tool number left at None is a legitimate state, so
+                // it is the per-segment lookup below that decides whether anything can cut.
                 if (!block) return;
                 if (dist < carvedDistance - 1e-9) resetHeights();
                 if (dist <= carvedDistance) return;
@@ -3957,7 +4347,7 @@
                     const segEnd = seg.startDist + seg.length;
                     const a = Math.max(carvedDistance, seg.startDist);
                     const b = Math.min(dist, segEnd);
-                    const tool = seg.carve ? ToolSource.forSegment(seg) : null;
+                    const tool = seg.carve ? ToolTable.forSegment(seg) : null;
 
                     if (b > a && tool) {
                         const t0 = (a - seg.startDist) / seg.length;
@@ -4247,53 +4637,11 @@
         // writes a state into it. Everything it exposes is either a typed getter or a
         // display update, so no other module contains an element id from this panel.
         const Sidebar = (() => {
-            const { el, numberFrom, clamp } = Util;
-
-            // The sidebar's four tool types map onto the same families the header strings do.
-            const MANUAL_FAMILY = { flat: 'flat', ball: 'ball', bull: 'bull', chamfer: 'chamfer' };
-
-            const MANUAL_TOOL_FIELDS =
-                ['tool-diameter', 'tool-type', 'tool-corner-radius', 'tool-wall-angle', 'tool-tip-diameter'];
+            const { el } = Util;
 
             // Latched by disableStock(). Once the panel is off for want of WebGL 2 its hint
-            // says why, and the ordinary "enter a tool diameter" hint must not overwrite it.
+            // says why, and the ordinary "nothing can cut" hint must not overwrite it.
             let stockDisabled = false;
-
-            function readManualTool() {
-                const diameter = numberFrom('tool-diameter', NaN);
-                if (isNaN(diameter) || diameter <= 0) return null;
-
-                const type = el('tool-type').value;
-                const radius = diameter / 2;
-                const spec = { diameter, family: MANUAL_FAMILY[type] || 'flat' };
-
-                if (type === 'chamfer') {
-                    // Wall angle is measured from the tool axis, so it is already the cone's
-                    // half angle: 45 deg gives a 45 deg chamfer. Smaller means sharper.
-                    spec.halfAngleDeg = clamp(numberFrom('tool-wall-angle', 45), 1, 89);
-                    spec.tipRadius = clamp(numberFrom('tool-tip-diameter', 0) / 2, 0, radius * 0.999);
-                } else if (type === 'ball') {
-                    spec.cornerRadius = radius;
-                } else if (type === 'bull') {
-                    spec.cornerRadius = clamp(numberFrom('tool-corner-radius', 0), 0, radius);
-                }
-
-                return ToolGeometry.build(spec);
-            }
-
-            // While the file supplies the geometry, the manual inputs are inert. Greying them
-            // out is the only signal that typing in them will do nothing.
-            function updateManualFieldState() {
-                const disabled = el('use-file-tools').checked;
-                MANUAL_TOOL_FIELDS.forEach(id => { el(id).disabled = disabled; });
-            }
-
-            function updateToolFieldVisibility() {
-                const type = el('tool-type').value;
-                el('row-corner-radius').style.display = type === 'bull' ? 'flex' : 'none';
-                el('row-wall-angle').style.display = type === 'chamfer' ? 'flex' : 'none';
-                el('row-tip-diameter').style.display = type === 'chamfer' ? 'flex' : 'none';
-            }
 
             function init(handlers) {
                 el('gcode-file').addEventListener('change', (e) => {
@@ -4308,15 +4656,9 @@
                 el('show-toolpath').addEventListener('change', handlers.onToolpathVisibilityChanged);
                 el('active-segment-only').addEventListener('change', handlers.onToolpathVisibilityChanged);
 
-                // Every tool field changes the shape of the cut, so they all run the same
-                // handler. So does switching the tool source, which is why the file-tools
-                // checkbox shares it -- switching source changes every cut, and so needs the
-                // full re-carve rather than just a re-render.
-                ['tool-diameter', 'tool-corner-radius', 'tool-wall-angle', 'tool-tip-diameter'].forEach(id => {
-                    el(id).addEventListener('input', handlers.onToolChanged);
-                });
-                el('tool-type').addEventListener('change', handlers.onToolChanged);
-                el('use-file-tools').addEventListener('change', handlers.onToolSourceChanged);
+                // The tools themselves live in the dialog; the sidebar owns only the button
+                // that opens it, and hands the click straight on.
+                el('btn-manage-tools').addEventListener('click', handlers.onManageTools);
 
                 el('stock-color-mode').addEventListener('change', handlers.onStockColorModeChanged);
 
@@ -4357,9 +4699,6 @@
 
             return {
                 init,
-                readManualTool,
-                updateManualFieldState,
-                updateToolFieldVisibility,
 
                 colorMode() { return el('color-mode').value; },
                 showToolpath() { return el('show-toolpath').checked; },
@@ -4418,27 +4757,249 @@
                     // would be a legend for something that is not on screen.
                     el('stock-color-mode').value = 'off';
                     el('stock-color-mode').disabled = true;
-                    // "Use tool geometry from G-code file" stays live: it also decides which
-                    // cutter the playback marker wears, which is worth having without a block.
+                    // Manage Tools is missing from this list on purpose, even though it sits
+                    // in the panel being switched off: the tool table also decides which
+                    // cutter the playback marker wears, and that still works with no block.
                     ['stock-margin', 'stock-top', 'stock-bottom', 'btn-stock-fit']
                         .forEach(id => { el(id).disabled = true; });
                     el('stock-hint').innerText = message;
                     el('stock-hint').style.display = 'block';
                 },
 
-                useFileTools() { return el('use-file-tools').checked; },
-
-                // A file's tool table decides both whether the checkbox is available and
-                // whether it starts on: with geometry in the header, the file is the better
-                // source, and the manual fields go inert behind it.
+                // The subtitle under the Manage Tools button. It is the only thing that says
+                // where the dialog's numbers came from -- with a header the rows arrive
+                // filled in, without one they all start at None and have to be set by hand.
                 setFileToolCount(count) {
-                    const has = count > 0;
-                    el('use-file-tools').disabled = !has;
-                    el('use-file-tools').checked = has;
-                    el('file-tools-hint').innerText = has
+                    el('file-tools-hint').innerText = count > 0
                         ? `${count} tool${count === 1 ? '' : 's'} read from the file header.`
                         : 'This file has no tool geometry in its header.';
-                    updateManualFieldState();
+                }
+            };
+        })();
+
+        // --- ToolDialog --------------------------------------------------------------
+        // The Manage Tools modal: one row per entry in ToolTable, a type dropdown, and the
+        // geometry fields that type needs. It owns nothing outside the dialog -- the button
+        // that opens it sits in the sidebar and belongs to Sidebar, which is why App wires
+        // the two together rather than either reaching for the other's DOM.
+        //
+        // Opened with showModal(), so the page behind it goes inert: OrbitControls is bound
+        // to the canvas and simply never sees a press that starts in here, and Esc and focus
+        // trapping come free. This file has no keyboard handling of its own and still needs
+        // none.
+        const ToolDialog = (() => {
+            const { el } = Util;
+
+            const dialogEl = el('tool-dialog');
+            const gridEl = el('tool-grid');
+
+            const TYPE_LABELS = {
+                none: 'None',
+                flat: 'Flat End Mill',
+                ball: 'Ball Nose',
+                bull: 'Bull Nose',
+                chamfer: 'Chamfer / V-Bit',
+                drill: 'Drill',
+                spot: 'Spot Drill',
+                countersink: 'Countersink'
+            };
+
+            // Which cells a type uses. Everything a type does not use stays in the row and is
+            // hidden rather than removed -- see the .tool-cell.off rule -- so the columns
+            // hold still and a number survives being switched away from and back.
+            const FIELDS_FOR = {
+                none: {},
+                flat: { diameter: 1 },
+                ball: { diameter: 1 },
+                bull: { diameter: 1, cornerRadius: 1 },
+                chamfer: { diameter: 1, angle: 1, tipDiameter: 1 },
+                drill: { diameter: 1, angle: 1, tipDiameter: 1 },
+                spot: { diameter: 1, angle: 1, tipDiameter: 1 },
+                countersink: { diameter: 1, angle: 1, tipDiameter: 1 }
+            };
+
+            // Which convention a row's angle is in. Stated per row beside the number rather
+            // than once in the column header, because the header cannot say both and the
+            // difference between 118 and 59 is not something to leave to a tooltip.
+            const ANGLE_CONVENTION = {
+                chamfer: { tag: 'axis', title: 'Wall Angle from Axis' },
+                drill: { tag: 'incl', title: 'Point Angle (included)' },
+                spot: { tag: 'incl', title: 'Point Angle (included)' },
+                countersink: { tag: 'incl', title: 'Point Angle (included)' }
+            };
+
+            let handlers = { onChanged: () => {} };
+
+            function cell(child, className) {
+                const div = document.createElement('div');
+                div.className = className ? `tool-cell ${className}` : 'tool-cell';
+                div.appendChild(child);
+                return div;
+            }
+
+            // Blank means "not stated", which is why an unparseable value goes back as NaN
+            // rather than 0: ToolTable turns NaN into either no tool at all or the family's
+            // own default, and both of those are better answers than a zero.
+            function numberInput(row, field, step, min) {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = step;
+                input.min = min;
+
+                const value = row.spec[field];
+                input.value = isFinite(value) ? String(+value.toFixed(4)) : '';
+
+                input.addEventListener('input', () => {
+                    const parsed = parseFloat(input.value);
+                    ToolTable.update(row.key, { [field]: isNaN(parsed) ? NaN : parsed });
+                    handlers.onChanged();
+                });
+                return input;
+            }
+
+            function buildRow(row) {
+                const rowEl = document.createElement('div');
+                rowEl.className = 'tool-row';
+
+                const label = document.createElement('div');
+                label.className = 'tool-num';
+                label.appendChild(document.createTextNode(row.label));
+                const note = document.createElement('span');
+                note.className = 'tool-note';
+                label.appendChild(note);
+
+                const select = document.createElement('select');
+                ToolTable.FAMILIES.forEach(family => {
+                    const option = document.createElement('option');
+                    option.value = family;
+                    option.textContent = TYPE_LABELS[family];
+                    select.appendChild(option);
+                });
+                select.value = row.spec.family;
+
+                const diameter = numberInput(row, 'diameter', '0.1', '0.01');
+                const corner = numberInput(row, 'cornerRadius', '0.1', '0');
+                const angle = numberInput(row, 'angle', '1', '1');
+                const tip = numberInput(row, 'tipDiameter', '0.1', '0');
+
+                const diameterCell = cell(diameter);
+                const cornerCell = cell(corner);
+                const tipCell = cell(tip);
+
+                const tag = document.createElement('span');
+                tag.className = 'angle-tag';
+                const angleCell = cell(angle, 'angle-cell');
+                angleCell.appendChild(tag);
+
+                // Everything that depends on the chosen type, in one place, so the dropdown's
+                // handler and the first render cannot drift apart.
+                function applyType() {
+                    const family = row.spec.family;
+                    const fields = FIELDS_FOR[family] || {};
+                    diameterCell.classList.toggle('off', !fields.diameter);
+                    cornerCell.classList.toggle('off', !fields.cornerRadius);
+                    angleCell.classList.toggle('off', !fields.angle);
+                    tipCell.classList.toggle('off', !fields.tipDiameter);
+
+                    const convention = ANGLE_CONVENTION[family];
+                    tag.innerText = convention ? convention.tag : '';
+                    angle.title = convention ? convention.title : '';
+                    angle.setAttribute('aria-label', angle.title);
+
+                    // What the file called this tool, shown only while that disagrees with the
+                    // dropdown -- either because the shape is one the carve cannot model (a
+                    // header "M6 tap" is cut as a plain cylinder, and so lands on Flat End
+                    // Mill) or because the row has been overridden by hand. Both are worth
+                    // saying; repeating "flat end mill" beside a row that already reads Flat
+                    // End Mill is not.
+                    const text = row.spec.fileText;
+                    note.innerText = text && ToolGeometry.family(text) !== family
+                        ? `file: ${text}` : '';
+                }
+
+                select.addEventListener('change', () => {
+                    ToolTable.update(row.key, { family: select.value });
+                    applyType();
+                    handlers.onChanged();
+                });
+
+                applyType();
+
+                rowEl.appendChild(label);
+                rowEl.appendChild(cell(select, 'tool-type-cell'));
+                rowEl.appendChild(diameterCell);
+                rowEl.appendChild(cornerCell);
+                rowEl.appendChild(angleCell);
+                rowEl.appendChild(tipCell);
+                return rowEl;
+            }
+
+            function headCell(text) {
+                const div = document.createElement('div');
+                div.className = 'tool-head';
+                div.innerText = text;
+                return div;
+            }
+
+            function buildHead() {
+                const rowEl = document.createElement('div');
+                rowEl.className = 'tool-row';
+
+                // The one column whose meaning changes from row to row, so the two
+                // conventions are explained here once and each row tags its own.
+                const angleHead = document.createElement('div');
+                angleHead.className = 'tool-head label-row';
+                angleHead.appendChild(document.createTextNode('Angle'));
+                const help = document.createElement('span');
+                help.className = 'help';
+                help.tabIndex = 0;
+                help.appendChild(document.createTextNode('?'));
+                const bubble = document.createElement('span');
+                bubble.className = 'help-bubble';
+                bubble.innerText = 'A drill, spot drill or countersink is measured as an '
+                    + 'included point angle — a twist drill is usually 118. A chamfer '
+                    + 'mill is measured from the tool axis, where 45 cuts a 45° chamfer. '
+                    + 'Each row is tagged with the one it is using.';
+                help.appendChild(bubble);
+                angleHead.appendChild(help);
+
+                rowEl.appendChild(headCell('Tool'));
+                rowEl.appendChild(headCell('Type'));
+                rowEl.appendChild(headCell('Diameter'));
+                rowEl.appendChild(headCell('Corner R'));
+                rowEl.appendChild(angleHead);
+                rowEl.appendChild(headCell('Tip Ø'));
+                return rowEl;
+            }
+
+            // Rebuilt on open rather than held in step with the table, because the only thing
+            // that changes the rows is loading a file, and a file cannot be loaded while the
+            // dialog has the page inert.
+            function render() {
+                gridEl.replaceChildren();
+
+                const rows = ToolTable.rows();
+                if (rows.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'tool-empty';
+                    empty.innerText = 'Open a g-code file to set up its tools.';
+                    gridEl.appendChild(empty);
+                    return;
+                }
+
+                gridEl.appendChild(buildHead());
+                rows.forEach(row => gridEl.appendChild(buildRow(row)));
+            }
+
+            return {
+                init(h) {
+                    handlers = h;
+                    el('tool-dialog-close').addEventListener('click', () => dialogEl.close());
+                },
+
+                open() {
+                    render();
+                    dialogEl.showModal();
                 }
             };
         })();
@@ -4604,7 +5165,7 @@
 
                 if (mode === 'tool') {
                     Program.toolColorIndex.forEach((slot, num) => {
-                        const tool = Program.fileTools.get(num);
+                        const tool = ToolTable.toolFor(num);
                         rows.push([Palette.slot(slot), tool ? ToolGeometry.describe(tool) : `T${num}`]);
                     });
                     // Anything the stock draws must be accounted for here, or an unexplained
@@ -4613,12 +5174,18 @@
                     if (Program.operations.some(op => op.toolNum == null)) {
                         rows.push([Palette.UNASSIGNED, 'No tool specified']);
                     }
-                    // ...and a line for any declared tool that never cuts, so its absence
-                    // from the model is stated rather than mysterious.
-                    Program.fileTools.forEach((tool, num) => {
-                        if (!Program.toolColorIndex.has(num)) {
-                            rows.push([null, `${ToolGeometry.describe(tool)} (no cutting moves)`]);
-                        }
+                    // ...and a line for any tool number that never cuts, so its absence from
+                    // the model is stated rather than mysterious.
+                    //
+                    // The table's own name is used for a row set to None, because describe()
+                    // has nothing to describe there and would render "— (no cutting moves)".
+                    // The unnumbered row is skipped outright: it is not a tool number, and
+                    // when it applies at all it already has its line just above.
+                    ToolTable.rows().forEach(row => {
+                        if (row.key === null || Program.toolColorIndex.has(row.key)) return;
+                        const tool = ToolTable.toolFor(row.key);
+                        const name = tool ? ToolGeometry.describe(tool) : row.label;
+                        rows.push([null, `${name} (no cutting moves)`]);
                     });
                     if (rows.length === 0) {
                         return '<div class="legend"><div class="legend-item"><span>No tool changes in this file.</span></div></div>';
@@ -4930,15 +5497,10 @@
                 Viewer.frameBounds(b);
             }
 
+            // There is a block on screen and nothing in the tool table can take anything off
+            // it. Every other combination is either working or deliberate.
             function updateStockHint() {
-                // In file mode the sidebar diameter is irrelevant, so nagging for one is a lie.
-                const needsManualTool = !Sidebar.useFileTools() || Program.fileTools.size === 0;
-                Sidebar.showStockHint(Sidebar.stockEnabled() && needsManualTool && !ToolSource.manual);
-            }
-
-            function syncToolSource() {
-                ToolSource.useFile = Sidebar.useFileTools();
-                ToolSource.manual = Sidebar.readManualTool();
+                Sidebar.showStockHint(Sidebar.stockEnabled() && !ToolTable.anyCuts());
             }
 
             function rebuildStock() {
@@ -4995,7 +5557,7 @@
                 const posZ = seg.start[2] + t * (seg.end[2] - seg.start[2]);
 
                 // Swap the displayed cutter when the program changes tool.
-                const segTool = ToolSource.forSegment(seg);
+                const segTool = ToolTable.forSegment(seg);
                 Cutter.showTool(segTool);
                 Cutter.tint(segTool, Sidebar.stockColorMode());
                 Cutter.moveTo(posX, posY, posZ);
@@ -5021,7 +5583,7 @@
 
                 // Nothing to follow, but the fallback sphere is sized from the bounds, so it
                 // still needs rebuilding after a load.
-                Cutter.showTool(ToolSource.manual);
+                Cutter.showTool(null);
                 Cutter.tint(null, Sidebar.stockColorMode());
                 Cutter.hide();
                 Timeline.showProgress(0);
@@ -5030,14 +5592,14 @@
                 refreshToolpathVisibility();
             }
 
-            // Any change to the tool -- a field, or which source it comes from -- changes
-            // the shape of the cut.
+            // Any change to a tool changes the shape of the cut -- and, now that the tool
+            // table is what the legends name their swatches after, what the legends say as
+            // well. The no-argument form of each keeps whichever colour mode is selected.
             function onToolChanged() {
-                syncToolSource();
-                Sidebar.updateToolFieldVisibility();
-                Sidebar.updateManualFieldState();
-                Cutter.showTool(ToolSource.at(Simulation.distance));
+                Cutter.showTool(ToolTable.at(Simulation.distance));
                 updateStockHint();
+                Legends.updateToolpath();
+                Legends.updateStock();
 
                 // The cut depends on the tool, so re-cut the stock from scratch. The grid
                 // itself is sized from the cutting extent and the margin alone, neither of
@@ -5060,15 +5622,15 @@
                     FileInfo.showProgram();
                     GCodeOverlay.reset();
                     // The tool mesh is deliberately not rebuilt here: which tool applies
-                    // depends on the tool source, which is settled just below. Invalidating
-                    // instead forces the first seek() to build it, by which time the source
+                    // depends on the tool table, which is settled just below. Invalidating
+                    // instead forces the first seek() to build it, by which time the table
                     // is known.
                     Cutter.invalidate();
 
-                    // The tool source must settle before the first carve, or the initial cut
+                    // The tool table must settle before the first carve, or the initial cut
                     // runs against the wrong geometry and pays a full re-cut to correct itself.
                     Sidebar.setFileToolCount(Program.fileTools.size);
-                    syncToolSource();
+                    ToolTable.rebuild();
 
                     // Before anything can place the highlight: the longest command in this
                     // file decides how many instances it has to be able to draw.
@@ -5129,12 +5691,7 @@
                     },
 
                     onToolpathVisibilityChanged: refreshToolpathVisibility,
-                    onToolChanged: onToolChanged,
-
-                    onToolSourceChanged: () => {
-                        onToolChanged();
-                        Legends.updateStock();
-                    },
+                    onManageTools: ToolDialog.open,
 
                     onStockColorModeChanged: () => {
                         Stock.setColorMode(Sidebar.stockColorMode());
@@ -5155,6 +5712,10 @@
 
                     onLayoutChanged: Viewer.resize
                 });
+
+                // Every row of the dialog, and every field in a row, means the same thing to
+                // the rest of the viewer: the shape of the cut has changed.
+                ToolDialog.init({ onChanged: onToolChanged });
 
                 Playback.init({
                     onToggle: () => {
@@ -5192,10 +5753,10 @@
 
                 Stock.setColorMode(Sidebar.stockColorMode());
 
-                // Initialise the legends and the tool state (which hides the fields the
-                // default flat end mill doesn't use). This runs with no file loaded and no
-                // tool, so everything downstream has to tolerate a null tool and an empty
-                // tool table.
+                // Both legends are given their mode explicitly here, which is what onToolChanged's
+                // no-argument repaints below then remember. This runs with no file loaded, so
+                // everything downstream has to tolerate a null tool and an empty tool table --
+                // which is also exactly the state a row set to None leaves behind later.
                 Legends.updateToolpath(Sidebar.colorMode());
                 Legends.updateStock(Sidebar.stockColorMode());
                 onToolChanged();
