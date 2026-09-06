@@ -917,6 +917,24 @@
             <div id="relief-warning" class="hint" hidden></div>
         </div>
 
+        <!-- Save / Load -->
+        <div class="panel">
+            <div class="panel-title panel-title-row">
+                <span>Save / Load</span>
+            </div>
+            <div class="btn-row">
+                <button id="btn-save-settings" class="btn btn-secondary" type="button">Save</button>
+                <div class="file-input-wrapper">
+                    <label for="settings-file" class="btn btn-secondary">Load</label>
+                    <input type="file" id="settings-file" accept=".json,application/json">
+                </div>
+            </div>
+            <div class="hint hint-muted">Saves every layer with its pattern and cutter, the
+                containment and dial settings, and the outline itself &mdash; so the file opens
+                back to exactly this.</div>
+            <div id="settings-status" class="hint" hidden></div>
+        </div>
+
         <!-- Export -->
         <div class="panel">
             <div class="panel-title panel-title-row">
@@ -965,7 +983,7 @@
             </div>
             <div id="busy" hidden>Generating pattern&hellip;</div>
         </div>
-        <div id="drop-hint" hidden>Drop a .dxf dial outline</div>
+        <div id="drop-hint" hidden>Drop a .dxf outline, or a saved .json</div>
     </div>
 
     <script>
@@ -994,6 +1012,7 @@
              Layers        the pattern layer stack: the document being edited
              Sidebar       the left-hand controls: values in, states out
              ViewToggles   the "what is drawn" panel floated over the 3D view
+             Preset        the saved design, to and from JSON
              Exporter      SVG / DXF / G-code writers
              App           the wiring: what happens when, and in what order
 
@@ -3659,11 +3678,29 @@
                 return bag;
             }
 
+            // The whole stack, swapped for one that came out of a file. `list` is handed
+            // out by reference and held by Sidebar and App, so it is emptied and refilled
+            // rather than replaced. Ids are reassigned by position: the ones in the file
+            // were only ever meaningful inside the session that wrote them, which is also
+            // why the selection is saved as an index.
+            function replace(incoming, selectedIndex) {
+                list.length = 0;
+                nextId = 1;
+                for (const layer of incoming) {
+                    layer.id = nextId++;
+                    list.push(layer);
+                }
+                selectedId = list.length
+                    ? (list[selectedIndex] || list[0]).id
+                    : null;
+            }
+
             return {
                 list,
-                create, duplicate, remove, selected, ensureValues,
+                create, duplicate, remove, selected, ensureValues, replace,
                 select(id) { selectedId = id; },
-                get selectedId() { return selectedId; }
+                get selectedId() { return selectedId; },
+                indexOfSelected() { return list.findIndex(l => l.id === selectedId); }
             };
         })();
 
@@ -3708,6 +3745,37 @@
                         plunge: readNumber('gc-plunge', 80)
                     }
                 };
+            }
+
+            // Values coming back in from a saved file. Every one is checked before it is
+            // written, and a value that fails leaves the field as it was: a settings file
+            // is text the user can edit, so nothing in it may be trusted to be a number,
+            // or to name an option that still exists.
+            function applySettings(saved) {
+                if (!saved || typeof saved !== 'object') return;
+
+                const setNumber = (id, value) => {
+                    if (Number.isFinite(value)) el(id).value = value;
+                };
+                const setChoice = (id, value) => {
+                    const field = el(id);
+                    if (typeof value !== 'string') return;
+                    if (!Array.from(field.options).some(o => o.value === value)) return;
+                    field.value = value;
+                };
+
+                setChoice('dxf-units', saved.units);
+                setNumber('join-tol', saved.joinTolerance);
+                setNumber('edge-margin', saved.margin);
+                setNumber('dial-thickness', saved.thickness);
+                setChoice('dial-material', saved.material);
+
+                const gcode = saved.gcode;
+                if (gcode && typeof gcode === 'object') {
+                    setNumber('gc-safe', gcode.safeZ);
+                    setNumber('gc-feed', gcode.feed);
+                    setNumber('gc-plunge', gcode.plunge);
+                }
             }
 
             // --- Layer list ----------------------------------------------------------
@@ -4003,13 +4071,21 @@
                 hint.textContent = text || '';
             }
 
+            function setSettingsStatus(text, bad) {
+                const status = el('settings-status');
+                status.hidden = !text;
+                status.textContent = text || '';
+                status.className = bad ? 'hint hint-bad' : 'hint hint-muted';
+            }
+
             function setBusy(on) {
                 el('busy').hidden = !on;
             }
 
             return {
-                hooks, settings, refresh,
-                setDialInfo, setStats, setReliefWarning, setMarginHint, setBusy
+                hooks, settings, applySettings, refresh,
+                setDialInfo, setStats, setReliefWarning, setMarginHint,
+                setSettingsStatus, setBusy
             };
         })();
 
@@ -4048,6 +4124,125 @@
 
             return { hooks, state };
         })();
+        // --- Preset ------------------------------------------------------------------
+        // The saved design, to and from JSON. Pure data in, pure data out: it reads no
+        // field and draws nothing, so App stays the only place that knows what to do with
+        // what comes back.
+        //
+        // Everything read from a file is checked before it is believed. Two reasons, and
+        // the second is the one that matters: a settings file is text a person can open
+        // and edit, and a file written by an older build will be missing whatever has been
+        // added since. Rather than fail on either, every value is either good or replaced
+        // by the default for its slot -- so an old file opens, gains the new settings at
+        // their defaults, and saves back complete.
+        const Preset = (() => {
+            const FORMAT = 'guilloche-dial';
+            const VERSION = 1;
+
+            function finite(value, fallback) {
+                return Number.isFinite(value) ? value : fallback;
+            }
+
+            // A parameter bag, checked against the schema of the pattern it belongs to.
+            // Anything the schema does not name is dropped; anything it names and the file
+            // got wrong falls back to that parameter's default.
+            function readValues(type, raw) {
+                const out = Patterns.defaults(type);
+                if (!raw || typeof raw !== 'object') return out;
+                for (const param of Patterns.get(type).params) {
+                    const value = raw[param.k];
+                    if (param.type === 'check') {
+                        if (typeof value === 'boolean') out[param.k] = value;
+                    } else if (param.type === 'select') {
+                        if (param.options.some(option => option[0] === value)) out[param.k] = value;
+                    } else if (Number.isFinite(value)) {
+                        out[param.k] = value;
+                    }
+                }
+                return out;
+            }
+
+            function readLayer(raw, index) {
+                if (!raw || typeof raw !== 'object') return null;
+                // A pattern this build does not have is the one thing that cannot be
+                // defaulted: there would be nothing to draw. The layer is dropped and the
+                // count in the status line says so.
+                if (!Patterns.ORDER.includes(raw.type)) return null;
+
+                const layer = {
+                    id: 0,                       // Layers.replace assigns these
+                    type: raw.type,
+                    name: typeof raw.name === 'string' && raw.name.trim()
+                        ? raw.name.trim().slice(0, 80)
+                        : Patterns.get(raw.type).label,
+                    enabled: raw.enabled !== false,
+                    color: /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : Palette.layerColor(index),
+                    cutter: raw.cutter === 'ball' ? 'ball' : 'vee',
+                    depth: Math.max(finite(raw.depth, 0.12), 0),
+                    angle: Util.clamp(finite(raw.angle, 90), 1, 179),
+                    radius: Math.max(finite(raw.radius, 0.15), 0.005),
+                    cx: finite(raw.cx, 0),
+                    cy: finite(raw.cy, 0),
+                    rot: finite(raw.rot, 0),
+                    rMin: Math.max(finite(raw.rMin, 0), 0),
+                    rMax: Math.max(finite(raw.rMax, 0), 0),
+                    values: {}
+                };
+
+                // Every pattern the layer has been set to keeps its own bag of values, and
+                // they all travel: switching a restored layer to a pattern it wore earlier
+                // finds it as it was left, exactly as it would have in the saving session.
+                const bags = (raw.values && typeof raw.values === 'object') ? raw.values : {};
+                for (const type of Object.keys(bags)) {
+                    if (Patterns.ORDER.includes(type)) layer.values[type] = readValues(type, bags[type]);
+                }
+                if (!layer.values[layer.type]) layer.values[layer.type] = Patterns.defaults(layer.type);
+                return layer;
+            }
+
+            // `dial` is whatever App knows about where the outline came from; `settings` is
+            // Sidebar's own reading of its fields. Neither is interpreted here.
+            function write(dial, settings, layers, selectedIndex) {
+                return JSON.stringify({
+                    format: FORMAT,
+                    version: VERSION,
+                    saved: new Date().toISOString(),
+                    dial,
+                    settings,
+                    selectedIndex,
+                    layers
+                }, null, 2);
+            }
+
+            function read(text) {
+                let doc;
+                try {
+                    doc = JSON.parse(text);
+                } catch (err) {
+                    throw new Error('That file is not readable JSON.');
+                }
+                if (!doc || typeof doc !== 'object' || doc.format !== FORMAT) {
+                    throw new Error('That is not a saved guilloché file.');
+                }
+                if (Number(doc.version) > VERSION) {
+                    throw new Error('That file was written by a newer version of this tool.');
+                }
+
+                const rawLayers = Array.isArray(doc.layers) ? doc.layers : [];
+                const layers = rawLayers.map(readLayer).filter(Boolean);
+
+                return {
+                    dial: (doc.dial && typeof doc.dial === 'object') ? doc.dial : null,
+                    settings: (doc.settings && typeof doc.settings === 'object') ? doc.settings : null,
+                    layers,
+                    dropped: rawLayers.length - layers.length,
+                    selectedIndex: Number.isInteger(doc.selectedIndex) ? doc.selectedIndex : 0
+                };
+            }
+
+            return { write, read };
+        })();
+
         // --- Exporter ----------------------------------------------------------------
         // The generated pattern, written out three ways. All three re-origin the drawing on
         // the dial's centre: the incoming DXF may have been drawn anywhere on a sheet, and
@@ -4190,6 +4385,11 @@
             let sourcePaths = [];        // as parsed, in file units
             let sourceUnits = null;      // what the file said, or null
             let sourceName = '—';
+            // Where the outline came from, kept so it can travel inside a saved design.
+            // The DXF's own text rather than the paths parsed out of it: it is usually the
+            // smaller of the two, and it comes back through the same parser, so a saved
+            // file cannot drift from what loading the drawing directly would have given.
+            let dialOrigin = { kind: 'sample' };
             let boundary = null;
             let openChains = [];
             let results = [];
@@ -4302,10 +4502,11 @@
                 scheduleRegenerate();
             }
 
-            function loadPaths(paths, units, name, frameView) {
+            function loadPaths(paths, units, name, frameView, origin) {
                 sourcePaths = paths;
                 sourceUnits = units;
                 sourceName = name;
+                dialOrigin = origin;
                 rebuildBoundary();
                 if (frameView && boundary) Viewer.frame(boundary);
                 scheduleRegenerate();
@@ -4315,9 +4516,10 @@
                 const reader = new FileReader();
                 reader.onload = () => {
                     try {
-                        const parsed = DxfParser.parse(String(reader.result));
+                        const text = String(reader.result);
+                        const parsed = DxfParser.parse(text);
                         if (!parsed.paths.length) throw new Error('No 2D geometry found in this DXF.');
-                        loadPaths(parsed.paths, parsed.units, file.name, true);
+                        loadPaths(parsed.paths, parsed.units, file.name, true, { kind: 'dxf', text });
                     } catch (err) {
                         Sidebar.setDialInfo({
                             name: file.name, size: '—', loops: 0,
@@ -4507,6 +4709,66 @@
                 PatternView.setReliefVisible(showCut);
             }
 
+            // --- Save and load -------------------------------------------------------
+            function saveSettings() {
+                const settings = Sidebar.settings();
+                const text = Preset.write(
+                    { ...dialOrigin, name: sourceName, units: sourceUnits },
+                    {
+                        units: settings.units,
+                        joinTolerance: settings.joinTolerance,
+                        margin: settings.margin,
+                        thickness: settings.thickness,
+                        material: settings.material,
+                        gcode: settings.gcode
+                    },
+                    Layers.list,
+                    Layers.indexOfSelected()
+                );
+                const base = sourceName.replace(/\.[^.]+$/, '') || 'dial';
+                Util.download(`${base}-guilloche.json`, text, 'application/json');
+                Sidebar.setSettingsStatus(`Saved ${Layers.list.length} layer${Layers.list.length === 1 ? '' : 's'}.`, false);
+            }
+
+            function applyPreset(doc, fallbackName) {
+                // Order matters. The units and the join tolerance decide how the outline is
+                // read, so they have to be in their fields before the dial is rebuilt from
+                // it -- rebuildBoundary reads them back out of the sidebar.
+                Sidebar.applySettings(doc.settings);
+                Layers.replace(doc.layers, doc.selectedIndex);
+                Sidebar.refresh();
+
+                const dial = doc.dial || {};
+                if (dial.kind === 'dxf' && typeof dial.text === 'string') {
+                    const parsed = DxfParser.parse(dial.text);
+                    loadPaths(parsed.paths, parsed.units, dial.name || fallbackName, true,
+                        { kind: 'dxf', text: dial.text });
+                } else {
+                    loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true, { kind: 'sample' });
+                }
+
+                const dropped = doc.dropped
+                    ? ` ${doc.dropped} layer${doc.dropped === 1 ? '' : 's'} skipped: unknown pattern.`
+                    : '';
+                Sidebar.setSettingsStatus(
+                    `Loaded ${doc.layers.length} layer${doc.layers.length === 1 ? '' : 's'}.${dropped}`,
+                    Boolean(doc.dropped)
+                );
+            }
+
+            function loadSettingsFile(file) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        applyPreset(Preset.read(String(reader.result)), file.name);
+                    } catch (err) {
+                        Sidebar.setSettingsStatus(err.message, true);
+                    }
+                };
+                reader.onerror = () => Sidebar.setSettingsStatus('The file could not be read.', true);
+                reader.readAsText(file);
+            }
+
             // --- Export --------------------------------------------------------------
             function exportAs(kind) {
                 if (!boundary) return;
@@ -4535,7 +4797,15 @@
             });
 
             Util.el('btn-sample').addEventListener('click', () => {
-                loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true);
+                loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true, { kind: 'sample' });
+            });
+
+            Util.el('btn-save-settings').addEventListener('click', saveSettings);
+
+            Util.el('settings-file').addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) loadSettingsFile(file);
+                e.target.value = '';
             });
 
             Util.el('btn-export-svg').addEventListener('click', () => exportAs('svg'));
@@ -4562,7 +4832,12 @@
                     depth = 0;
                     hint.hidden = true;
                     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-                    if (file) loadFile(file);
+                    if (!file) return;
+                    // Routed by extension: both kinds of file are dropped the same way, and
+                    // handing a saved design to the DXF parser would only report that it
+                    // holds no geometry.
+                    if (/\.json$/i.test(file.name)) loadSettingsFile(file);
+                    else loadFile(file);
                 });
             }
 
@@ -4585,7 +4860,7 @@
                 layer.values[layer.type].pitch = 0.42;
                 Sidebar.refresh();
 
-                loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true);
+                loadPaths(sampleDial(), 'mm', 'Sample dial (34 mm)', true, { kind: 'sample' });
                 animate();
             }
 
