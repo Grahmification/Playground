@@ -404,8 +404,10 @@
             gap: 8px;
             pointer-events: none;
             /* The expanded line list grows until it runs out of 3D view: the 12px inset at
-               the top, mirrored at the bottom. */
+               the top, mirrored at the bottom. Same rule across, since the stack is anchored
+               by its right edge and a panel too wide for the view would run off the left. */
             max-height: calc(100% - 24px);
+            max-width: calc(100% - 24px);
         }
 
         /* Mirror of #overlay-stack down the other side of the view. Its own stack rather
@@ -518,17 +520,22 @@
 
            Collapsed it shrinks to whatever the one line needs, capped so a long line wraps
            instead of running across the view. Expanded it takes the full width, since the
-           list underneath is sized by the file rather than by the current line. */
+           list underneath is sized by the file rather than by the current line.
+
+           380px is the width it wants; the 100% is what the stack can actually spare, which
+           is less than that on a phone. A flex item is not otherwise held to its container's
+           width, so without it the panel keeps the 380 and hangs off the left of the view. */
         #gcode-line {
             display: flex;
             flex-direction: column;
-            max-width: 380px;
+            max-width: min(380px, 100%);
             font-family: monospace;
             overflow: hidden;
         }
 
         #gcode-line.expanded {
             width: 380px;
+            max-width: 100%;
         }
 
         #gcode-line-head {
@@ -1055,6 +1062,18 @@
             body.sidebar-collapsed #legend-stack {
                 top: 56px;
                 max-height: calc(100% - 68px);
+            }
+
+            /* The panel is only a phone wide here, so the ellipsis the wide layout uses
+               would swallow most of a line. Wrapping instead costs rows off the bottom of
+               the list, which is the cheaper thing to lose. The number keeps its own
+               column, so the continuation lines hang under the text they belong to. */
+            #gcode-lookahead div {
+                white-space: pre-wrap;
+            }
+
+            #gcode-lookahead .la-text {
+                overflow-wrap: anywhere;
             }
 
             /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
