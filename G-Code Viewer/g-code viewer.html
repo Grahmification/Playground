@@ -874,6 +874,29 @@
             color: #808080;
         }
 
+        /* The chosen shape, drawn beside the dropdown that names it: a row reads as a
+           silhouette faster than as a word. */
+        #tool-grid .tool-type-cell {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        #tool-grid .tool-type-cell select {
+            min-width: 0;
+        }
+
+        .tool-icon {
+            flex: 0 0 auto;
+            display: block;
+            color: #c8a978;
+        }
+
+        /* Unfilled and dimmed by applyType: the outline of a tool that is not there. */
+        .tool-icon.is-none {
+            color: #6a6a6a;
+        }
+
         /* A grid item will not shrink below its own min-content, and a number input's is
            the browser's default field width -- around twice these tracks. Without this the
            fixed columns are the only thing holding still and the inputs spill straight out
@@ -4829,6 +4852,22 @@
                 countersink: { diameter: 1, angle: 1, tipDiameter: 1 }
             };
 
+            // The eight shapes as 14x18 silhouettes, lifted from tool-library-viewer.html --
+            // the same tools drawn from the same paths. `none` borrows the flat outline and
+            // is drawn unfilled instead.
+            const ICON_PATHS = {
+                none:        'M4 1 H10 V17 H4 Z',
+                flat:        'M4 1 H10 V17 H4 Z',
+                ball:        'M4 1 H10 V12 A3 3 0 0 1 4 12 Z',
+                bull:        'M4 1 H10 V14 Q10 17 7.8 17 H6.2 Q4 17 4 14 Z',
+                chamfer:     'M4 1 H10 V11 L7 17 L4 11 Z',
+                drill:       'M4 1 H10 V10 L7 17 L4 10 Z',
+                spot:        'M4 1 H10 V13 L7 17 L4 13 Z',
+                countersink: 'M4 1 H10 V12 L7 17 L4 12 Z'
+            };
+
+            const SVG_NS = 'http://www.w3.org/2000/svg';
+
             // Which convention a row's angle is in. Stated per row beside the number rather
             // than once in the column header, because the header cannot say both and the
             // difference between 118 and 59 is not something to leave to a tooltip.
@@ -4846,6 +4885,24 @@
                 div.className = className ? `tool-cell ${className}` : 'tool-cell';
                 div.appendChild(child);
                 return div;
+            }
+
+            // An empty silhouette. applyType sets the shape; createElementNS is needed because
+            // an SVG element built with createElement is an unknown HTML tag and draws nothing.
+            function toolIcon() {
+                const svg = document.createElementNS(SVG_NS, 'svg');
+                svg.setAttribute('class', 'tool-icon');
+                svg.setAttribute('width', '14');
+                svg.setAttribute('height', '18');
+                svg.setAttribute('viewBox', '0 0 14 18');
+                svg.setAttribute('aria-hidden', 'true');
+
+                const path = document.createElementNS(SVG_NS, 'path');
+                path.setAttribute('stroke', 'currentColor');
+                path.setAttribute('stroke-width', '1');
+                path.setAttribute('stroke-linejoin', 'round');
+                svg.appendChild(path);
+                return svg;
             }
 
             // Blank means "not stated", which is why an unparseable value goes back as NaN
@@ -4888,6 +4945,11 @@
                 });
                 select.value = row.spec.family;
 
+                const icon = toolIcon();
+                const iconPath = icon.firstChild;
+                const typeCell = cell(icon, 'tool-type-cell');
+                typeCell.appendChild(select);
+
                 const diameter = numberInput(row, 'diameter', '0.1', '0.01');
                 const corner = numberInput(row, 'cornerRadius', '0.1', '0');
                 const angle = numberInput(row, 'angle', '1', '1');
@@ -4907,6 +4969,11 @@
                 function applyType() {
                     const family = row.spec.family;
                     const fields = FIELDS_FOR[family] || {};
+
+                    iconPath.setAttribute('d', ICON_PATHS[family] || ICON_PATHS.flat);
+                    iconPath.setAttribute('fill', family === 'none' ? 'none' : 'currentColor');
+                    icon.classList.toggle('is-none', family === 'none');
+
                     diameterCell.classList.toggle('off', !fields.diameter);
                     cornerCell.classList.toggle('off', !fields.cornerRadius);
                     angleCell.classList.toggle('off', !fields.angle);
@@ -4937,7 +5004,7 @@
                 applyType();
 
                 rowEl.appendChild(label);
-                rowEl.appendChild(cell(select, 'tool-type-cell'));
+                rowEl.appendChild(typeCell);
                 rowEl.appendChild(diameterCell);
                 rowEl.appendChild(cornerCell);
                 rowEl.appendChild(angleCell);
