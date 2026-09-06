@@ -56,8 +56,26 @@ arrow to see the lines coming up next.
 You can hide the lines, or show only the bit being cut right now.
 
 **Stock Simulation** — tick the box to show a block of material and cut it away as
-the program runs. You need a tool size for it to remove anything: either the file
-lists its tools (see below) or you type one in under Manual Tool.
+the program runs. Nothing is removed until the program's tools have shapes, which is
+what *Manage Tools…* just below the box is for.
+
+*Manage Tools…* opens a table with one row per tool number the program uses. Each row
+picks a type — none, flat, ball nose, bull nose, chamfer/V-bit, drill, spot drill or
+countersink — and the sizes that type needs. Rows are filled in from the file's header
+where it declares its tools, and start at *None* where it does not; a tool left at
+*None* removes no material and is drawn as a plain dot. A file that never states a `T`
+word gets a single row instead, covering the whole program.
+
+Angles are given the way the tool is normally specified, and each row says which:
+`incl` for a drill, spot drill or countersink, whose angle is the included point angle
+(a twist drill is usually 118); `axis` for a chamfer mill, measured from the tool axis,
+where 45 cuts a 45° chamfer.
+
+*Reset to File* throws away every edit and puts the table back to what the header
+declares — or to *None* throughout, for a file with no header.
+
+The button stays available with the rest of the panel folded away, and with the stock
+switched off entirely — the tool table also decides which cutter follows the playback.
 
 - *Stock Resolution* is how fine the block is sampled. Higher looks better and runs
   slower.
@@ -68,9 +86,6 @@ lists its tools (see below) or you type one in under Manual Tool.
 
 Red on the stock means a rapid (G0) cut material. That is almost always a mistake in
 the program.
-
-**Manual Tool** — the cutter to use when the file does not name one. Flat, ball, bull
-nose and chamfer/V-bit.
 
 **File Information** — file name, command count, feed range and the size of the job.
 
@@ -169,8 +184,10 @@ programs already write. The format is:
   *chamfer* / *taper*, *ball*, *bull* / *radius*, *drill*, *tap*, *thread*, *ream*,
   *bore*, *probe*, *mill*.
 
-Untick *Use tool geometry from G-code file* to ignore the header and use the Manual
-Tool instead.
+The header only sets the starting point. Every value it declares can be changed, and
+any tool it leaves out can be filled in, under *Manage Tools…*. Where a declared shape
+is one the simulation does not model — a tap or a reamer, say — the row is cut as a
+plain cylinder and keeps the file's own words beside it to say so.
 
 ### Optional: operation names
 
