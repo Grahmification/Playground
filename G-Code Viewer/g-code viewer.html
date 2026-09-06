@@ -785,14 +785,23 @@
             border-bottom: 1px solid #3c3c3c;
         }
 
+        /* The title takes the free space, so every control after it sits together right. */
         .dialog-head h2 {
+            margin-right: auto;
             font-size: 1rem;
             font-weight: 600;
             color: #ffffff;
         }
 
+        /* Sized to its text rather than the sidebar's full-width default: it shares a row. */
+        .dialog-head .btn {
+            display: inline-block;
+            width: auto;
+            padding: 5px 10px;
+            font-size: 0.8rem;
+        }
+
         .dialog-close {
-            margin-left: auto;
             flex: 0 0 auto;
             width: 26px;
             height: 26px;
@@ -1183,6 +1192,8 @@
     <dialog id="tool-dialog">
         <div class="dialog-head">
             <h2>Manage Tools</h2>
+            <button id="tool-dialog-reset" class="btn btn-secondary" type="button"
+                    title="Put every row back to what the file's header declares, or to None where it declares nothing">Reset to File</button>
             <button id="tool-dialog-close" class="dialog-close" type="button"
                     title="Close" aria-label="Close">&#10005;</button>
         </div>
@@ -4995,6 +5006,14 @@
                 init(h) {
                     handlers = h;
                     el('tool-dialog-close').addEventListener('click', () => dialogEl.close());
+
+                    // Reset is the load path run again, so it cannot drift from it. rebuild()
+                    // returns new row objects, hence the redraw.
+                    el('tool-dialog-reset').addEventListener('click', () => {
+                        ToolTable.rebuild();
+                        render();
+                        handlers.onChanged();
+                    });
                 },
 
                 open() {

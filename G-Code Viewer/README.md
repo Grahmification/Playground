@@ -71,6 +71,9 @@ Angles are given the way the tool is normally specified, and each row says which
 (a twist drill is usually 118); `axis` for a chamfer mill, measured from the tool axis,
 where 45 cuts a 45° chamfer.
 
+*Reset to File* throws away every edit and puts the table back to what the header
+declares — or to *None* throughout, for a file with no header.
+
 The button stays available with the rest of the panel folded away, and with the stock
 switched off entirely — the tool table also decides which cutter follows the playback.
 
