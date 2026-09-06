@@ -2609,6 +2609,9 @@
             }
 
             // --- Grid ----------------------------------------------------------------
+            // Parked at the level of whatever it is under, by setGridZ. The dial is built
+            // with its *face* at z = 0, since that is the datum every cut is measured from
+            // -- so a grid left at zero would cut through the body rather than lie under it.
             const gridHelper = new THREE.GridHelper(100, 50, Palette.GRID, Palette.GRID_FAINT);
             gridHelper.rotation.x = Math.PI / 2;   // into the XY plane, where the dial lies
             scene.add(gridHelper);
@@ -2658,7 +2661,8 @@
                 updateLights,
                 resize,
                 frame,
-                setGridVisible(on) { gridHelper.visible = on; }
+                setGridVisible(on) { gridHelper.visible = on; },
+                setGridZ(z) { gridHelper.position.z = z; }
             };
         })();
 
@@ -4236,12 +4240,18 @@
                 // matching one back.
                 cutMask = null;
                 DialMesh.build(boundary, openChains, settings.thickness, settings.material);
+                // Down to the back of the dial, so the grid reads as the surface the dial
+                // is lying on rather than a plane running through it.
+                Viewer.setGridZ(-settings.thickness);
                 applyDisplay();
             }
 
             function rebuildDial() {
                 const settings = Sidebar.settings();
                 DialMesh.build(boundary, openChains, settings.thickness, settings.material);
+                // Down to the back of the dial, so the grid reads as the surface the dial
+                // is lying on rather than a plane running through it.
+                Viewer.setGridZ(-settings.thickness);
                 applyDisplay();
                 // The relief wears the dial's finish, so a change of material has to go
                 // through the pattern as well.
