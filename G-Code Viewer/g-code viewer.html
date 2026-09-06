@@ -86,6 +86,44 @@
             color: #ffffff;
         }
 
+        /* The only part of the sidebar left on screen once it is collapsed, and likewise
+           shown only by the narrow-width rules. Floats over the 3D view, so it is opaque
+           enough to stay legible against whatever is drawn behind it. */
+        .sidebar-open {
+            display: none;
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 20;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            background-color: rgba(37, 37, 38, 0.92);
+            color: #e0e0e0;
+            font-size: 1.1rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .sidebar-open:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Dismisses the drawer, and darkens the view behind it so it reads as covered
+           rather than merely obscured. Same narrow-widths-only story. */
+        #sidebar-backdrop {
+            display: none;
+            position: absolute;
+            inset: 0;
+            z-index: 25;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
         .control-group {
             display: flex;
             flex-direction: column;
@@ -967,40 +1005,56 @@
             color: #aaaaaa;
         }
 
-        /* Narrow widths. A 320px sidebar is most of a phone screen, so it folds down to a
-           strip holding nothing but the button that brings it back. It stays in flow rather
-           than sliding over the view: #viewport is its flex sibling and simply takes the
-           width back, which an overlay would not give it. */
+        /* Narrow widths. A 320px sidebar is most of a phone screen, so it becomes a drawer
+           that slides over the 3D view and is dismissed by the backdrop behind it. Out of
+           flow, so #viewport keeps the whole screen in both states and the canvas never
+           resizes; collapsed, nothing of it is left on screen but #sidebar-open. */
         @media (max-width: 700px) {
+            /* The drawer and backdrop measure against this. Not `fixed`: that would
+               measure the layout viewport and run under the browser's toolbars. */
+            body {
+                position: relative;
+            }
+
             .sidebar-toggle {
                 display: flex;
             }
 
             #sidebar {
-                flex: 0 0 auto;
-                width: min(320px, 80vw);
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                z-index: 30;
+                width: min(320px, 85vw);
+                /* Reaches the bottom edge of the screen, so like the scrubber it has to
+                   clear a home indicator where there is one. */
+                padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+                box-shadow: 0 0 24px rgba(0, 0, 0, 0.5);
+                transition: transform 0.2s ease, visibility 0s;
             }
 
-            /* 8px padding either side of the 32px button, plus the 1px border the global
-               border-box sizing counts in here. */
+            /* visibility is what takes the fields out of the tab order once they are off
+               screen, held back until the slide finishes so it does not cut it short. */
             body.sidebar-collapsed #sidebar {
-                width: 49px;
-                padding: 8px;
-                gap: 0;
-                overflow: hidden;
+                transform: translateX(-100%);
+                visibility: hidden;
+                transition: transform 0.2s ease, visibility 0s linear 0.2s;
             }
 
-            body.sidebar-collapsed #sidebar > *:not(.sidebar-head) {
-                display: none;
+            body.sidebar-collapsed .sidebar-open {
+                display: flex;
             }
 
-            body.sidebar-collapsed .sidebar-head {
-                border-bottom: none;
-                padding-bottom: 0;
+            body:not(.sidebar-collapsed) #sidebar-backdrop {
+                display: block;
             }
 
-            body.sidebar-collapsed .sidebar-head h1 {
-                display: none;
+            /* Out from under the floating button, which takes the corner the legend
+               normally sits in. */
+            body.sidebar-collapsed #legend-stack {
+                top: 56px;
+                max-height: calc(100% - 68px);
             }
 
             /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
@@ -1052,6 +1106,12 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
+
+    <!-- Both are narrow widths only, where the sidebar is a drawer: the button that brings
+         it back, and the backdrop that sends it away. -->
+    <button id="sidebar-open" class="sidebar-open" type="button"
+            title="Show sidebar" aria-label="Show sidebar" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
+    <div id="sidebar-backdrop"></div>
 
     <div id="sidebar">
         <div class="sidebar-head">
@@ -4746,18 +4806,27 @@
                     collapseEl.title = detailsExpanded ? 'Hide stock settings' : 'Show stock settings';
                 });
 
-                // Narrow widths only: the whole panel folds down to the button that brings it
-                // back. #viewport is its flex sibling and simply takes the width, so the 3D
-                // view has to be told its size changed even though the window did not.
-                const toggleEl = el('sidebar-toggle');
+                // Narrow widths only, where the panel is a drawer over the 3D view. Three
+                // ways in and out of the same state, so they share one setter: the button
+                // in the drawer's head and the backdrop both close it, and only the
+                // floating button opens it. Each is visible in exactly one of the two
+                // states, so none of them needs a glyph that changes.
+                const closeEl = el('sidebar-toggle');
+                const openEl = el('sidebar-open');
 
-                toggleEl.addEventListener('click', () => {
-                    const collapsed = document.body.classList.toggle('sidebar-collapsed');
-                    toggleEl.setAttribute('aria-expanded', String(!collapsed));
-                    toggleEl.innerHTML = collapsed ? '&#9654;' : '&#9664;';
-                    toggleEl.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
-                    handlers.onLayoutChanged();
-                });
+                function setSidebar(collapsed) {
+                    document.body.classList.toggle('sidebar-collapsed', collapsed);
+                    closeEl.setAttribute('aria-expanded', String(!collapsed));
+                    openEl.setAttribute('aria-expanded', String(!collapsed));
+                    // Moving focus to whichever button the user is left with keeps the
+                    // keyboard where the pointer is, and off a control that just went
+                    // `visibility: hidden` underneath it.
+                    (collapsed ? openEl : closeEl).focus();
+                }
+
+                closeEl.addEventListener('click', () => setSidebar(true));
+                openEl.addEventListener('click', () => setSidebar(false));
+                el('sidebar-backdrop').addEventListener('click', () => setSidebar(true));
             }
 
             return {
@@ -5823,9 +5892,7 @@
                         if (!Program.isEmpty()) Sidebar.setStockExtents(Stock.suggestExtents());
                         Sidebar.resetMargin();
                         rebuildStock();
-                    },
-
-                    onLayoutChanged: Viewer.resize
+                    }
                 });
 
                 // Every row of the dialog, and every field in a row, means the same thing to
