@@ -820,6 +820,7 @@
                         to the edge.</span></span>
                 </div>
                 <input type="number" id="edge-margin" value="0.3" min="0" step="0.05">
+                <div id="margin-hint" class="hint" hidden></div>
             </div>
             <label class="check-row">
                 <input type="checkbox" id="show-outline" checked>
@@ -1869,7 +1870,11 @@
         // Every height is <= 0. The cut is in the metal, not on it.
         const Cutter = (() => {
             const DEG = Math.PI / 180;
-            const BALL_SEGMENTS = 12;
+            // Half-steps around the ball's arc. Every one of them becomes a facet running
+            // the whole length of every path, so this number is multiplied by the densest
+            // thing on the dial -- 8 already draws a smooth quarter-millimetre groove, and
+            // 16 would cost twice the geometry to say the same thing.
+            const BALL_SEGMENTS = 8;
 
             // Half the width of the groove the cut opens at the face.
             function halfWidth(spec) {
@@ -3053,6 +3058,12 @@
             const MASK_MAX_SIZE = 4096;
             const MASK_TEXELS_ACROSS = 6;   // across the narrowest cut on the dial
 
+            // Azimuth steps around the domed end of a cut, and around the disc the mask
+            // needs at the same place. Both are a fraction of a millimetre across, so a
+            // handful of steps is already past what the screen can show.
+            const CAP_SEGMENTS = 10;
+            const MASK_END_SEGMENTS = 10;
+
             const lineGroup = new THREE.Group();
             const reliefGroup = new THREE.Group();
             Viewer.add(lineGroup);
@@ -3114,13 +3125,26 @@
                 return { nx, ny };
             }
 
+            // The profile is symmetric about its own centre, so its right half -- the tip
+            // out to the rim -- is the tool's radius against depth. That half revolved is
+            // the domed end; these two say where it starts and how many rings it has.
+            function tipIndex(profileLength) {
+                return (profileLength - 1) >> 1;
+            }
+
+            function ringCount(profileLength) {
+                return profileLength - tipIndex(profileLength);
+            }
+
             // What one path costs in cut geometry: a quad strip for every facet of the
-            // profile, and a closing fan at each end.
+            // profile, and a dome at each end.
             function countVertices(polys, profileLength) {
+                const strip = (profileLength - 1) * 2;
+                const caps = 2 * ringCount(profileLength) * (CAP_SEGMENTS + 1);
                 let total = 0;
                 for (const pts of polys) {
                     const n = pts.length / 2;
-                    if (n >= 2) total += (profileLength - 1) * 2 * n + 2 * profileLength;
+                    if (n >= 2) total += strip * n + caps;
                 }
                 return total;
             }
@@ -3129,24 +3153,36 @@
             // vertices, so computeVertexNormals smooths along the length of a cut -- where
             // the surface really is smooth -- and leaves a hard crease across it, which is
             // what makes the two flanks read as separate planes under a moving highlight.
-            // On a ball-nosed cut that crease is spread over a dozen facets and the groove
+            // On a ball-nosed cut that crease is spread over sixteen facets and the groove
             // comes out round, which is the whole difference between the two cutters.
             //
-            // Both ends are capped. An open end is a hole into the inside of the dial, and
-            // the face above it is already punched out by the mask -- so a glancing look
-            // along a groove would otherwise see daylight through the middle of the dial.
+            // Both ends are domed. A cutter is a solid of revolution, so where it enters or
+            // leaves the work it leaves its own shape behind rather than a flat wall: half
+            // a cone for a chamfer mill, half a ball for a ball nose. Revolving the
+            // profile's right half through half a turn about the tool's axis is exactly
+            // that -- and it comes out meeting the strip's last cross-section vertex for
+            // vertex, because both are read from the same profile.
+            //
+            // Doming the ends also closes them. An open end is a hole into the inside of
+            // the dial, and the face above it is already punched out by the mask, so a
+            // glancing look along a groove would otherwise see daylight through the dial.
             function buildRelief(polys, profile) {
                 const points = profile.length;
                 const facets = points - 1;
-                const capTriangles = points - 2;
+                const tip = tipIndex(points);
+                const rings = ringCount(points);
+                const capVertices = 2 * rings * (CAP_SEGMENTS + 1);
+                // The innermost ring is the tip itself, a single point, so it fans rather
+                // than quads and carries half the triangles of every ring above it.
+                const capTriangles = 2 * (CAP_SEGMENTS + (rings - 2) * 2 * CAP_SEGMENTS);
 
                 let vertexCount = 0;
                 let triangleCount = 0;
                 for (const pts of polys) {
                     const n = pts.length / 2;
                     if (n < 2) continue;
-                    vertexCount += facets * 2 * n + 2 * points;
-                    triangleCount += facets * 2 * (n - 1) + 2 * capTriangles;
+                    vertexCount += facets * 2 * n + capVertices;
+                    triangleCount += facets * 2 * (n - 1) + capTriangles;
                 }
                 if (vertexCount === 0) return null;
 
@@ -3196,27 +3232,62 @@
                         base += n * 2;
                     }
 
-                    // The two end caps. The profile is a closed polygon on its own -- both
-                    // rims sit on the face -- so a fan from its first point covers it.
+                    // The two domed ends: the tool's own half, facing out along the path.
                     for (const end of [0, n - 1]) {
                         const x = pts[end * 2];
                         const y = pts[end * 2 + 1];
+                        // An endpoint has only one segment beside it, so its mitre scale is
+                        // 1 and this normal is already a unit vector -- which is what lets
+                        // the dome be built from it without stretching.
+                        const nX = nx[end];
+                        const nY = ny[end];
+                        // The tangent that normal was taken from, turned back out of it,
+                        // then pointed out of whichever end of the path this is.
+                        const sign = end === 0 ? -1 : 1;
+                        const outX = nY * sign;
+                        const outY = -nX * sign;
                         const start = base;
-                        for (let k = 0; k < points; k++) {
-                            position[vp++] = x + nx[end] * profile[k][0];
-                            position[vp++] = y + ny[end] * profile[k][0];
-                            position[vp++] = profile[k][1];
-                        }
-                        // The fan's natural winding faces along the path, so the cap at the
-                        // start is wound the other way to face back out of it.
-                        for (let k = 1; k < points - 1; k++) {
-                            if (end === 0) {
-                                index[ip++] = start; index[ip++] = start + k + 1; index[ip++] = start + k;
-                            } else {
-                                index[ip++] = start; index[ip++] = start + k; index[ip++] = start + k + 1;
+
+                        for (let j = 0; j < rings; j++) {
+                            const radius = profile[tip + j][0];
+                            const z = profile[tip + j][1];
+                            for (let a = 0; a <= CAP_SEGMENTS; a++) {
+                                // Swept from the cross-section's one rim round to the other,
+                                // so the dome's two edges land exactly on the ring of
+                                // vertices the strip finished with.
+                                const psi = Math.PI * (a / CAP_SEGMENTS);
+                                const cos = Math.cos(psi);
+                                const sin = Math.sin(psi);
+                                position[vp++] = x + (-nX * cos + outX * sin) * radius;
+                                position[vp++] = y + (-nY * cos + outY * sin) * radius;
+                                position[vp++] = z;
                             }
                         }
-                        base += points;
+
+                        // The start dome is the end dome mirrored, so its winding is too.
+                        const flip = end === 0;
+                        for (let j = 0; j < rings - 1; j++) {
+                            for (let a = 0; a < CAP_SEGMENTS; a++) {
+                                const v00 = start + j * (CAP_SEGMENTS + 1) + a;
+                                const v01 = v00 + 1;
+                                const v10 = v00 + CAP_SEGMENTS + 1;
+                                const v11 = v10 + 1;
+                                if (flip) {
+                                    index[ip++] = v00; index[ip++] = v11; index[ip++] = v10;
+                                } else {
+                                    index[ip++] = v00; index[ip++] = v10; index[ip++] = v11;
+                                }
+                                // Every vertex of ring 0 is the tip, the same point: the
+                                // quad's second triangle has no area there.
+                                if (j === 0) continue;
+                                if (flip) {
+                                    index[ip++] = v00; index[ip++] = v01; index[ip++] = v11;
+                                } else {
+                                    index[ip++] = v00; index[ip++] = v11; index[ip++] = v01;
+                                }
+                            }
+                        }
+                        base += rings * (CAP_SEGMENTS + 1);
                     }
                 }
 
@@ -3229,14 +3300,21 @@
 
             // The flat footprint of a cut, at the face's own level: what the mask pass
             // paints black so DialMesh can open the face there.
+            //
+            // That footprint is a stadium, not a rectangle -- the domed end reaches a half
+            // width past the last point of the path -- so each end gets a disc. A whole
+            // disc rather than the half that is strictly needed: its far half is the part
+            // the dome covers, and its near half falls inside the ribbon, so the mask still
+            // never runs past the geometry that has to hide its edge.
             function buildMaskRibbon(polys, halfWidth) {
+                const endVertices = MASK_END_SEGMENTS + 2;
                 let vertexCount = 0;
                 let triangleCount = 0;
                 for (const pts of polys) {
                     const n = pts.length / 2;
                     if (n < 2) continue;
-                    vertexCount += 2 * n;
-                    triangleCount += 2 * (n - 1);
+                    vertexCount += 2 * n + 2 * endVertices;
+                    triangleCount += 2 * (n - 1) + 2 * MASK_END_SEGMENTS;
                 }
                 if (vertexCount === 0) return null;
 
@@ -3272,6 +3350,25 @@
                         index[ip++] = b0; index[ip++] = a1; index[ip++] = b1;
                     }
                     base += n * 2;
+
+                    for (const end of [0, n - 1]) {
+                        const x = pts[end * 2];
+                        const y = pts[end * 2 + 1];
+                        const centre = base;
+                        position[vp++] = x; position[vp++] = y; position[vp++] = 0;
+                        for (let a = 0; a <= MASK_END_SEGMENTS; a++) {
+                            const t = (a / MASK_END_SEGMENTS) * Math.PI * 2;
+                            position[vp++] = x + Math.cos(t) * halfWidth;
+                            position[vp++] = y + Math.sin(t) * halfWidth;
+                            position[vp++] = 0;
+                        }
+                        for (let a = 0; a < MASK_END_SEGMENTS; a++) {
+                            index[ip++] = centre;
+                            index[ip++] = centre + 1 + a;
+                            index[ip++] = centre + 2 + a;
+                        }
+                        base += endVertices;
+                    }
                 }
 
                 const geometry = new THREE.BufferGeometry();
@@ -3815,13 +3912,19 @@
                 warning.textContent = text || '';
             }
 
+            function setMarginHint(text) {
+                const hint = el('margin-hint');
+                hint.hidden = !text;
+                hint.textContent = text || '';
+            }
+
             function setBusy(on) {
                 el('busy').hidden = !on;
             }
 
             return {
                 hooks, settings, refresh,
-                setDialInfo, setStats, setReliefWarning, setBusy
+                setDialInfo, setStats, setReliefWarning, setMarginHint, setBusy
             };
         })();
         // --- Exporter ----------------------------------------------------------------
@@ -4130,6 +4233,7 @@
                     applyDisplay();
                     Sidebar.setStats({ status: 'No dial outline', paths: 0, segments: 0, length: 0, ms: null, layers: 0 });
                     Sidebar.setReliefWarning('');
+                    Sidebar.setMarginHint('');
                     return;
                 }
 
@@ -4234,6 +4338,21 @@
                     ms: performance.now() - started,
                     layers: results.length
                 });
+
+                // The clipper contains the path the cutter follows, which is its centreline.
+                // The cut itself is as wide as the tool makes it, and its rim -- including
+                // the dome at each end -- stands half that width outside the centreline in
+                // every direction. So a margin narrower than the widest cut on the dial
+                // genuinely does let metal be removed past where the pattern was cut back
+                // to, and there is no way to say that except to say it.
+                let widestReach = 0;
+                for (const result of results) {
+                    widestReach = Math.max(widestReach, Cutter.halfWidth(result.layer));
+                }
+                Sidebar.setMarginHint(widestReach > settings.margin
+                    ? `Cuts reach ${widestReach.toFixed(3)} mm either side of their path. Raise the ` +
+                      `margin to ${widestReach.toFixed(2)} mm to keep every cut clear of the outline.`
+                    : '');
 
                 Sidebar.setReliefWarning(view.reliefSkipped
                     ? 'Cut simulation skipped: this pattern needs more geometry than the viewer ' +
