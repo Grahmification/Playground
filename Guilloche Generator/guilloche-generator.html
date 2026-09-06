@@ -491,7 +491,7 @@
            sees a press that starts in here. */
         #gcode-dialog {
             padding: 0;
-            width: min(520px, 94vw);
+            width: min(720px, 94vw);
             max-height: 86vh;
             overflow: hidden;
             border: 1px solid #3c3c3c;
@@ -581,11 +581,12 @@
             flex: 1;
         }
 
-        /* One grid for the whole list rather than one per row, so a tool number sits in the
-           same column whatever the layer above it is called. */
+        /* One grid for the whole list rather than one per row, so a feed rate sits in the
+           same column whatever the layer above it is called. Reading a column down is the
+           entire reason this is a table and not N stacked copies of one layer's settings. */
         #gcode-tools {
             display: grid;
-            grid-template-columns: auto minmax(0, 1fr) 6.5em;
+            grid-template-columns: auto minmax(0, 1fr) repeat(4, 5.5em);
             align-items: center;
             gap: 8px 10px;
         }
@@ -619,6 +620,21 @@
             height: 12px;
             border-radius: 2px;
             border: 1px solid #00000060;
+        }
+
+        /* A grid item will not shrink below its own min-content, and a number input's is
+           the browser's default field width -- around twice these tracks. Without this the
+           fixed columns are the only thing holding still and the inputs spill through. */
+        #gcode-tools .tool-cell {
+            min-width: 0;
+        }
+
+        /* Each field says what it is, for the narrow layout below where the header row is
+           gone. At full width the column heading is already saying it. */
+        #gcode-tools .cell-label {
+            display: none;
+            font-size: 0.72rem;
+            color: #808080;
         }
 
         /* Spans the grid: "nothing to cut" is not a row of tool fields. */
@@ -815,6 +831,37 @@
                 max-width: calc(100vw - 76px);
             }
 
+            /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
+               its neighbours -- at this width there is no alignment left to protect -- and
+               becomes its own little grid under its own layer name. The header goes with
+               it, since it labelled columns that no longer exist, which is what the
+               per-field labels are there to replace. */
+            #gcode-tools {
+                grid-template-columns: 1fr;
+            }
+
+            #gcode-tools .tool-head {
+                display: none;
+            }
+
+            #gcode-tools .tool-row {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px 10px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #3c3c3c;
+            }
+
+            #gcode-tools .tool-swatch,
+            #gcode-tools .tool-name {
+                grid-column: 1 / -1;
+            }
+
+            #gcode-tools .cell-label {
+                display: block;
+                margin-bottom: 2px;
+            }
+
             /* Down to the bottom-left. The top-left corner belongs to the button that
                brings the drawer back, and the readout stack is already using the width
                beside it. The ViewCube has the other bottom corner.
@@ -944,35 +991,39 @@
                  changes, so there is no markup here to keep in step with it. -->
             <div id="layer-params" class="panel-body"></div>
 
-            <div class="panel-title panel-title-row" style="margin-top:2px">
-                <span>Placement</span>
-            </div>
-            <div class="field-pair">
-                <div class="control-group">
-                    <label for="layer-cx">Centre X (mm)</label>
-                    <input type="number" id="layer-cx" value="0" step="0.25">
+            <!-- Hidden for a pattern that draws on the outline itself, where none of it
+                 would do anything. -->
+            <div id="layer-placement" class="panel-body">
+                <div class="panel-title panel-title-row" style="margin-top:2px">
+                    <span>Placement</span>
                 </div>
-                <div class="control-group">
-                    <label for="layer-cy">Centre Y (mm)</label>
-                    <input type="number" id="layer-cy" value="0" step="0.25">
-                </div>
-            </div>
-            <div class="field-pair">
-                <div class="control-group">
-                    <label for="layer-rot">Rotation (&deg;)</label>
-                    <input type="number" id="layer-rot" value="0" step="1">
-                </div>
-                <div class="control-group">
-                    <div class="label-row">
-                        <label for="layer-rmin">Band In / Out</label>
-                        <span class="help" tabindex="0">?<span class="help-bubble">Keeps this layer
-                            inside a ring measured from its own centre, so several layers can share
-                            the dial. Leave the outer radius at 0 for "as far as the outline
-                            allows".</span></span>
+                <div class="field-pair">
+                    <div class="control-group">
+                        <label for="layer-cx">Centre X (mm)</label>
+                        <input type="number" id="layer-cx" value="0" step="0.25">
                     </div>
-                    <div class="field-pair">
-                        <input type="number" id="layer-rmin" value="0" min="0" step="0.5">
-                        <input type="number" id="layer-rmax" value="0" min="0" step="0.5">
+                    <div class="control-group">
+                        <label for="layer-cy">Centre Y (mm)</label>
+                        <input type="number" id="layer-cy" value="0" step="0.25">
+                    </div>
+                </div>
+                <div class="field-pair">
+                    <div class="control-group">
+                        <label for="layer-rot">Rotation (&deg;)</label>
+                        <input type="number" id="layer-rot" value="0" step="1">
+                    </div>
+                    <div class="control-group">
+                        <div class="label-row">
+                            <label for="layer-rmin">Band In / Out</label>
+                            <span class="help" tabindex="0">?<span class="help-bubble">Keeps this layer
+                                inside a ring measured from its own centre, so several layers can share
+                                the dial. Leave the outer radius at 0 for "as far as the outline
+                                allows".</span></span>
+                        </div>
+                        <div class="field-pair">
+                            <input type="number" id="layer-rmin" value="0" min="0" step="0.5">
+                            <input type="number" id="layer-rmax" value="0" min="0" step="0.5">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1126,30 +1177,10 @@
                     title="Close" aria-label="Close">&#10005;</button>
         </div>
         <div class="dialog-body">
-            <div class="field-pair">
-                <div class="control-group">
-                    <div class="label-row">
-                        <label for="gc-safe">Safe Z (mm)</label>
-                        <span class="help" tabindex="0">?<span class="help-bubble">Height for
-                            rapids between cuts, measured from the dial face. The tool is sent
-                            here after every path and after every tool change.</span></span>
-                    </div>
-                    <input type="number" id="gc-safe" value="1" step="0.5">
-                </div>
-                <div class="control-group">
-                    <label for="gc-feed">Feed (mm/min)</label>
-                    <input type="number" id="gc-feed" value="300" min="1" step="10">
-                </div>
-            </div>
-            <div class="control-group">
-                <label for="gc-plunge">Plunge Feed (mm/min)</label>
-                <input type="number" id="gc-plunge" value="80" min="1" step="10">
-            </div>
-
-            <div class="panel-title">Tools</div>
-            <div class="hint hint-muted">Each layer is cut to its own tip depth with the cutter
-                it was given, so each needs a tool. Layers sharing a number are cut without a
-                tool change between them.</div>
+            <div class="hint hint-muted">Every layer is cut to its own tip depth with the cutter
+                it was given, so every layer carries its own tool and its own feeds. Safe&nbsp;Z is
+                in millimetres above the dial face; feeds are in mm/min. Consecutive layers set to
+                the same tool number are cut without a change between them.</div>
             <div id="gcode-tools"></div>
         </div>
         <div class="dialog-foot">
@@ -2184,6 +2215,17 @@
         // cannot leave the dial" a property of the program rather than of ten generators
         // each having remembered to check.
         //
+        // One pattern is the exception, and says so in its own definition rather than being
+        // special-cased anywhere else:
+        //
+        //   world: true       draws in world coordinates and is handed `ctx.boundary`.
+        //                     The layer's centre and rotation do not apply -- it follows
+        //                     the outline, which is already somewhere definite.
+        //   contained: false  is not cut back to the dial. Tracing the outline at no offset
+        //                     puts the path exactly on the edge, which every containment
+        //                     rule in the program exists to forbid; a border is the one
+        //                     thing that has to be allowed to sit there.
+        //
         // Every count is clamped where it is read. The parameters are free-typed numbers,
         // and a spacing of 0.001 on a 40mm dial would otherwise ask for forty thousand
         // rings before anything got a chance to notice.
@@ -2233,6 +2275,83 @@
                     out.push(straightLine(ux, uy, k * step + (phase || 0), half));
                     ctx.spend(2);
                 }
+            }
+
+            // --- Outline offsetting --------------------------------------------------
+            // Mitred normals around a closed loop, turned to face into the metal.
+            //
+            // Which way that is cannot be read off the winding: a DXF says nothing reliable
+            // about which way its loops run, and for a hole the metal is on the outside of
+            // the ring anyway. So it is measured -- step a hair off the edge and ask the
+            // boundary whether that landed in material. A vote over sample points rather
+            // than one test, so a single degenerate vertex cannot invert a whole loop.
+            function metalNormals(loop, n, boundary) {
+                const nx = new Float64Array(n);
+                const ny = new Float64Array(n);
+
+                for (let i = 0; i < n; i++) {
+                    const prev = (i - 1 + n) % n;
+                    const next = (i + 1) % n;
+                    let ax = 0;
+                    let ay = 0;
+                    for (const [from, to] of [[prev, i], [i, next]]) {
+                        const dx = loop[to * 2] - loop[from * 2];
+                        const dy = loop[to * 2 + 1] - loop[from * 2 + 1];
+                        const length = Math.hypot(dx, dy) || 1;
+                        ax += -dy / length;
+                        ay += dx / length;
+                    }
+                    const length = Math.hypot(ax, ay);
+                    if (length < 1e-9) { nx[i] = 0; ny[i] = 0; continue; }
+                    // |n_prev + n_next| / 2 is the cosine of half the turn, so its
+                    // reciprocal is the mitre length. Clamped: a hairpin has none.
+                    const scale = Math.min(1 / Math.max(length / 2, 0.34), 3);
+                    nx[i] = (ax / length) * scale;
+                    ny[i] = (ay / length) * scale;
+                }
+
+                let vote = 0;
+                const probe = Math.max(boundary.diagonal * 1e-4, 1e-5);
+                const stride = Math.max(1, Math.floor(n / 16));
+                for (let i = 0; i < n; i += stride) {
+                    const length = Math.hypot(nx[i], ny[i]);
+                    if (length < 1e-9) continue;
+                    const x = loop[i * 2] + (nx[i] / length) * probe;
+                    const y = loop[i * 2 + 1] + (ny[i] / length) * probe;
+                    vote += boundary.contains(x, y) ? 1 : -1;
+                }
+                if (vote < 0) {
+                    for (let i = 0; i < n; i++) { nx[i] = -nx[i]; ny[i] = -ny[i]; }
+                }
+                return { nx, ny };
+            }
+
+            // The loop displaced along those normals. Positive goes into the metal.
+            function offsetLoop(loop, n, normals, distance, boundary) {
+                const pts = [];
+                const filtered = Math.abs(distance) > 1e-9;
+                const wantMetal = distance > 0;
+                const clearance = Math.abs(distance) * 0.98;
+
+                for (let i = 0; i < n; i++) {
+                    const x = loop[i * 2] + normals.nx[i] * distance;
+                    const y = loop[i * 2 + 1] + normals.ny[i] * distance;
+                    // A corner turning tighter than the offset makes the displacement
+                    // overshoot and fold back on itself -- the bow-tie every naive offset
+                    // produces. Those points, and only those, are the ones that land on the
+                    // wrong side of the edge or nearer to it than the offset they were
+                    // given. Dropping them joins their neighbours across the corner, which
+                    // is what the true offset curve does there anyway.
+                    if (filtered) {
+                        if (boundary.contains(x, y) !== wantMetal) continue;
+                        if (boundary.nearEdge(x, y, clearance)) continue;
+                    }
+                    pts.push(x, y);
+                }
+
+                // Back to the start: a ring, not a stroke that stops one vertex short.
+                if (pts.length >= 4) pts.push(pts[0], pts[1]);
+                return pts;
             }
 
             const REGISTRY = {
@@ -2616,9 +2735,58 @@
                 }
             };
 
+            // Added after the registry literal rather than inside it, because it is the one
+            // entry that is not a pattern in the same sense as the others: it draws the
+            // dial rather than something on the dial.
+            REGISTRY.trace = {
+                label: 'Trace Outline',
+                note: 'Follows the dial outline itself, at an offset. Placement and the edge ' +
+                      'margin do not apply to this layer — it is the edge.',
+                world: true,
+                contained: false,
+                params: [
+                    { k: 'offset', label: 'Offset (mm)', type: 'number', value: 0.5, step: 0.1,
+                      help: 'Positive moves the trace into the metal, away from the edge; ' +
+                            'negative moves it off the dial. At zero it runs exactly along ' +
+                            'the outline. The edge margin does not cut this layer back.' },
+                    { k: 'passes', label: 'Passes', type: 'number', value: 1, min: 1, max: 200, step: 1 },
+                    { k: 'spacing', label: 'Pass Spacing (mm)', type: 'number', value: 0.4, min: 0.02, step: 0.05,
+                      help: 'How much further into the metal each pass after the first goes. ' +
+                            'A few passes make a border band rather than a single line.' },
+                    { k: 'holes', label: 'Trace holes as well', type: 'check', value: true,
+                      help: 'Off, only the dial’s outer edge is traced. On, every closed ' +
+                            'loop is — the centre hole, a date window, a subdial.' }
+                ],
+                generate(p, ctx) {
+                    const boundary = ctx.boundary;
+                    if (!boundary) return [];
+
+                    const loops = p.holes ? boundary.loops : [boundary.outer];
+                    const passes = Util.clamp(Math.round(p.passes), 1, 200);
+                    const spacing = Math.max(p.spacing, 0.02);
+                    const out = [];
+
+                    for (const loop of loops) {
+                        const n = loop.length / 2;
+                        if (n < 3) continue;
+                        // Measured once per loop and reused by every pass over it: the
+                        // direction into the metal does not change with the offset.
+                        const normals = metalNormals(loop, n, boundary);
+                        for (let k = 0; k < passes; k++) {
+                            if (!ctx.room()) return out;
+                            const pts = offsetLoop(loop, n, normals, p.offset + k * spacing, boundary);
+                            if (pts.length < 4) continue;
+                            out.push({ pts, closed: false });
+                            ctx.spend(pts.length / 2);
+                        }
+                    }
+                    return out;
+                }
+            };
+
             const ORDER = [
                 'rosette-spiral', 'rosette-rings', 'spirograph', 'waves', 'sunburst',
-                'concentric', 'crosshatch', 'clous', 'basket', 'arcs'
+                'concentric', 'crosshatch', 'clous', 'basket', 'arcs', 'trace'
             ];
 
             function defaults(type) {
@@ -3791,6 +3959,7 @@
             let selectedId = null;
 
             function create(type) {
+                const last = list[list.length - 1];
                 const layer = {
                     id: nextId++,
                     type,
@@ -3803,10 +3972,16 @@
                     depth: 0.12,
                     angle: 90,
                     radius: 0.15,
-                    // Which tool cuts this layer, for the G-code. A new layer gets a number
+                    // How this layer is cut, for the G-code. A new layer gets a tool number
                     // of its own, since a new layer usually means a different cutter -- two
-                    // layers only share a tool if they are set to.
+                    // layers only share a tool if they are set to. The machine settings are
+                    // inherited from the layer before it instead: those describe the machine
+                    // and the setup, which do not change just because a layer was added, and
+                    // retyping the safe height for every layer is a chore with one answer.
                     tool: list.length + 1,
+                    safeZ: last ? last.safeZ : 1,
+                    feed: last ? last.feed : 300,
+                    plunge: last ? last.plunge : 80,
                     cx: 0,
                     cy: 0,
                     rot: 0,
@@ -3991,6 +4166,7 @@
                     el('layer-desc').textContent = 'Add a layer to choose a pattern.';
                     params.innerHTML = '';
                     typeSelect.disabled = true;
+                    el('layer-placement').hidden = false;
                     updateCutterFields();
                     return;
                 }
@@ -3998,7 +4174,12 @@
                 typeSelect.disabled = false;
                 typeSelect.value = layer.type;
                 el('layer-title').textContent = layer.name;
-                el('layer-desc').textContent = Patterns.get(layer.type).note;
+                const definition = Patterns.get(layer.type);
+                el('layer-desc').textContent = definition.note;
+                // A pattern that draws on the outline itself has no use for a centre, a
+                // rotation or a radius band. Leaving the fields on screen doing nothing
+                // would be worse than not offering them.
+                el('layer-placement').hidden = definition.world === true;
 
                 el('layer-cx').value = layer.cx;
                 el('layer-cy').value = layer.cy;
@@ -4293,41 +4474,27 @@
         })();
         // --- GCodeDialog -------------------------------------------------------------
         // The machining setup, asked for at the moment it is needed rather than kept in the
-        // sidebar. It is answered once per export and never while designing, and the tool
-        // list cannot be written down in markup at all: it is one row per layer, built from
-        // the stack every time the dialog opens.
+        // sidebar. It is answered once per export and never while designing, and it cannot
+        // be written down in markup at all: it is one row per layer, built from the stack
+        // every time the dialog opens.
         //
-        // The tool numbers are written back onto the layers, not held here -- a layer's
-        // tool belongs to the layer, travels in a saved design with it, and has to survive
-        // the dialog being closed.
+        // Nothing is held here. Every value is written back onto its layer -- it belongs to
+        // the layer, travels in a saved design with it, and has to survive the dialog being
+        // closed. This module owns the panel and nothing else.
         const GCodeDialog = (() => {
             const dialog = Util.el('gcode-dialog');
             const rows = Util.el('gcode-tools');
             const writeButton = Util.el('gcode-write');
             let onConfirm = null;
 
-            function readNumber(id, fallback) {
-                const value = parseFloat(Util.el(id).value);
-                return Number.isFinite(value) ? value : fallback;
-            }
-
-            function settings() {
-                return {
-                    safeZ: readNumber('gc-safe', 1),
-                    feed: Math.max(readNumber('gc-feed', 300), 1),
-                    plunge: Math.max(readNumber('gc-plunge', 80), 1)
-                };
-            }
-
-            function applySettings(saved) {
-                if (!saved || typeof saved !== 'object') return;
-                const set = (id, value) => {
-                    if (Number.isFinite(value)) Util.el(id).value = value;
-                };
-                set('gc-safe', saved.safeZ);
-                set('gc-feed', saved.feed);
-                set('gc-plunge', saved.plunge);
-            }
+            // The columns, once. The header row, the cells and the write-back all read this
+            // list, so a column cannot end up labelled one thing and storing another.
+            const FIELDS = [
+                { key: 'tool', label: 'Tool', min: 1, max: 999, step: 1, integer: true },
+                { key: 'safeZ', label: 'Safe Z', min: -50, max: 500, step: 0.5 },
+                { key: 'feed', label: 'Feed', min: 1, max: 100000, step: 10 },
+                { key: 'plunge', label: 'Plunge', min: 1, max: 100000, step: 10 }
+            ];
 
             // What the tool in the box beside it has to be.
             function describe(layer) {
@@ -4338,10 +4505,14 @@
             }
 
             // Only the layers that are switched on: those are the only ones the export will
-            // contain, and offering a tool for a layer that will not be cut invites setting
-            // one and wondering where it went.
+            // contain, and offering feeds for a layer that will not be cut invites setting
+            // them and wondering where they went.
+            function cuttable() {
+                return Layers.list.filter(layer => layer.enabled && layer.depth > 0);
+            }
+
             function render() {
-                const layers = Layers.list.filter(layer => layer.enabled && layer.depth > 0);
+                const layers = cuttable();
                 writeButton.disabled = layers.length === 0;
 
                 if (!layers.length) {
@@ -4350,34 +4521,46 @@
                     return;
                 }
 
-                rows.innerHTML = `
+                const head = `
                     <div class="tool-row">
                         <span class="tool-head"></span>
                         <span class="tool-head">Layer</span>
-                        <span class="tool-head">Tool</span>
+                        ${FIELDS.map(field => `<span class="tool-head">${field.label}</span>`).join('')}
                     </div>
-                ` + layers.map(layer => `
+                `;
+
+                rows.innerHTML = head + layers.map(layer => `
                     <div class="tool-row">
                         <span class="tool-swatch" style="background:${Util.escapeHtml(layer.color)}"></span>
                         <span class="tool-name">${Util.escapeHtml(layer.name)}<span
                             class="tool-note">${Util.escapeHtml(describe(layer))}</span></span>
-                        <input type="number" class="tool-number" data-id="${layer.id}"
-                               min="1" max="999" step="1" value="${layer.tool}"
-                               aria-label="Tool number for ${Util.escapeHtml(layer.name)}">
+                        ${FIELDS.map(field => `
+                            <span class="tool-cell">
+                                <span class="cell-label">${field.label}</span>
+                                <input type="number" class="tool-field"
+                                       data-id="${layer.id}" data-key="${field.key}"
+                                       min="${field.min}" max="${field.max}" step="${field.step}"
+                                       value="${layer[field.key]}"
+                                       aria-label="${field.label} for ${Util.escapeHtml(layer.name)}">
+                            </span>
+                        `).join('')}
                     </div>
                 `).join('');
             }
 
             function commit() {
-                for (const input of rows.querySelectorAll('.tool-number')) {
+                for (const input of rows.querySelectorAll('.tool-field')) {
                     const layer = Layers.list.find(l => l.id === Number(input.dataset.id));
-                    if (!layer) continue;
-                    const value = parseInt(input.value, 10);
-                    if (Number.isFinite(value)) layer.tool = Util.clamp(value, 1, 999);
+                    const field = FIELDS.find(f => f.key === input.dataset.key);
+                    if (!layer || !field) continue;
+                    const value = parseFloat(input.value);
+                    // A field left empty or half-typed keeps whatever the layer already had.
+                    if (!Number.isFinite(value)) continue;
+                    layer[field.key] = Util.clamp(field.integer ? Math.round(value) : value,
+                        field.min, field.max);
                 }
-                const options = settings();
                 dialog.close();
-                if (onConfirm) onConfirm(options);
+                if (onConfirm) onConfirm();
             }
 
             Util.el('gcode-dialog-close').addEventListener('click', () => dialog.close());
@@ -4385,8 +4568,6 @@
             writeButton.addEventListener('click', commit);
 
             return {
-                settings,
-                applySettings,
                 open(callback) {
                     onConfirm = callback;
                     render();
@@ -4408,7 +4589,8 @@
         // their defaults, and saves back complete.
         const Preset = (() => {
             const FORMAT = 'guilloche-dial';
-            const VERSION = 1;
+            // 2: the machining settings moved from one global block onto each layer.
+            const VERSION = 2;
 
             function finite(value, fallback) {
                 return Number.isFinite(value) ? value : fallback;
@@ -4433,7 +4615,10 @@
                 return out;
             }
 
-            function readLayer(raw, index) {
+            // `machining` is the global block a version-1 file carried. Using it as the
+            // fallback is what makes such a file open with the feeds it was saved with,
+            // spread across its layers, rather than silently reset to the defaults.
+            function readLayer(raw, index, machining) {
                 if (!raw || typeof raw !== 'object') return null;
                 // A pattern this build does not have is the one thing that cannot be
                 // defaulted: there would be nothing to draw. The layer is dropped and the
@@ -4453,6 +4638,9 @@
                     angle: Util.clamp(finite(raw.angle, 90), 1, 179),
                     radius: Math.max(finite(raw.radius, 0.15), 0.005),
                     tool: Util.clamp(Math.round(finite(raw.tool, index + 1)), 1, 999),
+                    safeZ: Util.clamp(finite(raw.safeZ, finite(machining.safeZ, 1)), -50, 500),
+                    feed: Util.clamp(finite(raw.feed, finite(machining.feed, 300)), 1, 100000),
+                    plunge: Util.clamp(finite(raw.plunge, finite(machining.plunge, 80)), 1, 100000),
                     cx: finite(raw.cx, 0),
                     cy: finite(raw.cy, 0),
                     rot: finite(raw.rot, 0),
@@ -4500,12 +4688,18 @@
                     throw new Error('That file was written by a newer version of this tool.');
                 }
 
+                const settings = (doc.settings && typeof doc.settings === 'object') ? doc.settings : null;
+                const machining = (settings && settings.gcode && typeof settings.gcode === 'object')
+                    ? settings.gcode : {};
+
                 const rawLayers = Array.isArray(doc.layers) ? doc.layers : [];
-                const layers = rawLayers.map(readLayer).filter(Boolean);
+                const layers = rawLayers
+                    .map((raw, index) => readLayer(raw, index, machining))
+                    .filter(Boolean);
 
                 return {
                     dial: (doc.dial && typeof doc.dial === 'object') ? doc.dial : null,
-                    settings: (doc.settings && typeof doc.settings === 'object') ? doc.settings : null,
+                    settings,
                     layers,
                     dropped: rawLayers.length - layers.length,
                     selectedIndex: Number.isInteger(doc.selectedIndex) ? doc.selectedIndex : 0
@@ -4606,28 +4800,30 @@
                 return String(text).replace(/[()]/g, '');
             }
 
-            function gcode(results, boundary, options) {
+            function gcode(results, boundary) {
                 const b = bounds(boundary);
-                const safeZ = options.safeZ.toFixed(3);
+                // Nothing to retract to before the first layer says what its safe height is,
+                // so the opening rapid borrows it -- and with no cuttable layer at all there
+                // is no opening rapid to write.
+                const cutting = results.filter(r => r.polys.length && r.layer.depth > 0);
                 const out = [
                     '(Guilloche pattern)',
                     `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
                     '(Origin: dial centre. Z0 = dial face.)',
                     'G21 G90 G17',
-                    'G94',
-                    `G0 Z${safeZ}`
+                    'G94'
                 ];
+                if (cutting.length) out.push(`G0 Z${cutting[0].layer.safeZ.toFixed(3)}`);
 
                 let loadedTool = null;
 
-                for (const result of results) {
+                for (const result of cutting) {
                     // Each layer is cut to its own tip depth with its own tool: the depth
                     // here and the recess on screen are the same number, so what is
                     // simulated is what gets cut.
                     const layer = result.layer;
                     const depth = Math.max(layer.depth, 0);
-                    if (depth <= 0 || !result.polys.length) continue;
-
+                    const safeZ = layer.safeZ.toFixed(3);
                     const description = layer.cutter === 'ball'
                         ? `ball nose R${layer.radius}`
                         : `${layer.angle} deg chamfer`;
@@ -4636,7 +4832,9 @@
                     // Only where it actually changes: consecutive layers set to the same
                     // tool are cut in one go, which is the reason for letting them share a
                     // number at all. The retract is because a tool change leaves the
-                    // machine at a height most controls will not promise anything about.
+                    // machine at a height most controls will not promise anything about --
+                    // and it goes to the incoming layer's height, since the tool that is
+                    // about to cut is the one whose clearance now matters.
                     if (tool !== loadedTool) {
                         out.push(`${tool} M6 (${comment(description)})`);
                         out.push(`G0 Z${safeZ}`);
@@ -4648,15 +4846,16 @@
                     for (const pts of result.polys) {
                         if (pts.length < 4) continue;
                         out.push(`G0 X${(pts[0] - b.ox).toFixed(4)} Y${(pts[1] - b.oy).toFixed(4)}`);
-                        out.push(`G1 Z${(-depth).toFixed(3)} F${options.plunge.toFixed(0)}`);
+                        out.push(`G1 Z${(-depth).toFixed(3)} F${layer.plunge.toFixed(0)}`);
                         // The feed is stated once per path rather than on every line: the
                         // files run to hundreds of thousands of moves, and a repeated F word
-                        // is a fifth of the file for nothing.
-                        out.push(`G1 X${(pts[2] - b.ox).toFixed(4)} Y${(pts[3] - b.oy).toFixed(4)} F${options.feed.toFixed(0)}`);
+                        // is a fifth of the file for nothing. It has to be restated on each
+                        // path, though, because the plunge above changed it.
+                        out.push(`G1 X${(pts[2] - b.ox).toFixed(4)} Y${(pts[3] - b.oy).toFixed(4)} F${layer.feed.toFixed(0)}`);
                         for (let i = 4; i < pts.length; i += 2) {
                             out.push(`G1 X${(pts[i] - b.ox).toFixed(4)} Y${(pts[i + 1] - b.oy).toFixed(4)}`);
                         }
-                        out.push(`G0 Z${options.safeZ.toFixed(3)}`);
+                        out.push(`G0 Z${safeZ}`);
                     }
                 }
 
@@ -4866,6 +5065,10 @@
                 let budget = MAX_GENERATED_POINTS;
                 const ctxFor = (reach) => ({
                     reach,
+                    // Only a world-space pattern reads this. The rest are told how far they
+                    // may need to draw and nothing about where the edge is, which is what
+                    // keeps them unable to get containment wrong.
+                    boundary,
                     room: () => budget > 0,
                     left: () => Math.max(budget, 0),
                     spend: (n) => { budget -= n; }
@@ -4923,16 +5126,25 @@
                     const sa = Math.sin(angle);
                     const polys = [];
 
+                    // Both stated by the pattern itself, so the two exceptional cases live
+                    // in its definition rather than as a name checked for here.
+                    const world = definition.world === true;
+                    const contained = definition.contained !== false;
+
                     for (const path of local) {
                         // Into world coordinates, in place: the generator's output is
-                        // private to this loop and nothing else will read it.
+                        // private to this loop and nothing else will read it. A world-space
+                        // pattern is already there.
                         const pts = path.pts;
-                        for (let i = 0; i < pts.length; i += 2) {
-                            const x = pts[i];
-                            const y = pts[i + 1];
-                            pts[i] = cx + x * ca - y * sa;
-                            pts[i + 1] = cy + x * sa + y * ca;
+                        if (!world) {
+                            for (let i = 0; i < pts.length; i += 2) {
+                                const x = pts[i];
+                                const y = pts[i + 1];
+                                pts[i] = cx + x * ca - y * sa;
+                                pts[i + 1] = cy + x * sa + y * ca;
+                            }
                         }
+                        if (!contained) { polys.push(pts); continue; }
                         for (const clipped of Clipper.clip(pts, path.closed, inside, maxStep)) {
                             polys.push(clipped);
                         }
@@ -4973,6 +5185,9 @@
                 // to, and there is no way to say that except to say it.
                 let widestReach = 0;
                 for (const result of results) {
+                    // A layer that opted out of containment is not answered by raising the
+                    // margin, so it must not be what prompts the advice to raise it.
+                    if (Patterns.get(result.layer.type).contained === false) continue;
                     widestReach = Math.max(widestReach, Cutter.halfWidth(result.layer));
                 }
                 Sidebar.setMarginHint(widestReach > settings.margin
@@ -5016,8 +5231,9 @@
                         joinTolerance: settings.joinTolerance,
                         margin: settings.margin,
                         thickness: settings.thickness,
-                        material: settings.material,
-                        gcode: GCodeDialog.settings()
+                        material: settings.material
+                        // The machining settings are not here: they live on the layers now,
+                        // and the layers are saved below.
                     },
                     Layers.list,
                     Layers.indexOfSelected()
@@ -5032,7 +5248,6 @@
                 // read, so they have to be in their fields before the dial is rebuilt from
                 // it -- rebuildBoundary reads them back out of the sidebar.
                 Sidebar.applySettings(doc.settings);
-                GCodeDialog.applySettings(doc.settings && doc.settings.gcode);
                 Layers.replace(doc.layers, doc.selectedIndex);
                 Sidebar.refresh();
 
@@ -5081,11 +5296,12 @@
                 }
             }
 
-            // Called back by the dialog, with what was set in it.
-            function exportGcode(options) {
+            // Called back by the dialog once it has written what was set in it onto the
+            // layers, which is where the exporter reads it from.
+            function exportGcode() {
                 if (!boundary) return;
                 Util.download(`${baseName()}-guilloche.nc`,
-                    Exporter.gcode(results, boundary, options), 'text/plain');
+                    Exporter.gcode(results, boundary), 'text/plain');
             }
 
             // --- Wiring --------------------------------------------------------------
