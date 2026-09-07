@@ -491,7 +491,7 @@
            sees a press that starts in here. */
         #gcode-dialog {
             padding: 0;
-            width: min(720px, 94vw);
+            width: min(780px, 94vw);
             max-height: 86vh;
             overflow: hidden;
             border: 1px solid #3c3c3c;
@@ -586,7 +586,7 @@
            entire reason this is a table and not N stacked copies of one layer's settings. */
         #gcode-tools {
             display: grid;
-            grid-template-columns: auto minmax(0, 1fr) repeat(4, 5.5em);
+            grid-template-columns: auto minmax(0, 1fr) repeat(5, 5.5em);
             align-items: center;
             gap: 8px 10px;
         }
@@ -1178,9 +1178,10 @@
         </div>
         <div class="dialog-body">
             <div class="hint hint-muted">Every layer is cut to its own tip depth with the cutter
-                it was given, so every layer carries its own tool and its own feeds. Safe&nbsp;Z is
+                it was given, so every layer carries its own tool, feeds and speed. Safe&nbsp;Z is
                 in millimetres above the dial face; feeds are in mm/min. Consecutive layers set to
-                the same tool number are cut without a change between them.</div>
+                the same tool number are cut without a change between them. A speed of&nbsp;0 runs
+                that layer with the spindle stopped.</div>
             <div id="gcode-tools"></div>
 
             <div class="panel-title">Arc Fitting</div>
@@ -1195,6 +1196,33 @@
                 </div>
                 <input type="number" id="gc-arc-tol" value="0.005" min="0" step="0.001">
             </div>
+
+            <div class="panel-title">Program</div>
+            <div class="field-pair">
+                <div class="control-group">
+                    <label for="gc-work-offset">Work Offset</label>
+                    <select id="gc-work-offset">
+                        <option value="G54" selected>G54</option>
+                        <option value="G55">G55</option>
+                        <option value="G56">G56</option>
+                        <option value="G57">G57</option>
+                        <option value="G58">G58</option>
+                        <option value="G59">G59</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="gc-coolant">Coolant</label>
+                    <select id="gc-coolant">
+                        <option value="" selected>None</option>
+                        <option value="M8">Flood (M8)</option>
+                        <option value="M7">Mist / air (M7)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="hint hint-muted">Written for Fanuc, Haas and LinuxCNC: a full safety line,
+                <code>G43</code> tool length offsets, <code>G64</code> blended motion and
+                <code>G30</code> park before every tool change. A GRBL-class controller will not
+                accept <code>G43&nbsp;H</code> or <code>G64</code>.</div>
         </div>
         <div class="dialog-foot">
             <button id="gcode-cancel" class="btn btn-secondary" type="button">Cancel</button>
@@ -4042,6 +4070,7 @@
                     safeZ: last ? last.safeZ : 1,
                     feed: last ? last.feed : 300,
                     plunge: last ? last.plunge : 80,
+                    speed: last ? last.speed : 10000,
                     cx: 0,
                     cy: 0,
                     rot: 0,
@@ -4555,7 +4584,10 @@
                 { key: 'tool', label: 'Tool', min: 1, max: 999, step: 1, integer: true },
                 { key: 'safeZ', label: 'Safe Z', min: -50, max: 500, step: 0.5 },
                 { key: 'feed', label: 'Feed', min: 1, max: 100000, step: 10 },
-                { key: 'plunge', label: 'Plunge', min: 1, max: 100000, step: 10 }
+                { key: 'plunge', label: 'Plunge', min: 1, max: 100000, step: 10 },
+                // Zero is a real answer here, not a missing one: it means cut this layer
+                // with the spindle stopped, and the exporter leaves the start command out.
+                { key: 'speed', label: 'Speed', min: 0, max: 100000, step: 500, integer: true }
             ];
 
             // What the tool in the box beside it has to be.
@@ -4611,8 +4643,12 @@
             }
 
             function settings() {
-                const value = parseFloat(Util.el('gc-arc-tol').value);
-                return { arcTolerance: Number.isFinite(value) ? Math.max(value, 0) : 0 };
+                const tolerance = parseFloat(Util.el('gc-arc-tol').value);
+                return {
+                    arcTolerance: Number.isFinite(tolerance) ? Math.max(tolerance, 0) : 0,
+                    workOffset: Util.el('gc-work-offset').value,
+                    coolant: Util.el('gc-coolant').value
+                };
             }
 
             function applySettings(saved) {
@@ -4620,6 +4656,14 @@
                 if (Number.isFinite(saved.arcTolerance)) {
                     Util.el('gc-arc-tol').value = saved.arcTolerance;
                 }
+                const setChoice = (id, value) => {
+                    const field = Util.el(id);
+                    if (typeof value !== 'string') return;
+                    if (!Array.from(field.options).some(o => o.value === value)) return;
+                    field.value = value;
+                };
+                setChoice('gc-work-offset', saved.workOffset);
+                setChoice('gc-coolant', saved.coolant);
             }
 
             function commit() {
@@ -4718,6 +4762,9 @@
                     safeZ: Util.clamp(finite(raw.safeZ, finite(machining.safeZ, 1)), -50, 500),
                     feed: Util.clamp(finite(raw.feed, finite(machining.feed, 300)), 1, 100000),
                     plunge: Util.clamp(finite(raw.plunge, finite(machining.plunge, 80)), 1, 100000),
+                    // Floored at zero rather than one: zero means "spindle off", which is a
+                    // setting, not an unset value.
+                    speed: Util.clamp(Math.round(finite(raw.speed, 10000)), 0, 100000),
                     cx: finite(raw.cx, 0),
                     cy: finite(raw.cy, 0),
                     rot: finite(raw.rot, 0),
@@ -5032,18 +5079,40 @@
                 return moves;
             }
 
+            // Fanuc / Haas / LinuxCNC flavour.
+            //
+            // The safety line is not decoration. G40 and G80 cancel a cutter compensation
+            // or a canned cycle that an earlier program may have left running, either of
+            // which would quietly turn this file into a different one; G49 drops a stale
+            // tool length offset before the right one is applied. G91.1 declares that arc
+            // centres are incremental, which is how every I and J below is written -- on a
+            // control sitting in G90.1 they would be read as absolute coordinates and every
+            // arc would end up somewhere else entirely. And G64 asks for blended motion:
+            // with thousands of short blocks, exact-stop mode puts a dwell mark at each one.
             function gcode(results, boundary, options) {
                 const b = bounds(boundary);
                 const tolerance = Math.max((options && options.arcTolerance) || 0, 0);
+                const workOffset = (options && options.workOffset) || 'G54';
+                const coolant = (options && options.coolant) || '';
+
                 const fx = (v) => (v - b.ox).toFixed(4);
                 const fy = (v) => (v - b.oy).toFixed(4);
+                // Every dimensional word carries a decimal point. Without one a control on
+                // Fanuc's increment system reads the number in least-increment units, and
+                // an F300 meant as 300 mm/min is obeyed as three tenths of one.
+                const rate = (v) => v.toFixed(1);
 
                 const cutting = results.filter(r => r.polys.length && r.layer.depth > 0);
-                // Built first, so the header can say what came of the fitting.
+                // The body is built first so the header can report what came of it.
                 const out = [];
+                const tools = new Map();
                 let arcCount = 0;
                 let lineCount = 0;
                 let loadedTool = null;
+                let spindle = 0;        // rpm currently commanded; 0 is stopped
+                let coolantOn = false;
+                let atZ = null;         // where Z is known to be, or null after a change
+                let operation = 0;      // block number of the layer being written
 
                 for (const result of cutting) {
                     // Each layer is cut to its own tip depth with its own tool: the depth
@@ -5055,33 +5124,109 @@
                     const description = layer.cutter === 'ball'
                         ? `ball nose R${layer.radius}`
                         : `${layer.angle} deg chamfer`;
-                    const tool = `T${String(layer.tool).padStart(2, '0')}`;
+                    const number = String(layer.tool).padStart(2, '0');
+                    const tool = `T${number}`;
+                    // A missing value is a bug rather than a request for a stopped spindle,
+                    // and the two must not look alike now that zero means something.
+                    const speed = Number.isFinite(layer.speed)
+                        ? Math.max(Math.round(layer.speed), 0)
+                        : 10000;
 
-                    // Only where it actually changes: consecutive layers set to the same
-                    // tool are cut in one go, which is the reason for letting them share a
-                    // number at all. The retract is because a tool change leaves the
-                    // machine at a height most controls will not promise anything about --
-                    // and it goes to the incoming layer's height, since the tool that is
-                    // about to cut is the one whose clearance now matters.
-                    if (tool !== loadedTool) {
-                        out.push(`${tool} M6 (${comment(description)})`);
-                        out.push(`G0 Z${safeZ}`);
-                        loadedTool = tool;
+                    const listed = tools.get(tool);
+                    if (!listed) {
+                        tools.set(tool, { description, width: Cutter.width(layer), zmin: -depth });
+                    } else {
+                        listed.zmin = Math.min(listed.zmin, -depth);
                     }
 
-                    out.push(`(layer: ${comment(layer.name)} - ${comment(description)}, ` +
+                    // Only where the tool actually changes: consecutive layers set to the
+                    // same number are cut in one go, which is the reason for letting them
+                    // share one at all.
+                    const changing = tool !== loadedTool;
+                    operation += 10;
+
+                    if (changing) {
+                        // Wound down before the change, not through it: a spindle still
+                        // turning and coolant still running into an open tool changer are
+                        // both things a machine should never be asked to do.
+                        const winddown = [];
+                        if (spindle > 0) { winddown.push('M5'); spindle = 0; }
+                        if (coolantOn) { winddown.push('M9'); coolantOn = false; }
+                        if (winddown.length) out.push(winddown.join(' '));
+
+                        // Parked in machine coordinates. Until G43 has applied this tool's
+                        // length offset, no height in work coordinates means anything, so
+                        // there is nowhere safe to retract to yet.
+                        out.push('G30');
+                    }
+
+                    // The operation's own block number, carrying its name. Numbered by tens
+                    // so the file can be restarted from the top of any layer at the control,
+                    // and so there is room to interleave should anything ever need to go
+                    // between two of them. Blank-separated, because a two-thousand-line file
+                    // is read by looking for where the operations start.
+                    if (operation > 10) out.push('');
+                    out.push(`N${operation}(${comment(layer.name)} - ${comment(description)}, ` +
                              `width ${Cutter.width(layer).toFixed(3)}mm)`);
+
+                    if (changing) {
+                        // Optional stop, before every change but the first. The control only
+                        // honours it when the operator has asked it to, which is what makes
+                        // it safe to write unconditionally: it is an offer of a pause to
+                        // check the tool or the part, not an imposed one.
+                        if (operation > 10) out.push('M1');
+                        out.push(`${tool} M6 (${comment(description)})`);
+                        out.push(`G43 H${number}`);
+                        out.push(workOffset);
+                        loadedTool = tool;
+                        atZ = null;     // the change leaves Z up at the changer
+                    }
+
+                    // Spindle and coolant are commanded at the head of every operation, not
+                    // only where they change. That looks redundant and is not: the block
+                    // numbers above exist so an operator can restart the program from the
+                    // top of any layer, and a layer that inherited its spindle from the one
+                    // before it would then begin with the spindle stopped. Every N block has
+                    // to be able to stand on its own.
+                    //
+                    // A layer set to no speed says so outright rather than leaving the S
+                    // word out. A cutting section with no S reads like something the post
+                    // forgot; this one is a choice, and an M6 having probably stopped the
+                    // spindle already is not the same as the program having said so.
+                    const startup = [];
+                    if (speed > 0) {
+                        startup.push(`S${speed}`, 'M3');
+                        spindle = speed;
+                    } else {
+                        startup.push('M5');
+                        spindle = 0;
+                    }
+                    // Re-commanded here also covers the tool change, which cancels coolant
+                    // on most controls -- that is how a second tool ends up running dry.
+                    if (coolant) {
+                        startup.push(coolant);
+                        coolantOn = true;
+                    }
+                    out.push(startup.join(' ') + (speed > 0 ? '' : ' (spindle off for this layer)'));
+
                     for (const pts of result.polys) {
                         if (pts.length < 4) continue;
+                        // Across in XY first, down in Z second. After a tool change Z is up
+                        // at the changer, and descending before knowing where in XY the tool
+                        // is standing is how fixtures get hit.
                         out.push(`G0 X${fx(pts[0])} Y${fy(pts[1])}`);
-                        out.push(`G1 Z${(-depth).toFixed(3)} F${layer.plunge.toFixed(0)}`);
+                        if (atZ !== safeZ) {
+                            out.push(`G0 Z${safeZ}`);
+                            atZ = safeZ;
+                        }
+                        out.push(`G1 Z${(-depth).toFixed(3)} F${rate(layer.plunge)}`);
 
                         // The feed is stated once per path rather than on every move: the
                         // files run to hundreds of thousands of blocks, and a repeated F
                         // word is a fifth of the file for nothing. It has to be restated on
                         // each path, though, because the plunge above changed it -- and it
                         // goes on whichever move comes first, arc or line.
-                        let pending = ` F${layer.feed.toFixed(0)}`;
+                        let pending = ` F${rate(layer.feed)}`;
                         for (const move of toMoves(pts, tolerance)) {
                             if (move.arc) {
                                 arcCount++;
@@ -5097,23 +5242,36 @@
                     }
                 }
 
-                // Nothing to retract to before the first layer says what its safe height is,
-                // so the opening rapid borrows it -- and with no cuttable layer at all there
-                // is no opening rapid to write.
                 const head = [
+                    '%',
                     '(Guilloche pattern)',
                     `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
                     '(Origin: dial centre. Z0 = dial face.)',
                     tolerance > 0
                         ? `(Arcs fitted to ${tolerance} mm: ${Util.count(arcCount)} arcs, ` +
                           `${Util.count(lineCount)} lines)`
-                        : `(${Util.count(lineCount)} linear moves, no arc fitting)`,
-                    'G21 G90 G17',
-                    'G94'
+                        : `(${Util.count(lineCount)} linear moves, no arc fitting)`
                 ];
-                if (cutting.length) head.push(`G0 Z${cutting[0].layer.safeZ.toFixed(3)}`);
+                // The tool list, so the setup and the depth limit can be checked before
+                // anyone presses cycle start.
+                for (const [tool, info] of tools) {
+                    head.push(`(${tool} - ${comment(info.description)} - cuts ` +
+                              `${info.width.toFixed(3)}mm wide - ZMIN=${info.zmin.toFixed(3)})`);
+                }
+                head.push('G90 G94 G17 G40 G49 G80 G91.1 G64');
+                head.push('G21 (mm)');
+                head.push(workOffset);
 
-                return head.concat(out, ['G0 X0 Y0', 'M30', '']).join('\n');
+                // Unconditional, unlike the wind-down before a tool change. This is the last
+                // thing the program says, and it should not depend on the bookkeeping above
+                // having been right about what was left running.
+                const tail = ['', 'M5 M9'];
+                // Parked rather than sent to the program origin: the dial's centre at a
+                // millimetre of clearance is a rapid straight across whatever is holding it.
+                if (cutting.length) tail.push('G30');
+                tail.push('M30', '%', '');
+
+                return head.concat(out, tail).join('\n');
             }
 
             return { svg, dxf, gcode };
