@@ -1,0 +1,70 @@
+{
+  "format": "guilloche-dial",
+  "version": 2,
+  "saved": "2026-09-07T03:30:57.409Z",
+  "dial": {
+    "kind": "sample",
+    "name": "Sample dial (34 mm)",
+    "units": "mm"
+  },
+  "settings": {
+    "units": "auto",
+    "joinTolerance": 0.05,
+    "margin": 0.3,
+    "thickness": 0.6,
+    "material": "silver",
+    "gcode": {
+      "arcTolerance": 0.005,
+      "workOffset": "G54",
+      "coolant": "M8",
+      "origin": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    }
+  },
+  "selectedIndex": 0,
+  "layers": [
+    {
+      "id": 1,
+      "type": "arcs",
+      "name": "Barleycorn Arcs (Grain d'Orge)",
+      "enabled": true,
+      "color": "#1c40ce",
+      "cutter": "vee",
+      "depth": 0.12,
+      "angle": 90,
+      "radius": 0.15,
+      "tool": 1,
+      "safeZ": 1,
+      "feed": 300,
+      "plunge": 80,
+      "speed": 10000,
+      "cx": 0,
+      "cy": 0,
+      "rot": 0,
+      "rMin": 0,
+      "rMax": 0,
+      "values": {
+        "rosette-spiral": {
+          "lobes": 40,
+          "amplitude": 0.28,
+          "waveform": "sine",
+          "pitch": 0.42,
+          "innerRadius": 1.5,
+          "phaseDrift": 0
+        },
+        "arcs": {
+          "divisions": 16,
+          "arcRadius": 29.6,
+          "span": 160,
+          "rings": 0,
+          "ringSpacing": 3.5,
+          "innerRadius": 3.5,
+          "stagger": 50
+        }
+      }
+    }
+  ]
+}
