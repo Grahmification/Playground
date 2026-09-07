@@ -439,16 +439,6 @@
             background-color: #505050;
         }
 
-        .btn-row {
-            display: flex;
-            gap: 8px;
-        }
-
-        .btn-row > * {
-            flex: 1;
-            min-width: 0;
-        }
-
         .check-row {
             display: flex;
             align-items: center;
@@ -521,6 +511,46 @@
         .panel-toggle:hover {
             background-color: #3c3c3c;
             color: #ffffff;
+        }
+
+        /* Actions that ride in a title row instead of a button under the panel. Same auto
+           margin as .panel-toggle, for the same reason -- no panel has both. */
+        .title-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: auto;
+        }
+
+        /* .panel-toggle's manners at a size that can hold a glyph: no chrome until the
+           pointer is on it, so a title row still reads as a heading rather than a toolbar. */
+        .title-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            width: 20px;
+            height: 20px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #aaaaaa;
+            cursor: pointer;
+        }
+
+        .title-btn:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Stroked rather than filled -- at 13px a solid glyph turns into a blob. The
+           stroke colour is set on a <g> inside each icon, since a `fill` rule on the <svg>
+           itself would outrank a presentation attribute on the same element. */
+        .title-btn svg {
+            display: block;
+            width: 13px;
+            height: 13px;
         }
 
         /* Repeats the panel's own column so the rows keep their spacing once nested, and
@@ -1248,12 +1278,36 @@
         <div class="panel">
             <div class="panel-title panel-title-row">
                 <span>Pattern Layers</span>
+                <!-- Up in the title rather than under the list: they act on the stack as a
+                     whole, and as a pair of glyphs they cost the panel no height at all.
+                     Neither has a label any more, so both lean on title and aria-label. -->
+                <div class="title-actions">
+                    <button id="btn-layer-add" class="title-btn" type="button"
+                            title="Add layer" aria-label="Add layer">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <g fill="none" stroke="currentColor" stroke-width="1.5"
+                               stroke-linecap="round">
+                                <path d="M8 3.5v9M3.5 8h9"/>
+                            </g>
+                        </svg>
+                    </button>
+                    <button id="btn-layer-dup" class="title-btn" type="button"
+                            title="Duplicate layer" aria-label="Duplicate layer">
+                        <!-- Two sheets. The one behind is an open path that starts and
+                             ends on the front sheet's outline, so it is drawn only where
+                             it would actually be seen -- a second closed rectangle would
+                             put lines straight across the front one. -->
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <g fill="none" stroke="currentColor" stroke-width="1.5"
+                               stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="5.8" y="5.8" width="8.4" height="8.4" rx="1.5"/>
+                                <path d="M10.2 5.8V3.3a1.5 1.5 0 0 0-1.5-1.5H3.3a1.5 1.5 0 0 0-1.5 1.5v5.4a1.5 1.5 0 0 0 1.5 1.5h2.5"/>
+                            </g>
+                        </svg>
+                    </button>
+                </div>
             </div>
             <div id="layer-list"></div>
-            <div class="btn-row">
-                <button id="btn-layer-add" class="btn btn-secondary" type="button">Add</button>
-                <button id="btn-layer-dup" class="btn btn-secondary" type="button">Duplicate</button>
-            </div>
         </div>
 
         <!-- Selected layer -->
