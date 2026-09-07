@@ -2832,6 +2832,94 @@
                     }
                 },
 
+                'spiral-vortex': {
+                    label: 'Spiral Vortex',
+                    note: 'A family of Archimedean spirals, each turned an equal share of a turn, ' +
+                          'leading the eye from the centre out to the rim. A lobed modulation on ' +
+                          'top blends the vortex into a rosette.',
+                    params: [
+                        { k: 'arms', label: 'Arms', type: 'number', value: 24, min: 1, max: 400, step: 1,
+                          help: 'How many spirals the family has. Each is the same curve turned by ' +
+                                'its own share of a full turn.' },
+                        { k: 'turns', label: 'Turns to Rim', type: 'number', value: 0.25, step: 0.25,
+                          help: 'Revolutions an arm makes between the start radius and the dial’s ' +
+                                'edge. A fraction of a turn leans the arms; several coils them. ' +
+                                'Negative winds the vortex the other way.' },
+                        { k: 'innerRadius', label: 'Start Radius (mm)', type: 'number', value: 1.5, min: 0, step: 0.5,
+                          help: 'Arms crowd together as they approach the centre, whatever their ' +
+                                'spacing at the rim. Starting them a little out is what keeps the ' +
+                                'middle of the dial clean.' },
+                        { k: 'lobes', label: 'Lobes', type: 'number', value: 12, min: 0, max: 400, step: 1,
+                          help: 'How many lobes the rosette laid over the spiral has. It does ' +
+                                'nothing until the amplitude below is raised off zero.' },
+                        { k: 'amplitude', label: 'Amplitude (mm)', type: 'number', value: 0, step: 0.05,
+                          help: 'How deep the lobes cut into the arms. At zero — where this starts ' +
+                                '— they are plain Archimedean spirals, whatever the lobe count; ' +
+                                'raise it to blend the vortex into a rosette.' },
+                        waveformParam()
+                    ],
+                    generate(p, ctx) {
+                        const arms = Util.clamp(Math.round(p.arms), 1, 400);
+                        const a = Math.max(p.innerRadius, 0);
+                        const lobes = Util.clamp(Math.round(p.lobes), 0, 400);
+                        const amp = lobes >= 1 ? p.amplitude : 0;
+                        const modulated = Math.abs(amp) > 1e-9;
+
+                        // Nothing to lead the eye along: a spiral of no turns is a straight
+                        // ray, and the growth rate for it is a division by zero.
+                        if (Math.abs(p.turns) < 1e-6) return [];
+                        // Started at or past the rim there is no "out to the rim" left to
+                        // draw. Measured against the rim rather than against `reach`, which
+                        // is the corner: between the two the growth rate is near zero and the
+                        // spiral needs thousands of turns to cover the little that is left.
+                        if (ctx.fitRadius <= a) return [];
+
+                        // Turns are counted to the rim, not to the far corner of the outline's
+                        // box: "two turns from the centre out" has to mean two turns of the
+                        // part anyone can see. The drawing still runs on to `reach`, so a dial
+                        // that is not round still fills its corners -- those last turns are
+                        // past the edge and the clipper takes them back.
+                        const b = (ctx.fitRadius - a) / (p.turns * TAU);
+                        // Both carry the sign of `turns`, so a negative winds the other way
+                        // and needs no second case anywhere below: theta runs down from zero
+                        // while b theta still climbs. Capped, because a start radius a hair
+                        // inside the rim still asks for a spiral of thousands of turns, and
+                        // there is no reading one of those on a watch dial.
+                        const thetaMax = Util.clamp((ctx.reach - a) / b, -200 * TAU, 200 * TAU);
+
+                        // Fine enough that the chord out at the rim stays under the tolerance,
+                        // and, where there is a modulation, fine enough that its shortest lobe
+                        // reads as a curve rather than a zigzag. Whichever of the two is
+                        // tighter: a step chosen for the rim alone facets a 200-lobe rosette,
+                        // and one chosen for the lobes alone is wasted on a plain spiral.
+                        let dTheta = CHORD / Math.max(ctx.reach, 1e-6);
+                        if (modulated) dTheta = Math.min(dTheta, TAU / (lobes * 24));
+                        const steps = Util.clamp(Math.ceil(Math.abs(thetaMax) / dTheta), 64, 60000);
+
+                        const out = [];
+                        for (let j = 0; j < arms; j++) {
+                            if (!ctx.room()) break;
+                            const turn = (j / arms) * TAU;
+                            const pts = [];
+                            const budget = Math.min(steps, ctx.left());
+                            for (let i = 0; i <= budget; i++) {
+                                const th = thetaMax * (i / steps);
+                                const r = a + b * th +
+                                          (modulated ? amp * Waveform.of(p.waveform, lobes * th) : 0);
+                                // The whole curve is rotated, modulation and all, rather than
+                                // the modulation being read off the absolute angle. That is
+                                // what makes the arms copies of one another; phase happens to
+                                // line them up whenever the arms divide the lobes.
+                                const angle = th + turn;
+                                pts.push(Math.cos(angle) * r, Math.sin(angle) * r);
+                            }
+                            out.push({ pts, closed: false });
+                            ctx.spend(pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
                 'waves': {
                     label: 'Straight-Line Waves',
                     note: 'Straight-line engine turning: parallel passes with the rubber rocking, ' +
@@ -3135,8 +3223,8 @@
 
             const ORDER = [
                 'rosette-spiral', 'rosette-rings', 'spirograph', 'spirograph-field',
-                'waves', 'sunburst', 'concentric', 'crosshatch', 'clous', 'basket',
-                'arcs', 'trace'
+                'spiral-vortex', 'waves', 'sunburst', 'concentric', 'crosshatch',
+                'clous', 'basket', 'arcs', 'trace'
             ];
 
             function defaults(type) {

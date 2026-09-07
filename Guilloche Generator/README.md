@@ -44,6 +44,7 @@ becomes a hole, so centre holes, date windows and subdials are cut around automa
 | Rosette Rings | The same cut as separate closed rings; a phase step between them gives the weave |
 | Spirograph | A hypotrochoid — the flower a pen traces from inside a rolling circle |
 | Spirograph Field | A family of those, nested along the pen offset until they weave; inside or outside |
+| Spiral Vortex | Archimedean spirals turned into a family, leading the eye centre to rim |
 | Straight-Line Waves | Parallel passes with the rubber rocking |
 | Sunburst | Radial rays; add twist for a snailed dial |
 | Concentric Circles | Plain turned circles; offset the centre for côtes circulaires |
