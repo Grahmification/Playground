@@ -20,8 +20,24 @@
             overscroll-behavior: none;
         }
 
+        /* The one place the bar's height is written down, and the only place that needs it:
+           the drawer is positioned against the grid row rather than against a repeat of
+           this number, so there is nothing here for it to drift out of step with. */
+        :root {
+            --topbar-h: 44px;
+        }
+
+        /* Two rows: the bar across the full width, then the sidebar beside the 3D view.
+           A grid rather than a column holding a row, so the sidebar and the viewport stay
+           direct children of the body and keep the layout one level deep.
+
+           Column 1 is `auto`, so when the sidebar goes out of flow to become a drawer the
+           column collapses to nothing and the viewport keeps the whole width -- which is
+           what stops the canvas resizing every time the drawer opens. */
         body {
-            display: flex;
+            display: grid;
+            grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+            grid-template-columns: auto minmax(0, 1fr);
             /* dvh is what is on screen now, with a phone's toolbars showing; vh is the
                fallback for browsers that do not know the unit. */
             height: 100vh;
@@ -31,9 +47,29 @@
             color: #e0e0e0;
         }
 
+        /* --- Top bar ------------------------------------------------------------
+           Outside every scroller and outside the drawer, so the title, the document
+           actions and the exports are in the same place whatever the sidebar is doing.
+           Deliberately shallow -- a strip rather than a header, since every pixel of it
+           comes off the 3D view. */
+        #topbar {
+            grid-row: 1;
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            background-color: #252526;
+            border-bottom: 1px solid #3c3c3c;
+            /* Over the drawer (30) and its backdrop (25), which at narrow widths are
+               positioned against the body and would otherwise cover the bar. */
+            z-index: 40;
+        }
+
         #sidebar {
+            grid-row: 2;
+            grid-column: 1;
             width: 330px;
-            flex: 0 0 auto;
             background-color: #252526;
             border-right: 1px solid #3c3c3c;
             display: flex;
@@ -44,64 +80,185 @@
             overflow-y: auto;
         }
 
-        /* The rule and the padding under it belong to the row rather than the heading, so
-           the collapse button sits above the line with it instead of beside it. */
-        .sidebar-head {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            border-bottom: 1px solid #3c3c3c;
-            padding-bottom: 8px;
+        /* Takes the free space between the drawer button and the actions, and gives it all
+           up again before any of them wrap: at a phone's width there is not room for the
+           whole name, and a truncated title costs less than a two-line bar. */
+        #topbar h1 {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-size: 1.05rem;
+            color: #ffffff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
-        h1 {
-            font-size: 1.15rem;
-            color: #ffffff;
+        /* Everything on the right of the bar: the document actions as icons, then the
+           exports. They are here rather than in a panel because they act on the whole
+           design rather than on any one part of it. */
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
+            gap: 6px;
+            /* Only does anything at the width where the title is taken out of the flow --
+               above that the title's own flex-grow has already eaten the free space. */
+            margin-left: auto;
+        }
+
+        /* Load and save, and the positioning context for the message they leave behind. */
+        .doc-actions {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
+            gap: 6px;
+        }
+
+        /* The result of the last load or save, hung under the two buttons it is about. It
+           overhangs the bar rather than sitting inside it -- there is no room for a
+           sentence up there, and a bar that changed height whenever it had something to
+           say would shove the 3D view down with it. Inside #topbar's stacking context, so
+           it clears the drawer without needing a z-index of its own. */
+        #settings-status {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            width: max-content;
+            max-width: 320px;
+            padding: 8px 10px;
+            border: 1px solid #3c3c3c;
+            border-left: 3px solid #4ec9b0;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+            color: #e0e0e0;
+            font-size: 0.78rem;
+            line-height: 1.35;
+            text-align: left;
+            /* Held out of sight rather than display:none, so the fade has something to
+               animate. visibility is what keeps the invisible panel from taking a click
+               meant for the view behind it, and it is held back until the fade finishes
+               so it does not cut it short. */
+            visibility: hidden;
+            opacity: 0;
+            transform: translateY(-4px);
+            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0.18s;
+        }
+
+        /* Wraps rather than pushing the close button off the panel: the skipped-layer
+           warning is a sentence and a half, and none of it is bounded. */
+        #settings-status-text {
+            flex: 1 1 auto;
             min-width: 0;
             overflow-wrap: anywhere;
         }
 
-        /* Only ever shown by the narrow-width rules at the end of the sheet. Sized for a
-           fingertip rather than matching the 18px .panel-toggle glyphs. */
-        /* The document actions in the title row: save and load, as icons. They sit with the
-           heading rather than in a panel of their own because they act on the whole design
-           rather than on any one part of it. The auto margin lives here rather than on
-           .sidebar-toggle, so the group and the toggle stay together on the right instead of
-           splitting the free space between them. */
-        .head-actions {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            margin-left: auto;
+        #settings-status.show {
+            visibility: visible;
+            opacity: 1;
+            transform: none;
+            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s;
         }
 
+        /* A skipped layer or a file that would not read. The same panel in a different
+           colour, and the only state that stays on screen -- which is what the close
+           button is for, so it is only ever shown here. */
+        #settings-status.bad {
+            border-left-color: #e06c6c;
+            color: #f0c8c8;
+        }
+
+        #settings-status:not(.bad) .toast-close {
+            display: none;
+        }
+
+        .toast-close {
+            flex: 0 0 auto;
+            width: 18px;
+            height: 18px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #909090;
+            font-size: 0.7rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .toast-close:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Divides the two groups -- what the design is stored as, and what it is handed
+           to a machine as. */
+        .topbar-sep {
+            flex: 0 0 auto;
+            width: 1px;
+            height: 20px;
+            margin: 0 2px;
+            background-color: #3c3c3c;
+        }
+
+        /* .btn is a full-width block built for the sidebar's column; a bar wants buttons
+           that are as wide as their own labels and no wider. */
+        .topbar-btn {
+            flex: 0 0 auto;
+            padding: 5px 10px;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 0.8rem;
+            line-height: 1.2;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .topbar-btn:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Filled with the accent rather than the bar's own greys: these two are the only
+           controls up here that are worth finding in a hurry, and as icons alone they have
+           no label to be found by. The same fill, hover and fade as .btn -- this is a
+           square version of the primary button, not a treatment of its own. */
         .icon-btn {
             display: flex;
             align-items: center;
             justify-content: center;
             flex: 0 0 auto;
-            width: 28px;
-            height: 28px;
+            width: 30px;
+            height: 30px;
             padding: 0;
-            border: 1px solid #3c3c3c;
+            border: none;
             border-radius: 4px;
-            background-color: #2b2b2b;
-            color: #e0e0e0;
+            background-color: #0e639c;
+            color: #ffffff;
             cursor: pointer;
+            transition: background 0.2s;
         }
 
         .icon-btn:hover {
-            background-color: #3c3c3c;
-            color: #ffffff;
+            background-color: #1177bb;
         }
 
         .icon-btn svg {
             display: block;
-            width: 15px;
-            height: 15px;
+            width: 17px;
+            height: 17px;
             fill: currentColor;
         }
 
+        /* The one control that both opens and closes the drawer, and the only thing in the
+           bar that narrow widths add. Shown by the rules at the end of the sheet; sized for
+           a fingertip rather than matching the 28px icon buttons beside it. */
         .sidebar-toggle {
             display: none;
             flex: 0 0 auto;
@@ -114,7 +271,7 @@
             border-radius: 4px;
             background-color: #2b2b2b;
             color: #e0e0e0;
-            font-size: 0.9rem;
+            font-size: 1rem;
             line-height: 1;
             cursor: pointer;
         }
@@ -124,39 +281,17 @@
             color: #ffffff;
         }
 
-        /* The only part of the sidebar left on screen once it is collapsed, and likewise
-           shown only by the narrow-width rules. Floats over the 3D view, so it is opaque
-           enough to stay legible against whatever is drawn behind it. */
-        .sidebar-open {
-            display: none;
-            position: absolute;
-            top: 12px;
-            left: 12px;
-            z-index: 20;
-            align-items: center;
-            justify-content: center;
-            width: 40px;
-            height: 40px;
-            padding: 0;
-            border: 1px solid #3c3c3c;
-            border-radius: 6px;
-            background-color: rgba(37, 37, 38, 0.92);
-            color: #e0e0e0;
-            font-size: 1.1rem;
-            line-height: 1;
-            cursor: pointer;
-        }
-
-        .sidebar-open:hover {
-            background-color: #3c3c3c;
-            color: #ffffff;
-        }
-
         /* Dismisses the drawer, and darkens the view behind it so it reads as covered
-           rather than merely obscured. Same narrow-widths-only story. */
+           rather than merely obscured. Same narrow-widths-only story.
+
+           Placed in the grid like the drawer it belongs to, for the same reason: that is
+           what makes `inset: 0` mean the row under the bar rather than the whole body.
+           Spans both columns, though column one is empty whenever this is on screen. */
         #sidebar-backdrop {
             display: none;
             position: absolute;
+            grid-row: 2;
+            grid-column: 1 / -1;
             inset: 0;
             z-index: 25;
             background-color: rgba(0, 0, 0, 0.5);
@@ -178,6 +313,41 @@
         .control-group label {
             font-size: 0.85rem;
             color: #aaaaaa;
+        }
+
+        /* --- Scrubbing ----------------------------------------------------------
+           A label you can drag sideways to move the value under it. The dotted rule
+           and the cursor are the whole affordance: a scrub is invisible otherwise,
+           and a control nobody knows is there is not a control.
+
+           `pan-y` rather than `none`, so a finger going down the sidebar still
+           scrolls it and only a sideways drag comes here. */
+        label.scrub {
+            cursor: ew-resize;
+            user-select: none;
+            touch-action: pan-y;
+            border-bottom: 1px dotted #555555;
+            /* Shrinks the underline to the words. Without it a label stretches the
+               width of the column it is in and trails a rule across empty space. */
+            width: fit-content;
+        }
+
+        label.scrub:hover {
+            color: #e0e0e0;
+            border-bottom-color: #8a8a8a;
+        }
+
+        label.scrub.scrub-active {
+            color: #ffffff;
+            border-bottom-color: #0e639c;
+        }
+
+        /* The pointer is captured for the length of a drag, so it can be anywhere on
+           screen by the time it stops -- the cursor has to be set on everything, not
+           just on the label it started from. */
+        body.scrubbing,
+        body.scrubbing * {
+            cursor: ew-resize !important;
         }
 
         /* A label with a help affordance beside it. Also the positioning context for the
@@ -305,16 +475,6 @@
             background-color: #505050;
         }
 
-        .btn-row {
-            display: flex;
-            gap: 8px;
-        }
-
-        .btn-row > * {
-            flex: 1;
-            min-width: 0;
-        }
-
         .check-row {
             display: flex;
             align-items: center;
@@ -387,6 +547,53 @@
         .panel-toggle:hover {
             background-color: #3c3c3c;
             color: #ffffff;
+        }
+
+        /* Actions that ride in a title row instead of a button under the panel. Same auto
+           margin as .panel-toggle, for the same reason -- no panel has both. */
+        .title-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: auto;
+        }
+
+        /* .panel-toggle's manners at a size that can hold a glyph: no chrome until the
+           pointer is on it, so a title row still reads as a heading rather than a toolbar. */
+        .title-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            width: 20px;
+            height: 20px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #aaaaaa;
+            cursor: pointer;
+        }
+
+        .title-btn:hover:not(:disabled) {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Nothing selected, so nothing to put back. Dimmed rather than removed: a control
+           that comes and goes moves the heading beside it every time. */
+        .title-btn:disabled {
+            opacity: 0.35;
+            cursor: default;
+        }
+
+        /* Stroked rather than filled -- at 13px a solid glyph turns into a blob. The
+           stroke colour is set on a <g> inside each icon, since a `fill` rule on the <svg>
+           itself would outrank a presentation attribute on the same element. */
+        .title-btn svg {
+            display: block;
+            width: 13px;
+            height: 13px;
         }
 
         /* Repeats the panel's own column so the rows keep their spacing once nested, and
@@ -691,7 +898,8 @@
         }
 
         #viewport {
-            flex: 1 1 auto;
+            grid-row: 2;
+            grid-column: 2;
             position: relative;
             display: flex;
             flex-direction: column;
@@ -831,11 +1039,14 @@
 
         /* Narrow widths. A 330px sidebar is most of a phone screen, so it becomes a drawer
            that slides over the 3D view and is dismissed by the backdrop behind it. Out of
-           flow, so #viewport keeps the whole screen in both states and the canvas never
-           resizes; collapsed, nothing of it is left on screen but #sidebar-open. */
+           flow, so #viewport keeps the whole width in both states and the canvas never
+           resizes; collapsed, nothing of it is left on screen at all -- the button that
+           brings it back is in the bar, which is there either way. */
         @media (max-width: 700px) {
-            /* The drawer and backdrop measure against this. Not `fixed`: that would
-               measure the layout viewport and run under the browser's toolbars. */
+            /* What makes the body the drawer's containing block -- and so, since both the
+               drawer and the backdrop name a grid row, what hands them the area under the
+               bar to measure against. Not `fixed`: that would measure the layout viewport
+               and run under the browser's toolbars. */
             body {
                 position: relative;
             }
@@ -844,6 +1055,38 @@
                 display: flex;
             }
 
+            #topbar {
+                gap: 8px;
+                padding: 0 10px;
+            }
+
+            #topbar h1 {
+                font-size: 0.95rem;
+            }
+
+            .topbar-btn {
+                padding: 5px 8px;
+            }
+
+            /* Hung from the two buttons, there is not enough screen to the left of them
+               for a sentence -- the panel would run off the edge. `fixed` steps out of
+               the containing block and spans the width under the bar instead, which is
+               what a message on a phone wants to do anyway. It still paints inside
+               #topbar's stacking context, so it stays over the drawer. */
+            #settings-status {
+                position: fixed;
+                top: calc(var(--topbar-h) + 8px);
+                left: 10px;
+                right: 10px;
+                width: auto;
+                max-width: none;
+            }
+
+            /* The offsets are against the second grid row, not against the body: an
+               absolutely positioned child of a grid container that names a definite row
+               and column is laid out inside that grid area rather than inside the padding
+               box. So `top: 0` is already under the bar, and adding the bar's height on
+               top of it would push the drawer down by it twice. */
             #sidebar {
                 position: absolute;
                 top: 0;
@@ -864,17 +1107,8 @@
                 transition: transform 0.2s ease, visibility 0s linear 0.2s;
             }
 
-            body.sidebar-collapsed .sidebar-open {
-                display: flex;
-            }
-
             body:not(.sidebar-collapsed) #sidebar-backdrop {
                 display: block;
-            }
-
-            /* Stops short of the floating sidebar button rather than the edge of the view. */
-            #overlay-stack {
-                max-width: calc(100vw - 76px);
             }
 
             /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
@@ -907,16 +1141,20 @@
                 display: block;
                 margin-bottom: 2px;
             }
+        }
 
-            /* Down to the bottom-left. The top-left corner belongs to the button that
-               brings the drawer back, and the readout stack is already using the width
-               beside it. The ViewCube has the other bottom corner.
-
-               `top: auto` matters -- an absolutely positioned box with both offsets set
-               stretches between them instead of sizing to its contents. */
-            #view-toggles {
-                top: auto;
-                bottom: 12px;
+        /* No room left for the name once the drawer button and both groups of actions have
+           taken their width. Taken out of the flow rather than out of the document: the
+           heading is still read out, it simply stops asking for space. `display: none`
+           would drop it from the outline as well, and the page would have no <h1> at all
+           on a phone. */
+        @media (max-width: 480px) {
+            #topbar h1 {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                overflow: hidden;
+                clip-path: inset(50%);
             }
         }
     </style>
@@ -926,42 +1164,68 @@
 </head>
 <body>
 
-    <!-- Both are narrow widths only, where the sidebar is a drawer: the button that brings
-         it back, and the backdrop that sends it away. -->
-    <button id="sidebar-open" class="sidebar-open" type="button"
-            title="Show sidebar" aria-label="Show sidebar" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
-    <div id="sidebar-backdrop"></div>
-
-    <div id="sidebar">
-        <div class="sidebar-head">
-            <h1>Dial Guilloch&eacute;</h1>
-            <div class="head-actions">
+    <!-- The bar. Everything in it acts on the whole design rather than on any one part of
+         it, which is why none of it is in the sidebar with the settings it would otherwise
+         sit among. -->
+    <header id="topbar">
+        <!-- Narrow widths only, where the sidebar is a drawer. One button for both
+             directions: at this size there is nowhere else for a "show" control to live,
+             so the same control has to serve. -->
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button"
+                title="Hide sidebar" aria-label="Toggle sidebar"
+                aria-expanded="true" aria-controls="sidebar">&#9776;</button>
+        <h1>Guilloch&eacute; Generator</h1>
+        <div class="topbar-actions">
+            <!-- Grouped, and the anchor the message hangs from: it is about these two
+                 buttons, so it lines up under them rather than under the bar at large. -->
+            <div class="doc-actions">
                 <!-- A real button rather than a label over the file input, so it can be
                      reached from the keyboard: the input itself is display:none and so is
                      not focusable, which leaves a bare label unreachable. -->
                 <button id="btn-load-settings" class="icon-btn" type="button"
                         title="Load settings" aria-label="Load settings">
+                    <!-- A folder, for open. -->
                     <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M8.75 9.5h-1.5V4.31L5.03 6.53 3.97 5.47 8 1.44l4.03 4.03-1.06 1.06L8.75 4.31z"/>
-                        <path d="M2.5 12h11v1.5h-11z"/>
+                        <path d="M1.5 3.5c0-.55.45-1 1-1h3.3c.32 0 .62.15.8.4l.9 1.2h6c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1h-11c-.55 0-1-.45-1-1z"/>
                     </svg>
                 </button>
                 <input type="file" id="settings-file" accept=".json,application/json" hidden>
                 <button id="btn-save-settings" class="icon-btn" type="button"
                         title="Save settings" aria-label="Save settings">
+                    <!-- A floppy disc, for save. One path rather than three: the shutter
+                         and the label are holes punched in the body by the even-odd rule,
+                         since everything in here is the same colour and a second solid
+                         shape drawn over the first would be invisible. -->
                     <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M7.25 1.5h1.5v5.19l2.22-2.22 1.06 1.06L8 9.56 3.97 5.53l1.06-1.06L7.25 6.69z"/>
-                        <path d="M2.5 12h11v1.5h-11z"/>
+                        <path fill-rule="evenodd" d="M2.5 1.5h8L14.5 5.5v8a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM5.5 2.5h4v3h-4zM4 8.5h8v5h-8z"/>
                     </svg>
                 </button>
+                <!-- What the last load or save had to say. `role="status"` rather than an
+                     alert: it is announced when it appears without interrupting whatever
+                     is being read, which is right for a confirmation and for a bad file
+                     alike. -->
+                <div id="settings-status" role="status">
+                    <span id="settings-status-text"></span>
+                    <button id="settings-status-close" class="toast-close" type="button"
+                            title="Dismiss" aria-label="Dismiss">&#10005;</button>
+                </div>
             </div>
-            <button id="sidebar-toggle" class="sidebar-toggle" type="button"
-                    title="Hide sidebar" aria-expanded="true" aria-controls="sidebar">&#9664;</button>
+            <span class="topbar-sep" aria-hidden="true"></span>
+            <button id="btn-export-svg" class="topbar-btn" type="button"
+                    title="Export SVG">SVG</button>
+            <button id="btn-export-dxf" class="topbar-btn" type="button"
+                    title="Export DXF">DXF</button>
+            <!-- The ellipsis is kept: it is the one export of the three that asks a page
+                 of questions before it writes anything. -->
+            <button id="btn-export-gcode" class="topbar-btn" type="button"
+                    title="Export G-Code">G-Code&hellip;</button>
         </div>
-        <!-- Kept, though the panel around it is gone: this is where a load reports what it
-             restored, and more to the point where it reports that a file could not be read.
-             Hidden until there is something to say, so it costs no room. -->
-        <div id="settings-status" class="hint" hidden></div>
+    </header>
+
+    <!-- Narrow widths only: what sends the drawer away again. -->
+    <div id="sidebar-backdrop"></div>
+
+    <div id="sidebar">
         <!-- Rehoused here when Statistics moved over the view. It is a notice rather than a
              number, and this is where the notices are; the panel it used to sit in had no
              claim on it beyond both being about the last generation. -->
@@ -1057,18 +1321,50 @@
         <div class="panel">
             <div class="panel-title panel-title-row">
                 <span>Pattern Layers</span>
+                <!-- Up in the title rather than under the list: they act on the stack as a
+                     whole, and as a pair of glyphs they cost the panel no height at all.
+                     Neither has a label any more, so both lean on title and aria-label. -->
+                <div class="title-actions">
+                    <button id="btn-layer-add" class="title-btn" type="button"
+                            title="Add layer" aria-label="Add layer">
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <g fill="none" stroke="currentColor" stroke-width="1.5"
+                               stroke-linecap="round">
+                                <path d="M8 3.5v9M3.5 8h9"/>
+                            </g>
+                        </svg>
+                    </button>
+                    <button id="btn-layer-dup" class="title-btn" type="button"
+                            title="Duplicate layer" aria-label="Duplicate layer">
+                        <!-- Two sheets. The one behind is an open path that starts and
+                             ends on the front sheet's outline, so it is drawn only where
+                             it would actually be seen -- a second closed rectangle would
+                             put lines straight across the front one. -->
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <g fill="none" stroke="currentColor" stroke-width="1.5"
+                               stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="5.8" y="5.8" width="8.4" height="8.4" rx="1.5"/>
+                                <path d="M10.2 5.8V3.3a1.5 1.5 0 0 0-1.5-1.5H3.3a1.5 1.5 0 0 0-1.5 1.5v5.4a1.5 1.5 0 0 0 1.5 1.5h2.5"/>
+                            </g>
+                        </svg>
+                    </button>
+                </div>
             </div>
             <div id="layer-list"></div>
-            <div class="btn-row">
-                <button id="btn-layer-add" class="btn btn-secondary" type="button">Add</button>
-                <button id="btn-layer-dup" class="btn btn-secondary" type="button">Duplicate</button>
-            </div>
         </div>
 
         <!-- Selected layer -->
         <div class="panel">
             <div class="panel-title panel-title-row">
                 <span id="layer-title">Layer Settings</span>
+                <!-- Beside the heading it belongs to rather than out at the right margin:
+                     it acts on the section under it, and there are three of them down this
+                     panel. The reset glyph is defined once, in <defs> at the foot of the
+                     body, and each button points at it. -->
+                <button id="reset-params" class="title-btn" type="button"
+                        title="Reset pattern parameters" aria-label="Reset pattern parameters">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#icon-reset"/></svg>
+                </button>
             </div>
             <div class="control-group">
                 <label for="layer-type">Pattern</label>
@@ -1084,20 +1380,24 @@
             <div id="layer-placement" class="panel-body">
                 <div class="panel-title panel-title-row" style="margin-top:2px">
                     <span>Placement</span>
+                    <button id="reset-placement" class="title-btn" type="button"
+                            title="Reset placement" aria-label="Reset placement">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#icon-reset"/></svg>
+                    </button>
                 </div>
                 <div class="field-pair">
                     <div class="control-group">
-                        <label for="layer-cx">Centre X (mm)</label>
+                        <label class="scrub" for="layer-cx">Centre X (mm)</label>
                         <input type="number" id="layer-cx" value="0" step="0.25">
                     </div>
                     <div class="control-group">
-                        <label for="layer-cy">Centre Y (mm)</label>
+                        <label class="scrub" for="layer-cy">Centre Y (mm)</label>
                         <input type="number" id="layer-cy" value="0" step="0.25">
                     </div>
                 </div>
                 <div class="field-pair">
                     <div class="control-group">
-                        <label for="layer-rot">Rotation (&deg;)</label>
+                        <label class="scrub" for="layer-rot">Rotation (&deg;)</label>
                         <input type="number" id="layer-rot" value="0" step="1">
                     </div>
                     <div class="control-group">
@@ -1118,6 +1418,10 @@
 
             <div class="panel-title panel-title-row" style="margin-top:2px">
                 <span>Engraving Cutter</span>
+                <button id="reset-cutter" class="title-btn" type="button"
+                        title="Reset cutter" aria-label="Reset cutter">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#icon-reset"/></svg>
+                </button>
             </div>
             <div class="field-pair">
                 <div class="control-group">
@@ -1136,7 +1440,7 @@
                 </div>
                 <div class="control-group">
                     <div class="label-row">
-                        <label for="layer-depth">Tip Depth (mm)</label>
+                        <label class="scrub" for="layer-depth">Tip Depth (mm)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">How far the tip
                             of the cutter drops below the dial face. Real guilloch&eacute; runs a
                             few hundredths of a millimetre deep; exaggerate it to read the pattern
@@ -1148,7 +1452,7 @@
             <div class="field-pair">
                 <div class="control-group" id="cutter-angle-group">
                     <div class="label-row">
-                        <label for="layer-angle">Included Angle (&deg;)</label>
+                        <label class="scrub" for="layer-angle">Included Angle (&deg;)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">The full angle
                             between the two flanks of the chamfer mill &mdash; 90&deg; and 60&deg;
                             are the usual grinds. A narrower point cuts a narrower groove at the
@@ -1158,7 +1462,7 @@
                 </div>
                 <div class="control-group" id="cutter-radius-group" hidden>
                     <div class="label-row">
-                        <label for="layer-radius">Tip Radius (mm)</label>
+                        <label class="scrub" for="layer-radius">Tip Radius (mm)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">The ball's
                             radius, so half the cutter diameter. Taken deeper than the radius the
                             groove stops widening &mdash; a ball nose cannot open a cut wider than
@@ -1168,18 +1472,6 @@
                 </div>
             </div>
             <div class="stats-row"><span>Cut width:</span> <span id="cut-width" class="stats-value">&mdash;</span></div>
-        </div>
-
-        <!-- Export -->
-        <div class="panel">
-            <div class="panel-title panel-title-row">
-                <span>Export</span>
-            </div>
-            <div class="btn-row">
-                <button id="btn-export-svg" class="btn btn-secondary" type="button">SVG</button>
-                <button id="btn-export-dxf" class="btn btn-secondary" type="button">DXF</button>
-            </div>
-            <button id="btn-export-gcode" class="btn btn-secondary" type="button">G-Code&hellip;</button>
         </div>
     </div>
 
@@ -1293,6 +1585,24 @@
             <button id="gcode-write" class="btn" type="button">Write G-Code</button>
         </div>
     </dialog>
+
+    <!-- Icons used more than once, drawn here and pointed at with <use>. Only the reset
+         arrow so far -- it appears above all three sections of the layer panel, and three
+         copies of the same path is three chances for them to stop matching.
+
+         The <svg> is not `hidden`: that would take the whole subtree out of rendering and
+         a <use> pointing into it would draw nothing. It has no size instead. -->
+    <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+        <defs>
+            <!-- A circle open at the top right, travelled anticlockwise from the top, with
+                 the arrowhead where the stroke starts. -->
+            <g id="icon-reset" fill="none" stroke="currentColor" stroke-width="1.5"
+               stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 3a5 5 0 1 0 3.54 1.46"/>
+                <path d="M9.8 1.9 8 3l1.8 1.1"/>
+            </g>
+        </defs>
+    </svg>
 
     <script>
         /* ============================================================================
@@ -1530,9 +1840,13 @@
             };
 
             // Cycled when a new layer is added, so two layers never open the same colour.
+            // Purple leads: every dial finish here is a light metal bar one, so a warm
+            // light colour is the worst thing to start on -- the amber that used to be
+            // first all but vanished against gold and brass. It is still in the cycle, but
+            // seventh, by which point the layers around it are saying which is which.
             const LAYER_COLORS = [
-                '#ffc94a', '#4ec9b0', '#7fb2ff', '#e07ad0',
-                '#9ec44e', '#e0904e', '#8f7ae0', '#5ac8e0'
+                '#a06ee8', '#4ec9b0', '#7fb2ff', '#e07ad0',
+                '#9ec44e', '#e0904e', '#ffc94a', '#5ac8e0'
             ];
 
             return {
@@ -2441,11 +2755,16 @@
         })();
         // --- Patterns ----------------------------------------------------------------
         // The generators, each with the schema of its own parameters. A generator draws in
-        // its layer's local frame, centred on the origin, and is told only how far out it
-        // may need to reach (`ctx.reach`). It never asks where the dial's edge is: drawing
-        // past it is expected, and Clipper cuts it back. That is what keeps "the pattern
-        // cannot leave the dial" a property of the program rather than of ten generators
-        // each having remembered to check.
+        // its layer's local frame, centred on the origin, and is told only two distances:
+        // how far out it may need to draw to cover the dial (`ctx.reach`, the far corner of
+        // the outline's box) and how big a single figure can be drawn here before it starts
+        // hanging off (`ctx.fitRadius`, the largest circle about the layer's centre that
+        // still fits that box). A pattern that fills wants the first; a pattern that scales
+        // one figure to the dial wants the second, and on a round dial the first is half
+        // again too big. Neither says where the edge actually is: drawing past it is
+        // expected, and Clipper cuts it back. That is what keeps "the pattern cannot leave
+        // the dial" a property of the program rather than of ten generators each having
+        // remembered to check.
         //
         // One pattern is the exception, and says so in its own definition rather than being
         // special-cased anywhere else:
@@ -2464,6 +2783,11 @@
         const Patterns = (() => {
             const TAU = Math.PI * 2;
             const DEG = Math.PI / 180;
+
+            // How long a chord a curve sampled by length is allowed to leave, in mm. Well
+            // under the narrowest cut anyone would put on a dial, so the facets are always
+            // finer than the groove that hides them.
+            const CHORD = 0.08;
 
             const waveformParam = (value = 'sine') => ({
                 k: 'waveform', label: 'Cam Profile', type: 'select', value,
@@ -2691,6 +3015,291 @@
                             }
                             out.push({ pts, closed: budget >= steps });
                             ctx.spend(pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
+                'spirograph-field': {
+                    label: 'Spirograph Field',
+                    note: 'A family of roulettes nested along the pen offset: the same two circles ' +
+                          'drawn again and again with the pen moved in a little each time, so the ' +
+                          'figures cross and weave. The rolling circle may run inside the fixed ' +
+                          'one or around the outside of it.',
+                    params: [
+                        { k: 'mode', label: 'Rolling Circle', type: 'select', value: 'inside',
+                          options: [['inside', 'Inside (hypotrochoid)'], ['outside', 'Outside (epitrochoid)']],
+                          help: 'Inside gives the flower that folds back on itself; outside gives ' +
+                                'the looping, pointed star. Every other parameter means the same ' +
+                                'thing to both.' },
+                        { k: 'ringR', label: 'Fixed Radius', type: 'number', value: 60, min: 1, step: 1 },
+                        { k: 'rollR', label: 'Rolling Radius', type: 'number', value: 24, min: 1, step: 1,
+                          help: 'What this shares with the fixed radius decides everything. 60 and ' +
+                                '24 share 12, so the figure closes in 2 turns as a plain 5-pointed ' +
+                                'star — where this starts. 60 and 23 share nothing, and one curve ' +
+                                'winds 23 times into a 60-petal weave instead. Moving it by one ' +
+                                'changes the whole figure.' },
+                        { k: 'penD', label: 'Pen Offset', type: 'number', value: 18, min: 0, step: 1 },
+                        { k: 'nest', label: 'Nested Copies', type: 'number', value: 10, min: 1, max: 400, step: 1,
+                          help: 'One copy is a single figure. Past that each is drawn with the pen ' +
+                                'stepped over, and it is where they cross that the weave appears.' },
+                        { k: 'penStep', label: 'Pen Step / copy', type: 'number', value: -1.2, step: 0.1,
+                          help: 'How far the pen moves between copies — the axis the family nests ' +
+                                'along. Negative closes the petals in toward a plain circle; ' +
+                                'positive opens them out. Zero draws the same figure every time.' },
+                        { k: 'drift', label: 'Phase Drift (°/copy)', type: 'number', value: 3, step: 1,
+                          help: 'Turns each copy further round than the last. At zero they stack ' +
+                                'petal on petal; half a petal apart is what makes the moiré.' },
+                        { k: 'radialStep', label: 'Shrink / copy (mm)', type: 'number', value: 0, min: 0, step: 0.1,
+                          help: 'Scales each copy down as well, for a spiral tunnel rather than a ' +
+                                'rosette. Leave at zero for guilloché: a scaled copy is the same ' +
+                                'figure again, and stepping the size linearly crowds most of them ' +
+                                'into the middle few millimetres.' },
+                        { k: 'fit', label: 'Scale to fit dial', type: 'check', value: true },
+                        { k: 'outerRadius', label: 'Outer Radius (mm)', type: 'number', value: 15, min: 0.1, step: 0.5,
+                          help: 'How far the widest copy reaches, when it is not being fitted to ' +
+                                'the dial.' }
+                    ],
+                    generate(p, ctx) {
+                        const R = Math.max(p.ringR, 0.001);
+                        const r = Math.max(p.rollR, 0.001);
+                        const d = Math.max(p.penD, 0);
+
+                        // Rolling outside the fixed circle adds the two radii where rolling
+                        // inside subtracts them, and reverses the pen's turn against the
+                        // carrier's. Those two signs are the entire difference between a
+                        // hypotrochoid and an epitrochoid, so they are taken once here and
+                        // nothing below has to know which curve it is drawing.
+                        const outside = p.mode === 'outside';
+                        const carrier = outside ? R + r : R - r;
+                        const penSign = outside ? -1 : 1;
+                        const ratio = carrier / r;
+                        // Equal radii rolling inside pin the rolling circle in place: the
+                        // carrier is zero, the pen never turns, and the figure is a point.
+                        // Returned empty rather than drawn, or every copy is a few thousand
+                        // coincident vertices charged to the budget.
+                        if (Math.abs(carrier) < 1e-9) return [];
+
+                        // How many turns before the pen comes back to where it started, and
+                        // with it how dense the figure is. Everything the pattern looks like
+                        // is decided here: 60 and 23 share nothing, so one curve winds 23
+                        // times into a 60-petal weave, while 60 and 24 share 12 and close in
+                        // two turns as a bare 5-pointed star. Rounding to integers is what
+                        // keeps it finite for the arbitrary decimals the fields allow.
+                        const revs = Util.clamp(Math.round(r) / Util.gcd(R, r), 1, 300);
+
+                        const nest = Util.clamp(Math.round(p.nest), 1, 400);
+                        const drift = p.drift * DEG;
+                        const shrink = Math.max(p.radialStep, 0);
+
+                        // The pen offset per copy: the axis the family nests along. Moving
+                        // the pen rather than the scale is the whole point -- these curves
+                        // are genuinely different shapes over one shared carrier circle, so
+                        // they cross each other and bunch into an envelope. Scaled copies are
+                        // all the same figure again, and nest into a tunnel instead.
+                        const pens = [];
+                        let widest = 0;
+                        for (let k = 0; k < nest; k++) {
+                            const pen = Math.max(d + k * p.penStep, 0);
+                            pens.push(pen);
+                            widest = Math.max(widest, Math.abs(carrier) + pen);
+                        }
+
+                        // One scale for the whole family, taken from its widest member.
+                        // Rescaling each copy to a radius of its own would undo the nesting
+                        // that the pen step just created.
+                        const fitTo = p.fit ? ctx.fitRadius : Math.max(p.outerRadius, 0.1);
+                        const unit = fitTo / Math.max(widest, 1e-6);
+
+                        const out = [];
+                        for (let k = 0; k < nest; k++) {
+                            if (!ctx.room()) break;
+                            const pen = pens[k];
+                            const scale = unit * Math.max(1 - (k * shrink) / Math.max(fitTo, 1e-6), 0);
+                            // Only ever shrinking, so the first copy with nothing left to
+                            // draw is the last: stopping beats skipping.
+                            if (scale <= 1e-9) break;
+                            // Sampled by the chord it leaves rather than by a count per turn.
+                            // A 23-turn figure and a 2-turn one are nothing like the same
+                            // amount of curve, and sampling them alike either facets the one
+                            // or wastes the budget on the other. The pen's top speed bounds
+                            // the arc length, which is enough: overshooting costs points,
+                            // undershooting shows, and only one of those is visible.
+                            const span = Math.abs(carrier) + Math.abs(ratio) * pen;
+                            const steps = Util.clamp(
+                                Math.ceil((revs * TAU * span * scale) / CHORD), 64, 60000);
+                            const turn = k * drift;
+                            const ct = Math.cos(turn);
+                            const st = Math.sin(turn);
+                            const pts = [];
+                            const budget = Math.min(steps, ctx.left());
+                            for (let i = 0; i <= budget; i++) {
+                                const t = (i / steps) * revs * TAU;
+                                const x = (carrier * Math.cos(t) + penSign * pen * Math.cos(ratio * t)) * scale;
+                                const y = (carrier * Math.sin(t) - pen * Math.sin(ratio * t)) * scale;
+                                pts.push(x * ct - y * st, x * st + y * ct);
+                            }
+                            out.push({ pts, closed: budget >= steps });
+                            ctx.spend(pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
+                'spiral-vortex': {
+                    label: 'Spiral Vortex',
+                    note: 'A family of Archimedean spirals, each turned an equal share of a turn, ' +
+                          'leading the eye from the centre out to the rim. A lobed modulation on ' +
+                          'top blends the vortex into a rosette.',
+                    params: [
+                        { k: 'arms', label: 'Arms', type: 'number', value: 24, min: 1, max: 400, step: 1,
+                          help: 'How many spirals the family has. Each is the same curve turned by ' +
+                                'its own share of a full turn.' },
+                        { k: 'turns', label: 'Turns to Rim', type: 'number', value: 0.25, step: 0.25,
+                          help: 'Revolutions an arm makes between the start radius and the dial’s ' +
+                                'edge. A fraction of a turn leans the arms; several coils them. ' +
+                                'Negative winds the vortex the other way.' },
+                        { k: 'innerRadius', label: 'Start Radius (mm)', type: 'number', value: 1.5, min: 0, step: 0.5,
+                          help: 'Arms crowd together as they approach the centre, whatever their ' +
+                                'spacing at the rim. Starting them a little out is what keeps the ' +
+                                'middle of the dial clean.' },
+                        { k: 'lobes', label: 'Lobes', type: 'number', value: 12, min: 0, max: 400, step: 1,
+                          help: 'How many lobes the rosette laid over the spiral has. It does ' +
+                                'nothing until the amplitude below is raised off zero.' },
+                        { k: 'amplitude', label: 'Amplitude (mm)', type: 'number', value: 0, step: 0.05,
+                          help: 'How deep the lobes cut into the arms. At zero — where this starts ' +
+                                '— they are plain Archimedean spirals, whatever the lobe count; ' +
+                                'raise it to blend the vortex into a rosette.' },
+                        waveformParam()
+                    ],
+                    generate(p, ctx) {
+                        const arms = Util.clamp(Math.round(p.arms), 1, 400);
+                        const a = Math.max(p.innerRadius, 0);
+                        const lobes = Util.clamp(Math.round(p.lobes), 0, 400);
+                        const amp = lobes >= 1 ? p.amplitude : 0;
+                        const modulated = Math.abs(amp) > 1e-9;
+
+                        // Nothing to lead the eye along: a spiral of no turns is a straight
+                        // ray, and the growth rate for it is a division by zero.
+                        if (Math.abs(p.turns) < 1e-6) return [];
+                        // Started at or past the rim there is no "out to the rim" left to
+                        // draw. Measured against the rim rather than against `reach`, which
+                        // is the corner: between the two the growth rate is near zero and the
+                        // spiral needs thousands of turns to cover the little that is left.
+                        if (ctx.fitRadius <= a) return [];
+
+                        // Turns are counted to the rim, not to the far corner of the outline's
+                        // box: "two turns from the centre out" has to mean two turns of the
+                        // part anyone can see. The drawing still runs on to `reach`, so a dial
+                        // that is not round still fills its corners -- those last turns are
+                        // past the edge and the clipper takes them back.
+                        const b = (ctx.fitRadius - a) / (p.turns * TAU);
+                        // Both carry the sign of `turns`, so a negative winds the other way
+                        // and needs no second case anywhere below: theta runs down from zero
+                        // while b theta still climbs. Capped, because a start radius a hair
+                        // inside the rim still asks for a spiral of thousands of turns, and
+                        // there is no reading one of those on a watch dial.
+                        const thetaMax = Util.clamp((ctx.reach - a) / b, -200 * TAU, 200 * TAU);
+
+                        // Fine enough that the chord out at the rim stays under the tolerance,
+                        // and, where there is a modulation, fine enough that its shortest lobe
+                        // reads as a curve rather than a zigzag. Whichever of the two is
+                        // tighter: a step chosen for the rim alone facets a 200-lobe rosette,
+                        // and one chosen for the lobes alone is wasted on a plain spiral.
+                        let dTheta = CHORD / Math.max(ctx.reach, 1e-6);
+                        if (modulated) dTheta = Math.min(dTheta, TAU / (lobes * 24));
+                        const steps = Util.clamp(Math.ceil(Math.abs(thetaMax) / dTheta), 64, 60000);
+
+                        const out = [];
+                        for (let j = 0; j < arms; j++) {
+                            if (!ctx.room()) break;
+                            const turn = (j / arms) * TAU;
+                            const pts = [];
+                            const budget = Math.min(steps, ctx.left());
+                            for (let i = 0; i <= budget; i++) {
+                                const th = thetaMax * (i / steps);
+                                const r = a + b * th +
+                                          (modulated ? amp * Waveform.of(p.waveform, lobes * th) : 0);
+                                // The whole curve is rotated, modulation and all, rather than
+                                // the modulation being read off the absolute angle. That is
+                                // what makes the arms copies of one another; phase happens to
+                                // line them up whenever the arms divide the lobes.
+                                const angle = th + turn;
+                                pts.push(Math.cos(angle) * r, Math.sin(angle) * r);
+                            }
+                            out.push({ pts, closed: false });
+                            ctx.spend(pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
+                'log-spiral': {
+                    label: 'Logarithmic Spiral',
+                    note: 'Equiangular spirals — r = a·e^(bθ), which crosses every radius at the ' +
+                          'same angle, so the figure looks the same at any magnification. A ' +
+                          'counter-rotating second family crosses the first into a lattice of ' +
+                          'lenses.',
+                    params: [
+                        { k: 'arms', label: 'Arms per Family', type: 'number', value: 16, min: 1, max: 400, step: 1 },
+                        { k: 'angle', label: 'Constant Angle (°)', type: 'number', value: 72.97, step: 1,
+                          help: 'The angle the spiral cuts every radius at, and the only thing ' +
+                                'that decides its shape. 90° is a circle; tighter numbers wind ' +
+                                'harder; past 90° it winds the other way. 72.97° is the golden ' +
+                                'spiral, whose radius grows φ-fold every quarter turn.' },
+                        { k: 'innerRadius', label: 'Start Radius (mm)', type: 'number', value: 1.5, min: 0.01, step: 0.5,
+                          help: 'A logarithmic spiral never reaches the centre — it circles in ' +
+                                'forever at ever smaller scale. This is where the arms are cut off.' },
+                        { k: 'mirror', label: 'Counter-rotating family', type: 'check', value: true,
+                          help: 'Draws the mirror image of the family as well. The two cross at ' +
+                                'the same angle everywhere they meet, which is what tiles the dial ' +
+                                'with lenses rather than with a plain swirl.' }
+                    ],
+                    generate(p, ctx) {
+                        const arms = Util.clamp(Math.round(p.arms), 1, 400);
+                        const a = Math.max(p.innerRadius, 0.01);
+                        if (ctx.reach <= a) return [];
+
+                        // b = cot(angle). The angle is the spiral's defining property, the one
+                        // it holds against every radius; b is what the parametrisation wants.
+                        // This is the only line where the two meet.
+                        const alpha = p.angle * DEG;
+                        const sin = Math.sin(alpha);
+                        const cos = Math.cos(alpha);
+                        // A right angle is a circle and a straight one is a radial ray. Neither
+                        // grows out to the rim the way what follows assumes, and both divide by
+                        // zero on the way to saying so.
+                        if (Math.abs(cos) < 1e-9 || Math.abs(sin) < 1e-9) return [];
+                        const b = cos / sin;
+
+                        // Stepped along the arm's length, not its angle. For this spiral the two
+                        // are not the same thing: ds = r·√(1+b²)·dθ, so an even angular step
+                        // leaves chords proportional to the radius -- far finer than anyone
+                        // needs at the centre and visibly faceted at the rim. Even steps in r
+                        // are exactly even steps in arc length, which is what is wanted.
+                        const span = ctx.reach - a;
+                        const steps = Util.clamp(
+                            Math.ceil((Math.hypot(1, b) / Math.abs(b)) * span / CHORD), 64, 60000);
+
+                        // The mirror family is the same arms with the angle negated, so it costs
+                        // a sign rather than a second copy of the geometry.
+                        const hands = p.mirror ? [1, -1] : [1];
+
+                        const out = [];
+                        for (const hand of hands) {
+                            for (let j = 0; j < arms; j++) {
+                                if (!ctx.room()) return out;
+                                const turn = (j / arms) * TAU;
+                                const pts = [];
+                                const budget = Math.min(steps, ctx.left());
+                                for (let i = 0; i <= budget; i++) {
+                                    const r = a + span * (i / steps);
+                                    const angle = hand * (Math.log(r / a) / b) + turn;
+                                    pts.push(Math.cos(angle) * r, Math.sin(angle) * r);
+                                }
+                                out.push({ pts, closed: false });
+                                ctx.spend(pts.length / 2);
+                            }
                         }
                         return out;
                     }
@@ -2998,8 +3607,9 @@
             };
 
             const ORDER = [
-                'rosette-spiral', 'rosette-rings', 'spirograph', 'waves', 'sunburst',
-                'concentric', 'crosshatch', 'clous', 'basket', 'arcs', 'trace'
+                'rosette-spiral', 'rosette-rings', 'spirograph', 'spirograph-field',
+                'spiral-vortex', 'log-spiral', 'waves', 'sunburst', 'concentric',
+                'crosshatch', 'clous', 'basket', 'arcs', 'trace'
             ];
 
             function defaults(type) {
@@ -4145,6 +4755,12 @@
             let nextId = 1;
             let selectedId = null;
 
+            // What a layer starts with, spelled out here rather than inside create()
+            // because two things need them: making a layer, and putting a section of one
+            // back to how it began. Written twice they would drift.
+            const PLACEMENT_DEFAULTS = { cx: 0, cy: 0, rot: 0, rMin: 0, rMax: 0 };
+            const CUTTER_DEFAULTS = { cutter: 'vee', depth: 0.12, angle: 90, radius: 0.15 };
+
             function create(type) {
                 const last = list[list.length - 1];
                 const layer = {
@@ -4155,10 +4771,7 @@
                     color: Palette.layerColor(list.length),
                     // The cutter, and how deep it is taken. What that leaves behind -- the
                     // profile of the groove and its width at the face -- is Cutter's to say.
-                    cutter: 'vee',
-                    depth: 0.12,
-                    angle: 90,
-                    radius: 0.15,
+                    ...CUTTER_DEFAULTS,
                     // How this layer is cut, for the G-code. A new layer gets a tool number
                     // of its own, since a new layer usually means a different cutter -- two
                     // layers only share a tool if they are set to. The machine settings are
@@ -4170,11 +4783,7 @@
                     feed: last ? last.feed : 300,
                     plunge: last ? last.plunge : 80,
                     speed: last ? last.speed : 10000,
-                    cx: 0,
-                    cy: 0,
-                    rot: 0,
-                    rMin: 0,
-                    rMax: 0,
+                    ...PLACEMENT_DEFAULTS,
                     values: { [type]: Patterns.defaults(type) }
                 };
                 list.push(layer);
@@ -4218,6 +4827,26 @@
                 return bag;
             }
 
+            // One section of a layer, back to how it started. Three, because the panel is
+            // three: what the pattern is, where it sits, and what cuts it are separate
+            // decisions, and starting one of them again should not undo the other two.
+            //
+            // A pattern's parameters come from its own schema, so a reset here means
+            // exactly what the pattern's author declared -- and only for the type the layer
+            // is currently on. The bags belonging to its other types are left alone, the
+            // same way flipping the type and back leaves them alone.
+            function resetValues(layer) {
+                if (layer) layer.values[layer.type] = Patterns.defaults(layer.type);
+            }
+
+            function resetPlacement(layer) {
+                if (layer) Object.assign(layer, PLACEMENT_DEFAULTS);
+            }
+
+            function resetCutter(layer) {
+                if (layer) Object.assign(layer, CUTTER_DEFAULTS);
+            }
+
             // The whole stack, swapped for one that came out of a file. `list` is handed
             // out by reference and held by Sidebar and App, so it is emptied and refilled
             // rather than replaced. Ids are reassigned by position: the ones in the file
@@ -4238,6 +4867,7 @@
             return {
                 list,
                 create, duplicate, remove, selected, ensureValues, replace,
+                resetValues, resetPlacement, resetCutter,
                 select(id) { selectedId = id; },
                 get selectedId() { return selectedId; },
                 indexOfSelected() { return list.findIndex(l => l.id === selectedId); }
@@ -4338,6 +4968,12 @@
                 const typeSelect = el('layer-type');
                 const params = el('layer-params');
 
+                // With nothing selected there is nothing to put back, so the three resets
+                // go down with the type select rather than sitting there offering to.
+                for (const id of ['reset-params', 'reset-placement', 'reset-cutter']) {
+                    el(id).disabled = !layer;
+                }
+
                 if (!layer) {
                     el('layer-title').textContent = 'Layer Settings';
                     el('layer-desc').textContent = 'Add a layer to choose a pattern.';
@@ -4395,8 +5031,10 @@
                         param.max !== undefined ? `max="${param.max}"` : '',
                         `step="${param.step === undefined ? 'any' : param.step}"`
                     ].join(' ');
+                    // The only branch whose label is draggable -- a checkbox and a
+                    // select have nothing to scrub.
                     return `<div class="control-group">
-                                <div class="label-row"><label for="${id}">${Util.escapeHtml(param.label)}</label>${help}</div>
+                                <div class="label-row"><label class="scrub" for="${id}">${Util.escapeHtml(param.label)}</label>${help}</div>
                                 <input type="number" id="${id}" data-param="${param.k}" value="${values[param.k]}" ${attrs}>
                             </div>`;
                 }).join('');
@@ -4477,6 +5115,151 @@
                 hooks.regenerate();
             });
 
+            // --- Resets ----------------------------------------------------------------
+            // One per section of the layer panel. Each writes the layer back and then
+            // re-renders, which is what puts the new values in the fields -- the panel is
+            // drawn from the layer, so there is nothing to set by hand here.
+            for (const [id, reset] of [
+                ['reset-params', Layers.resetValues],
+                ['reset-placement', Layers.resetPlacement],
+                ['reset-cutter', Layers.resetCutter]
+            ]) {
+                el(id).addEventListener('click', () => {
+                    const layer = Layers.selected();
+                    if (!layer) return;
+                    reset(layer);
+                    refresh();
+                    hooks.regenerate();
+                });
+            }
+
+            // --- Scrubbing -----------------------------------------------------------
+            // Drag a parameter's label sideways and the value under it follows. Every
+            // number in here already declares the increment it wants to move in -- its
+            // `step` -- so that is what a scrub moves it by: one step per few pixels, ten
+            // at a time with Shift, a tenth with Alt.
+            //
+            // Nothing about the field itself changes, so anything that can be scrubbed can
+            // still be typed, and a scrub can never put a value in a box that typing could
+            // not: the field's own min and max still bound it.
+            //
+            // Delegated from the sidebar, because #layer-params is thrown away and rebuilt
+            // every time the pattern changes.
+            {
+                const PIXELS_PER_STEP = 4;
+                // Under this a press is a click on the label, not a drag. A label that
+                // focuses its own field is worth not breaking.
+                const DEAD_ZONE = 3;
+
+                const sidebar = el('sidebar');
+                let field = null;       // the input being scrubbed
+                let handle = null;      // the label it is being scrubbed by
+                let startX = 0;
+                let startValue = 0;
+                let stepSize = 1;
+                let places = 0;
+                let dragging = false;
+                let swallowClick = false;
+
+                // "any" is a legal step, and means the field has no increment of its own.
+                // Falling back on the size of what is in it keeps a 0.45 from scrubbing in
+                // whole numbers.
+                const stepOf = (input) => {
+                    const declared = parseFloat(input.step);
+                    if (Number.isFinite(declared) && declared > 0) return declared;
+                    return Math.abs(parseFloat(input.value)) >= 10 ? 1 : 0.01;
+                };
+
+                // Enough places to write the step exactly, plus one for the Alt case. Kept
+                // so that repeated addition never surfaces as 0.30000000000000004 in a
+                // field somebody is watching.
+                const placesOf = (step) => {
+                    const text = String(step);
+                    const dot = text.indexOf('.');
+                    return (dot === -1 ? 0 : text.length - dot - 1) + 1;
+                };
+
+                sidebar.addEventListener('pointerdown', (e) => {
+                    if (e.button !== 0) return;
+                    const label = e.target.closest('label.scrub');
+                    if (!label) return;
+                    const input = label.control;
+                    if (!input || input.type !== 'number') return;
+
+                    field = input;
+                    handle = label;
+                    startX = e.clientX;
+                    startValue = parseFloat(input.value);
+                    if (!Number.isFinite(startValue)) startValue = 0;
+                    stepSize = stepOf(input);
+                    places = placesOf(stepSize);
+                    dragging = false;
+                    swallowClick = false;
+                    // Follows the pointer wherever it goes, including outside the sidebar
+                    // and outside the window.
+                    label.setPointerCapture(e.pointerId);
+                });
+
+                sidebar.addEventListener('pointermove', (e) => {
+                    if (!field) return;
+                    const dx = e.clientX - startX;
+                    if (!dragging) {
+                        if (Math.abs(dx) < DEAD_ZONE) return;
+                        dragging = true;
+                        document.body.classList.add('scrubbing');
+                        handle.classList.add('scrub-active');
+                    }
+
+                    // Alt beats Shift when both are held: asking for fine control is the
+                    // more specific request of the two.
+                    const scale = e.altKey ? 0.1 : (e.shiftKey ? 10 : 1);
+                    let value = startValue
+                        + Math.round(dx / PIXELS_PER_STEP) * stepSize * scale;
+
+                    const min = parseFloat(field.min);
+                    const max = parseFloat(field.max);
+                    if (Number.isFinite(min)) value = Math.max(value, min);
+                    if (Number.isFinite(max)) value = Math.min(value, max);
+
+                    field.value = String(Number(value.toFixed(places)));
+                    // What every listener on these fields is already waiting for. Bubbles,
+                    // because the pattern parameters are handled by one delegated listener
+                    // on the panel rather than per field.
+                    field.dispatchEvent(new Event('input', { bubbles: true }));
+                    e.preventDefault();
+                });
+
+                const end = (e) => {
+                    if (!field) return;
+                    if (handle) {
+                        handle.classList.remove('scrub-active');
+                        if (handle.hasPointerCapture(e.pointerId)) {
+                            handle.releasePointerCapture(e.pointerId);
+                        }
+                    }
+                    document.body.classList.remove('scrubbing');
+                    // A drag ends in a click on the label, which would focus the field and
+                    // on a phone raise the keyboard over the dial you were just adjusting.
+                    swallowClick = dragging;
+                    field = null;
+                    handle = null;
+                    dragging = false;
+                };
+
+                sidebar.addEventListener('pointerup', end);
+                sidebar.addEventListener('pointercancel', end);
+
+                // Capture phase, so it gets there before the label can act on it.
+                sidebar.addEventListener('click', (e) => {
+                    if (!swallowClick) return;
+                    swallowClick = false;
+                    if (e.target.closest('label.scrub')) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+                }, true);
+            }
+
             el('layer-list').addEventListener('click', (e) => {
                 const row = e.target.closest('.layer-row');
                 if (!row) return;
@@ -4550,15 +5333,21 @@
             }
 
             // --- Narrow-width drawer -------------------------------------------------
-            const setCollapsed = (collapsed) => {
-                document.body.classList.toggle('sidebar-collapsed', collapsed);
-                el('sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
-                el('sidebar-open').setAttribute('aria-expanded', String(!collapsed));
-                Viewer.resize();
-            };
-            el('sidebar-toggle').addEventListener('click', () => setCollapsed(true));
-            el('sidebar-open').addEventListener('click', () => setCollapsed(false));
-            el('sidebar-backdrop').addEventListener('click', () => setCollapsed(true));
+            // One button in the bar, working both ways: when the drawer is away there is
+            // nothing else left on screen that could bring it back.
+            {
+                const toggle = el('sidebar-toggle');
+                const setCollapsed = (collapsed) => {
+                    document.body.classList.toggle('sidebar-collapsed', collapsed);
+                    toggle.setAttribute('aria-expanded', String(!collapsed));
+                    toggle.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+                    Viewer.resize();
+                };
+                toggle.addEventListener('click', () => {
+                    setCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+                });
+                el('sidebar-backdrop').addEventListener('click', () => setCollapsed(true));
+            }
 
             // --- Readouts ------------------------------------------------------------
             function setDialInfo(info) {
@@ -4583,12 +5372,42 @@
                 hint.textContent = text || '';
             }
 
-            function setSettingsStatus(text, bad) {
-                const status = el('settings-status');
-                status.hidden = !text;
-                status.textContent = text || '';
-                status.className = bad ? 'hint hint-bad' : 'hint hint-muted';
-            }
+            // What a load or a save has to report, shown under the two buttons in the bar
+            // rather than in the sidebar -- which is where those buttons went, and which
+            // at narrow widths is closed for most of the time anyway.
+            //
+            // A confirmation clears itself after a moment; a warning or a failure does
+            // not. Something you asked for and got needs no more than a glance, but a file
+            // that would not load is the one message that must still be there when you
+            // look up.
+            const setSettingsStatus = (() => {
+                const box = el('settings-status');
+                const label = el('settings-status-text');
+                let timer = 0;
+
+                const hide = () => {
+                    clearTimeout(timer);
+                    timer = 0;
+                    box.classList.remove('show');
+                };
+
+                el('settings-status-close').addEventListener('click', hide);
+
+                return (text, bad) => {
+                    // Whatever was on screen is about the last file, not this one, so its
+                    // timer goes with it.
+                    clearTimeout(timer);
+                    timer = 0;
+                    if (!text) {
+                        box.classList.remove('show');
+                        return;
+                    }
+                    label.textContent = text;
+                    box.classList.toggle('bad', Boolean(bad));
+                    box.classList.add('show');
+                    if (!bad) timer = setTimeout(hide, 3200);
+                };
+            })();
 
             return {
                 hooks, settings, applySettings, refresh,
@@ -5630,15 +6449,32 @@
             }
 
             // --- Generation ----------------------------------------------------------
+            // How long the last one took. The only use for it is deciding whether the next
+            // one is worth announcing: nothing else here cares, and the number the readout
+            // shows is passed to it directly.
+            let lastGenerationMs = 0;
+
+            // Under this, a regeneration is over before anyone could read a word of the
+            // panel saying it had started.
+            const BUSY_THRESHOLD_MS = 60;
+
             function scheduleRegenerate() {
                 if (regenerateTimer !== null) return;
-                Readout.setBusy(true);
+                // A cheap pattern says nothing. Dragging a value produces a regeneration
+                // every couple of frames, and a panel that flashed on and off throughout
+                // would sit over the very thing being adjusted -- while saying, wrongly,
+                // that there was a wait to sit through.
+                const announce = lastGenerationMs >= BUSY_THRESHOLD_MS;
+                if (announce) Readout.setBusy(true);
                 // Two frames, not one: the first lets the browser paint the busy panel, and
                 // the generation that follows blocks the main thread until it is done.
                 regenerateTimer = requestAnimationFrame(() => {
                     requestAnimationFrame(() => {
                         regenerateTimer = null;
                         regenerate();
+                        // Unconditionally, not `if (announce)`: this is the one place the
+                        // panel is ever taken down, and a pattern that was slow last time
+                        // and quick this time must not leave it on screen.
                         Readout.setBusy(false);
                     });
                 });
@@ -5660,8 +6496,9 @@
                 }
 
                 let budget = MAX_GENERATED_POINTS;
-                const ctxFor = (reach) => ({
+                const ctxFor = (reach, fitRadius) => ({
                     reach,
+                    fitRadius,
                     // Only a world-space pattern reads this. The rest are told how far they
                     // may need to draw and nothing about where the edge is, which is what
                     // keeps them unable to get containment wrong.
@@ -5698,8 +6535,23 @@
                     }
                     if (layer.rMax > 0) reach = Math.min(reach, layer.rMax);
 
+                    // The other distance: the largest circle about this layer's centre that
+                    // still fits inside the outline's box. `reach` is the far corner, which
+                    // is what a pattern that fills the dial needs and half again too much
+                    // for one scaling a single figure to it -- fitted to the corner, a third
+                    // of the figure is outside the dial and gets clipped away.
+                    let fitRadius = Math.min(
+                        cx - boundary.minX, boundary.maxX - cx,
+                        cy - boundary.minY, boundary.maxY - cy);
+                    // A centre pushed off the box has no circle about it that fits at all.
+                    // The box's own half-width keeps a figure being drawn at a sane size and
+                    // leaves the clipper to say what survives, which is a layer the margin
+                    // ate rather than a layer that silently vanished.
+                    if (!(fitRadius > 0)) fitRadius = Math.min(boundary.width, boundary.height) / 2;
+                    if (layer.rMax > 0) fitRadius = Math.min(fitRadius, layer.rMax);
+
                     const before = budget;
-                    const local = definition.generate(Layers.ensureValues(layer), ctxFor(reach));
+                    const local = definition.generate(Layers.ensureValues(layer), ctxFor(reach, fitRadius));
                     if (budget <= 0 && before > 0) truncated = true;
 
                     // The containment rule, assembled: inside the outline, clear of every
@@ -5773,11 +6625,12 @@
                 cutMask = view.mask;
                 applyDisplay();
 
+                lastGenerationMs = performance.now() - started;
                 Readout.setStats({
                     paths: totalPaths,
                     segments: totalSegments,
                     length: totalLength,
-                    ms: performance.now() - started,
+                    ms: lastGenerationMs,
                     layers: results.length
                 });
 
