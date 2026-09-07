@@ -602,6 +602,14 @@
             color: #aaaaaa;
         }
 
+        /* The unit under its column's name rather than beside it: "Plunge (mm/min)" on one
+           line is wider than the column the numbers have to fit in. */
+        #gcode-tools .head-unit {
+            display: block;
+            font-size: 0.68rem;
+            color: #6e6e6e;
+        }
+
         #gcode-tools .tool-name {
             min-width: 0;
             overflow-wrap: anywhere;
@@ -1179,9 +1187,9 @@
         <div class="dialog-body">
             <div class="hint hint-muted">Every layer is cut to its own tip depth with the cutter
                 it was given, so every layer carries its own tool, feeds and speed. Safe&nbsp;Z is
-                in millimetres above the dial face; feeds are in mm/min. Consecutive layers set to
-                the same tool number are cut without a change between them. A speed of&nbsp;0 runs
-                that layer with the spindle stopped.</div>
+                measured from the dial face. Consecutive layers set to the same tool number are cut
+                without a change between them. A speed of&nbsp;0 runs that layer with the spindle
+                stopped.</div>
             <div id="gcode-tools"></div>
 
             <div class="panel-title">Arc Fitting</div>
@@ -4582,12 +4590,12 @@
             // list, so a column cannot end up labelled one thing and storing another.
             const FIELDS = [
                 { key: 'tool', label: 'Tool', min: 1, max: 999, step: 1, integer: true },
-                { key: 'safeZ', label: 'Safe Z', min: -50, max: 500, step: 0.5 },
-                { key: 'feed', label: 'Feed', min: 1, max: 100000, step: 10 },
-                { key: 'plunge', label: 'Plunge', min: 1, max: 100000, step: 10 },
+                { key: 'safeZ', label: 'Safe Z', unit: 'mm', min: -50, max: 500, step: 0.5 },
+                { key: 'feed', label: 'Feed', unit: 'mm/min', min: 1, max: 100000, step: 10 },
+                { key: 'plunge', label: 'Plunge', unit: 'mm/min', min: 1, max: 100000, step: 10 },
                 // Zero is a real answer here, not a missing one: it means cut this layer
                 // with the spindle stopped, and the exporter leaves the start command out.
-                { key: 'speed', label: 'Speed', min: 0, max: 100000, step: 500, integer: true }
+                { key: 'speed', label: 'Speed', unit: 'rpm', min: 0, max: 100000, step: 500, integer: true }
             ];
 
             // What the tool in the box beside it has to be.
@@ -4615,11 +4623,16 @@
                     return;
                 }
 
+                // The unit sits under the column name in the header and beside it in the
+                // per-field label, which is only shown at the narrow width -- where the row
+                // has stacked and there is width for it to sit inline.
                 const head = `
                     <div class="tool-row">
                         <span class="tool-head"></span>
                         <span class="tool-head">Layer</span>
-                        ${FIELDS.map(field => `<span class="tool-head">${field.label}</span>`).join('')}
+                        ${FIELDS.map(field => `<span class="tool-head">${field.label}${
+                            field.unit ? `<span class="head-unit">${field.unit}</span>` : ''
+                        }</span>`).join('')}
                     </div>
                 `;
 
@@ -4628,16 +4641,19 @@
                         <span class="tool-swatch" style="background:${Util.escapeHtml(layer.color)}"></span>
                         <span class="tool-name">${Util.escapeHtml(layer.name)}<span
                             class="tool-note">${Util.escapeHtml(describe(layer))}</span></span>
-                        ${FIELDS.map(field => `
+                        ${FIELDS.map(field => {
+                            const named = field.unit ? `${field.label} (${field.unit})` : field.label;
+                            return `
                             <span class="tool-cell">
-                                <span class="cell-label">${field.label}</span>
+                                <span class="cell-label">${named}</span>
                                 <input type="number" class="tool-field"
                                        data-id="${layer.id}" data-key="${field.key}"
                                        min="${field.min}" max="${field.max}" step="${field.step}"
                                        value="${layer[field.key]}"
-                                       aria-label="${field.label} for ${Util.escapeHtml(layer.name)}">
+                                       aria-label="${named} for ${Util.escapeHtml(layer.name)}">
                             </span>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </div>
                 `).join('');
             }
