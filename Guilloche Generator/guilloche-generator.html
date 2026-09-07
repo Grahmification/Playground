@@ -2441,11 +2441,16 @@
         })();
         // --- Patterns ----------------------------------------------------------------
         // The generators, each with the schema of its own parameters. A generator draws in
-        // its layer's local frame, centred on the origin, and is told only how far out it
-        // may need to reach (`ctx.reach`). It never asks where the dial's edge is: drawing
-        // past it is expected, and Clipper cuts it back. That is what keeps "the pattern
-        // cannot leave the dial" a property of the program rather than of ten generators
-        // each having remembered to check.
+        // its layer's local frame, centred on the origin, and is told only two distances:
+        // how far out it may need to draw to cover the dial (`ctx.reach`, the far corner of
+        // the outline's box) and how big a single figure can be drawn here before it starts
+        // hanging off (`ctx.fitRadius`, the largest circle about the layer's centre that
+        // still fits that box). A pattern that fills wants the first; a pattern that scales
+        // one figure to the dial wants the second, and on a round dial the first is half
+        // again too big. Neither says where the edge actually is: drawing past it is
+        // expected, and Clipper cuts it back. That is what keeps "the pattern cannot leave
+        // the dial" a property of the program rather than of ten generators each having
+        // remembered to check.
         //
         // One pattern is the exception, and says so in its own definition rather than being
         // special-cased anywhere else:
@@ -2464,6 +2469,11 @@
         const Patterns = (() => {
             const TAU = Math.PI * 2;
             const DEG = Math.PI / 180;
+
+            // How long a chord a curve sampled by length is allowed to leave, in mm. Well
+            // under the narrowest cut anyone would put on a dial, so the facets are always
+            // finer than the groove that hides them.
+            const CHORD = 0.08;
 
             const waveformParam = (value = 'sine') => ({
                 k: 'waveform', label: 'Cam Profile', type: 'select', value,
@@ -2687,6 +2697,132 @@
                                 const t = (i / steps) * revs * TAU;
                                 const x = ((R - r) * Math.cos(t) + d * Math.cos(ratio * t)) * scale;
                                 const y = ((R - r) * Math.sin(t) - d * Math.sin(ratio * t)) * scale;
+                                pts.push(x * ct - y * st, x * st + y * ct);
+                            }
+                            out.push({ pts, closed: budget >= steps });
+                            ctx.spend(pts.length / 2);
+                        }
+                        return out;
+                    }
+                },
+
+                'spirograph-field': {
+                    label: 'Spirograph Field',
+                    note: 'A family of roulettes nested along the pen offset: the same two circles ' +
+                          'drawn again and again with the pen moved in a little each time, so the ' +
+                          'figures cross and weave. The rolling circle may run inside the fixed ' +
+                          'one or around the outside of it.',
+                    params: [
+                        { k: 'mode', label: 'Rolling Circle', type: 'select', value: 'inside',
+                          options: [['inside', 'Inside (hypotrochoid)'], ['outside', 'Outside (epitrochoid)']],
+                          help: 'Inside gives the flower that folds back on itself; outside gives ' +
+                                'the looping, pointed star. Every other parameter means the same ' +
+                                'thing to both.' },
+                        { k: 'ringR', label: 'Fixed Radius', type: 'number', value: 60, min: 1, step: 1 },
+                        { k: 'rollR', label: 'Rolling Radius', type: 'number', value: 24, min: 1, step: 1,
+                          help: 'What this shares with the fixed radius decides everything. 60 and ' +
+                                '24 share 12, so the figure closes in 2 turns as a plain 5-pointed ' +
+                                'star — where this starts. 60 and 23 share nothing, and one curve ' +
+                                'winds 23 times into a 60-petal weave instead. Moving it by one ' +
+                                'changes the whole figure.' },
+                        { k: 'penD', label: 'Pen Offset', type: 'number', value: 18, min: 0, step: 1 },
+                        { k: 'nest', label: 'Nested Copies', type: 'number', value: 10, min: 1, max: 400, step: 1,
+                          help: 'One copy is a single figure. Past that each is drawn with the pen ' +
+                                'stepped over, and it is where they cross that the weave appears.' },
+                        { k: 'penStep', label: 'Pen Step / copy', type: 'number', value: -1.2, step: 0.1,
+                          help: 'How far the pen moves between copies — the axis the family nests ' +
+                                'along. Negative closes the petals in toward a plain circle; ' +
+                                'positive opens them out. Zero draws the same figure every time.' },
+                        { k: 'drift', label: 'Phase Drift (°/copy)', type: 'number', value: 3, step: 1,
+                          help: 'Turns each copy further round than the last. At zero they stack ' +
+                                'petal on petal; half a petal apart is what makes the moiré.' },
+                        { k: 'radialStep', label: 'Shrink / copy (mm)', type: 'number', value: 0, min: 0, step: 0.1,
+                          help: 'Scales each copy down as well, for a spiral tunnel rather than a ' +
+                                'rosette. Leave at zero for guilloché: a scaled copy is the same ' +
+                                'figure again, and stepping the size linearly crowds most of them ' +
+                                'into the middle few millimetres.' },
+                        { k: 'fit', label: 'Scale to fit dial', type: 'check', value: true },
+                        { k: 'outerRadius', label: 'Outer Radius (mm)', type: 'number', value: 15, min: 0.1, step: 0.5,
+                          help: 'How far the widest copy reaches, when it is not being fitted to ' +
+                                'the dial.' }
+                    ],
+                    generate(p, ctx) {
+                        const R = Math.max(p.ringR, 0.001);
+                        const r = Math.max(p.rollR, 0.001);
+                        const d = Math.max(p.penD, 0);
+
+                        // Rolling outside the fixed circle adds the two radii where rolling
+                        // inside subtracts them, and reverses the pen's turn against the
+                        // carrier's. Those two signs are the entire difference between a
+                        // hypotrochoid and an epitrochoid, so they are taken once here and
+                        // nothing below has to know which curve it is drawing.
+                        const outside = p.mode === 'outside';
+                        const carrier = outside ? R + r : R - r;
+                        const penSign = outside ? -1 : 1;
+                        const ratio = carrier / r;
+                        // Equal radii rolling inside pin the rolling circle in place: the
+                        // carrier is zero, the pen never turns, and the figure is a point.
+                        // Returned empty rather than drawn, or every copy is a few thousand
+                        // coincident vertices charged to the budget.
+                        if (Math.abs(carrier) < 1e-9) return [];
+
+                        // How many turns before the pen comes back to where it started, and
+                        // with it how dense the figure is. Everything the pattern looks like
+                        // is decided here: 60 and 23 share nothing, so one curve winds 23
+                        // times into a 60-petal weave, while 60 and 24 share 12 and close in
+                        // two turns as a bare 5-pointed star. Rounding to integers is what
+                        // keeps it finite for the arbitrary decimals the fields allow.
+                        const revs = Util.clamp(Math.round(r) / Util.gcd(R, r), 1, 300);
+
+                        const nest = Util.clamp(Math.round(p.nest), 1, 400);
+                        const drift = p.drift * DEG;
+                        const shrink = Math.max(p.radialStep, 0);
+
+                        // The pen offset per copy: the axis the family nests along. Moving
+                        // the pen rather than the scale is the whole point -- these curves
+                        // are genuinely different shapes over one shared carrier circle, so
+                        // they cross each other and bunch into an envelope. Scaled copies are
+                        // all the same figure again, and nest into a tunnel instead.
+                        const pens = [];
+                        let widest = 0;
+                        for (let k = 0; k < nest; k++) {
+                            const pen = Math.max(d + k * p.penStep, 0);
+                            pens.push(pen);
+                            widest = Math.max(widest, Math.abs(carrier) + pen);
+                        }
+
+                        // One scale for the whole family, taken from its widest member.
+                        // Rescaling each copy to a radius of its own would undo the nesting
+                        // that the pen step just created.
+                        const fitTo = p.fit ? ctx.fitRadius : Math.max(p.outerRadius, 0.1);
+                        const unit = fitTo / Math.max(widest, 1e-6);
+
+                        const out = [];
+                        for (let k = 0; k < nest; k++) {
+                            if (!ctx.room()) break;
+                            const pen = pens[k];
+                            const scale = unit * Math.max(1 - (k * shrink) / Math.max(fitTo, 1e-6), 0);
+                            // Only ever shrinking, so the first copy with nothing left to
+                            // draw is the last: stopping beats skipping.
+                            if (scale <= 1e-9) break;
+                            // Sampled by the chord it leaves rather than by a count per turn.
+                            // A 23-turn figure and a 2-turn one are nothing like the same
+                            // amount of curve, and sampling them alike either facets the one
+                            // or wastes the budget on the other. The pen's top speed bounds
+                            // the arc length, which is enough: overshooting costs points,
+                            // undershooting shows, and only one of those is visible.
+                            const span = Math.abs(carrier) + Math.abs(ratio) * pen;
+                            const steps = Util.clamp(
+                                Math.ceil((revs * TAU * span * scale) / CHORD), 64, 60000);
+                            const turn = k * drift;
+                            const ct = Math.cos(turn);
+                            const st = Math.sin(turn);
+                            const pts = [];
+                            const budget = Math.min(steps, ctx.left());
+                            for (let i = 0; i <= budget; i++) {
+                                const t = (i / steps) * revs * TAU;
+                                const x = (carrier * Math.cos(t) + penSign * pen * Math.cos(ratio * t)) * scale;
+                                const y = (carrier * Math.sin(t) - pen * Math.sin(ratio * t)) * scale;
                                 pts.push(x * ct - y * st, x * st + y * ct);
                             }
                             out.push({ pts, closed: budget >= steps });
@@ -2998,8 +3134,9 @@
             };
 
             const ORDER = [
-                'rosette-spiral', 'rosette-rings', 'spirograph', 'waves', 'sunburst',
-                'concentric', 'crosshatch', 'clous', 'basket', 'arcs', 'trace'
+                'rosette-spiral', 'rosette-rings', 'spirograph', 'spirograph-field',
+                'waves', 'sunburst', 'concentric', 'crosshatch', 'clous', 'basket',
+                'arcs', 'trace'
             ];
 
             function defaults(type) {
@@ -5660,8 +5797,9 @@
                 }
 
                 let budget = MAX_GENERATED_POINTS;
-                const ctxFor = (reach) => ({
+                const ctxFor = (reach, fitRadius) => ({
                     reach,
+                    fitRadius,
                     // Only a world-space pattern reads this. The rest are told how far they
                     // may need to draw and nothing about where the edge is, which is what
                     // keeps them unable to get containment wrong.
@@ -5698,8 +5836,23 @@
                     }
                     if (layer.rMax > 0) reach = Math.min(reach, layer.rMax);
 
+                    // The other distance: the largest circle about this layer's centre that
+                    // still fits inside the outline's box. `reach` is the far corner, which
+                    // is what a pattern that fills the dial needs and half again too much
+                    // for one scaling a single figure to it -- fitted to the corner, a third
+                    // of the figure is outside the dial and gets clipped away.
+                    let fitRadius = Math.min(
+                        cx - boundary.minX, boundary.maxX - cx,
+                        cy - boundary.minY, boundary.maxY - cy);
+                    // A centre pushed off the box has no circle about it that fits at all.
+                    // The box's own half-width keeps a figure being drawn at a sane size and
+                    // leaves the clipper to say what survives, which is a layer the margin
+                    // ate rather than a layer that silently vanished.
+                    if (!(fitRadius > 0)) fitRadius = Math.min(boundary.width, boundary.height) / 2;
+                    if (layer.rMax > 0) fitRadius = Math.min(fitRadius, layer.rMax);
+
                     const before = budget;
-                    const local = definition.generate(Layers.ensureValues(layer), ctxFor(reach));
+                    const local = definition.generate(Layers.ensureValues(layer), ctxFor(reach, fitRadius));
                     if (budget <= 0 && before > 0) truncated = true;
 
                     // The containment rule, assembled: inside the outline, clear of every
