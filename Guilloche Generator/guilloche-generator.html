@@ -575,9 +575,16 @@
             cursor: pointer;
         }
 
-        .title-btn:hover {
+        .title-btn:hover:not(:disabled) {
             background-color: #3c3c3c;
             color: #ffffff;
+        }
+
+        /* Nothing selected, so nothing to put back. Dimmed rather than removed: a control
+           that comes and goes moves the heading beside it every time. */
+        .title-btn:disabled {
+            opacity: 0.35;
+            cursor: default;
         }
 
         /* Stroked rather than filled -- at 13px a solid glyph turns into a blob. The
@@ -1350,6 +1357,14 @@
         <div class="panel">
             <div class="panel-title panel-title-row">
                 <span id="layer-title">Layer Settings</span>
+                <!-- Beside the heading it belongs to rather than out at the right margin:
+                     it acts on the section under it, and there are three of them down this
+                     panel. The reset glyph is defined once, in <defs> at the foot of the
+                     body, and each button points at it. -->
+                <button id="reset-params" class="title-btn" type="button"
+                        title="Reset pattern parameters" aria-label="Reset pattern parameters">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#icon-reset"/></svg>
+                </button>
             </div>
             <div class="control-group">
                 <label for="layer-type">Pattern</label>
@@ -1365,6 +1380,10 @@
             <div id="layer-placement" class="panel-body">
                 <div class="panel-title panel-title-row" style="margin-top:2px">
                     <span>Placement</span>
+                    <button id="reset-placement" class="title-btn" type="button"
+                            title="Reset placement" aria-label="Reset placement">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#icon-reset"/></svg>
+                    </button>
                 </div>
                 <div class="field-pair">
                     <div class="control-group">
@@ -1399,6 +1418,10 @@
 
             <div class="panel-title panel-title-row" style="margin-top:2px">
                 <span>Engraving Cutter</span>
+                <button id="reset-cutter" class="title-btn" type="button"
+                        title="Reset cutter" aria-label="Reset cutter">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#icon-reset"/></svg>
+                </button>
             </div>
             <div class="field-pair">
                 <div class="control-group">
@@ -1562,6 +1585,24 @@
             <button id="gcode-write" class="btn" type="button">Write G-Code</button>
         </div>
     </dialog>
+
+    <!-- Icons used more than once, drawn here and pointed at with <use>. Only the reset
+         arrow so far -- it appears above all three sections of the layer panel, and three
+         copies of the same path is three chances for them to stop matching.
+
+         The <svg> is not `hidden`: that would take the whole subtree out of rendering and
+         a <use> pointing into it would draw nothing. It has no size instead. -->
+    <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+        <defs>
+            <!-- A circle open at the top right, travelled anticlockwise from the top, with
+                 the arrowhead where the stroke starts. -->
+            <g id="icon-reset" fill="none" stroke="currentColor" stroke-width="1.5"
+               stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 3a5 5 0 1 0 3.54 1.46"/>
+                <path d="M9.8 1.9 8 3l1.8 1.1"/>
+            </g>
+        </defs>
+    </svg>
 
     <script>
         /* ============================================================================
@@ -4714,6 +4755,12 @@
             let nextId = 1;
             let selectedId = null;
 
+            // What a layer starts with, spelled out here rather than inside create()
+            // because two things need them: making a layer, and putting a section of one
+            // back to how it began. Written twice they would drift.
+            const PLACEMENT_DEFAULTS = { cx: 0, cy: 0, rot: 0, rMin: 0, rMax: 0 };
+            const CUTTER_DEFAULTS = { cutter: 'vee', depth: 0.12, angle: 90, radius: 0.15 };
+
             function create(type) {
                 const last = list[list.length - 1];
                 const layer = {
@@ -4724,10 +4771,7 @@
                     color: Palette.layerColor(list.length),
                     // The cutter, and how deep it is taken. What that leaves behind -- the
                     // profile of the groove and its width at the face -- is Cutter's to say.
-                    cutter: 'vee',
-                    depth: 0.12,
-                    angle: 90,
-                    radius: 0.15,
+                    ...CUTTER_DEFAULTS,
                     // How this layer is cut, for the G-code. A new layer gets a tool number
                     // of its own, since a new layer usually means a different cutter -- two
                     // layers only share a tool if they are set to. The machine settings are
@@ -4739,11 +4783,7 @@
                     feed: last ? last.feed : 300,
                     plunge: last ? last.plunge : 80,
                     speed: last ? last.speed : 10000,
-                    cx: 0,
-                    cy: 0,
-                    rot: 0,
-                    rMin: 0,
-                    rMax: 0,
+                    ...PLACEMENT_DEFAULTS,
                     values: { [type]: Patterns.defaults(type) }
                 };
                 list.push(layer);
@@ -4787,6 +4827,26 @@
                 return bag;
             }
 
+            // One section of a layer, back to how it started. Three, because the panel is
+            // three: what the pattern is, where it sits, and what cuts it are separate
+            // decisions, and starting one of them again should not undo the other two.
+            //
+            // A pattern's parameters come from its own schema, so a reset here means
+            // exactly what the pattern's author declared -- and only for the type the layer
+            // is currently on. The bags belonging to its other types are left alone, the
+            // same way flipping the type and back leaves them alone.
+            function resetValues(layer) {
+                if (layer) layer.values[layer.type] = Patterns.defaults(layer.type);
+            }
+
+            function resetPlacement(layer) {
+                if (layer) Object.assign(layer, PLACEMENT_DEFAULTS);
+            }
+
+            function resetCutter(layer) {
+                if (layer) Object.assign(layer, CUTTER_DEFAULTS);
+            }
+
             // The whole stack, swapped for one that came out of a file. `list` is handed
             // out by reference and held by Sidebar and App, so it is emptied and refilled
             // rather than replaced. Ids are reassigned by position: the ones in the file
@@ -4807,6 +4867,7 @@
             return {
                 list,
                 create, duplicate, remove, selected, ensureValues, replace,
+                resetValues, resetPlacement, resetCutter,
                 select(id) { selectedId = id; },
                 get selectedId() { return selectedId; },
                 indexOfSelected() { return list.findIndex(l => l.id === selectedId); }
@@ -4906,6 +4967,12 @@
                 const layer = Layers.selected();
                 const typeSelect = el('layer-type');
                 const params = el('layer-params');
+
+                // With nothing selected there is nothing to put back, so the three resets
+                // go down with the type select rather than sitting there offering to.
+                for (const id of ['reset-params', 'reset-placement', 'reset-cutter']) {
+                    el(id).disabled = !layer;
+                }
 
                 if (!layer) {
                     el('layer-title').textContent = 'Layer Settings';
@@ -5047,6 +5114,24 @@
                 }
                 hooks.regenerate();
             });
+
+            // --- Resets ----------------------------------------------------------------
+            // One per section of the layer panel. Each writes the layer back and then
+            // re-renders, which is what puts the new values in the fields -- the panel is
+            // drawn from the layer, so there is nothing to set by hand here.
+            for (const [id, reset] of [
+                ['reset-params', Layers.resetValues],
+                ['reset-placement', Layers.resetPlacement],
+                ['reset-cutter', Layers.resetCutter]
+            ]) {
+                el(id).addEventListener('click', () => {
+                    const layer = Layers.selected();
+                    if (!layer) return;
+                    reset(layer);
+                    refresh();
+                    hooks.regenerate();
+                });
+            }
 
             // --- Scrubbing -----------------------------------------------------------
             // Drag a parameter's label sideways and the value under it follows. Every
