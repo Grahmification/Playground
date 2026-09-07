@@ -282,8 +282,9 @@
         }
 
         /* Dismisses the drawer, and darkens the view behind it so it reads as covered
-           rather than merely obscured. Same narrow-widths-only story. */
-        /* Placed in the grid like the drawer it belongs to, for the same reason: that is
+           rather than merely obscured. Same narrow-widths-only story.
+
+           Placed in the grid like the drawer it belongs to, for the same reason: that is
            what makes `inset: 0` mean the row under the bar rather than the whole body.
            Spans both columns, though column one is empty whenever this is on screen. */
         #sidebar-backdrop {
@@ -312,6 +313,41 @@
         .control-group label {
             font-size: 0.85rem;
             color: #aaaaaa;
+        }
+
+        /* --- Scrubbing ----------------------------------------------------------
+           A label you can drag sideways to move the value under it. The dotted rule
+           and the cursor are the whole affordance: a scrub is invisible otherwise,
+           and a control nobody knows is there is not a control.
+
+           `pan-y` rather than `none`, so a finger going down the sidebar still
+           scrolls it and only a sideways drag comes here. */
+        label.scrub {
+            cursor: ew-resize;
+            user-select: none;
+            touch-action: pan-y;
+            border-bottom: 1px dotted #555555;
+            /* Shrinks the underline to the words. Without it a label stretches the
+               width of the column it is in and trails a rule across empty space. */
+            width: fit-content;
+        }
+
+        label.scrub:hover {
+            color: #e0e0e0;
+            border-bottom-color: #8a8a8a;
+        }
+
+        label.scrub.scrub-active {
+            color: #ffffff;
+            border-bottom-color: #0e639c;
+        }
+
+        /* The pointer is captured for the length of a drag, so it can be anywhere on
+           screen by the time it stops -- the cursor has to be set on everything, not
+           just on the label it started from. */
+        body.scrubbing,
+        body.scrubbing * {
+            cursor: ew-resize !important;
         }
 
         /* A label with a help affordance beside it. Also the positioning context for the
@@ -1332,17 +1368,17 @@
                 </div>
                 <div class="field-pair">
                     <div class="control-group">
-                        <label for="layer-cx">Centre X (mm)</label>
+                        <label class="scrub" for="layer-cx">Centre X (mm)</label>
                         <input type="number" id="layer-cx" value="0" step="0.25">
                     </div>
                     <div class="control-group">
-                        <label for="layer-cy">Centre Y (mm)</label>
+                        <label class="scrub" for="layer-cy">Centre Y (mm)</label>
                         <input type="number" id="layer-cy" value="0" step="0.25">
                     </div>
                 </div>
                 <div class="field-pair">
                     <div class="control-group">
-                        <label for="layer-rot">Rotation (&deg;)</label>
+                        <label class="scrub" for="layer-rot">Rotation (&deg;)</label>
                         <input type="number" id="layer-rot" value="0" step="1">
                     </div>
                     <div class="control-group">
@@ -1381,7 +1417,7 @@
                 </div>
                 <div class="control-group">
                     <div class="label-row">
-                        <label for="layer-depth">Tip Depth (mm)</label>
+                        <label class="scrub" for="layer-depth">Tip Depth (mm)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">How far the tip
                             of the cutter drops below the dial face. Real guilloch&eacute; runs a
                             few hundredths of a millimetre deep; exaggerate it to read the pattern
@@ -1393,7 +1429,7 @@
             <div class="field-pair">
                 <div class="control-group" id="cutter-angle-group">
                     <div class="label-row">
-                        <label for="layer-angle">Included Angle (&deg;)</label>
+                        <label class="scrub" for="layer-angle">Included Angle (&deg;)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">The full angle
                             between the two flanks of the chamfer mill &mdash; 90&deg; and 60&deg;
                             are the usual grinds. A narrower point cuts a narrower groove at the
@@ -1403,7 +1439,7 @@
                 </div>
                 <div class="control-group" id="cutter-radius-group" hidden>
                     <div class="label-row">
-                        <label for="layer-radius">Tip Radius (mm)</label>
+                        <label class="scrub" for="layer-radius">Tip Radius (mm)</label>
                         <span class="help" tabindex="0">?<span class="help-bubble">The ball's
                             radius, so half the cutter diameter. Taken deeper than the radius the
                             groove stops widening &mdash; a ball nose cannot open a cut wider than
@@ -4928,8 +4964,10 @@
                         param.max !== undefined ? `max="${param.max}"` : '',
                         `step="${param.step === undefined ? 'any' : param.step}"`
                     ].join(' ');
+                    // The only branch whose label is draggable -- a checkbox and a
+                    // select have nothing to scrub.
                     return `<div class="control-group">
-                                <div class="label-row"><label for="${id}">${Util.escapeHtml(param.label)}</label>${help}</div>
+                                <div class="label-row"><label class="scrub" for="${id}">${Util.escapeHtml(param.label)}</label>${help}</div>
                                 <input type="number" id="${id}" data-param="${param.k}" value="${values[param.k]}" ${attrs}>
                             </div>`;
                 }).join('');
@@ -5009,6 +5047,133 @@
                 }
                 hooks.regenerate();
             });
+
+            // --- Scrubbing -----------------------------------------------------------
+            // Drag a parameter's label sideways and the value under it follows. Every
+            // number in here already declares the increment it wants to move in -- its
+            // `step` -- so that is what a scrub moves it by: one step per few pixels, ten
+            // at a time with Shift, a tenth with Alt.
+            //
+            // Nothing about the field itself changes, so anything that can be scrubbed can
+            // still be typed, and a scrub can never put a value in a box that typing could
+            // not: the field's own min and max still bound it.
+            //
+            // Delegated from the sidebar, because #layer-params is thrown away and rebuilt
+            // every time the pattern changes.
+            {
+                const PIXELS_PER_STEP = 4;
+                // Under this a press is a click on the label, not a drag. A label that
+                // focuses its own field is worth not breaking.
+                const DEAD_ZONE = 3;
+
+                const sidebar = el('sidebar');
+                let field = null;       // the input being scrubbed
+                let handle = null;      // the label it is being scrubbed by
+                let startX = 0;
+                let startValue = 0;
+                let stepSize = 1;
+                let places = 0;
+                let dragging = false;
+                let swallowClick = false;
+
+                // "any" is a legal step, and means the field has no increment of its own.
+                // Falling back on the size of what is in it keeps a 0.45 from scrubbing in
+                // whole numbers.
+                const stepOf = (input) => {
+                    const declared = parseFloat(input.step);
+                    if (Number.isFinite(declared) && declared > 0) return declared;
+                    return Math.abs(parseFloat(input.value)) >= 10 ? 1 : 0.01;
+                };
+
+                // Enough places to write the step exactly, plus one for the Alt case. Kept
+                // so that repeated addition never surfaces as 0.30000000000000004 in a
+                // field somebody is watching.
+                const placesOf = (step) => {
+                    const text = String(step);
+                    const dot = text.indexOf('.');
+                    return (dot === -1 ? 0 : text.length - dot - 1) + 1;
+                };
+
+                sidebar.addEventListener('pointerdown', (e) => {
+                    if (e.button !== 0) return;
+                    const label = e.target.closest('label.scrub');
+                    if (!label) return;
+                    const input = label.control;
+                    if (!input || input.type !== 'number') return;
+
+                    field = input;
+                    handle = label;
+                    startX = e.clientX;
+                    startValue = parseFloat(input.value);
+                    if (!Number.isFinite(startValue)) startValue = 0;
+                    stepSize = stepOf(input);
+                    places = placesOf(stepSize);
+                    dragging = false;
+                    swallowClick = false;
+                    // Follows the pointer wherever it goes, including outside the sidebar
+                    // and outside the window.
+                    label.setPointerCapture(e.pointerId);
+                });
+
+                sidebar.addEventListener('pointermove', (e) => {
+                    if (!field) return;
+                    const dx = e.clientX - startX;
+                    if (!dragging) {
+                        if (Math.abs(dx) < DEAD_ZONE) return;
+                        dragging = true;
+                        document.body.classList.add('scrubbing');
+                        handle.classList.add('scrub-active');
+                    }
+
+                    // Alt beats Shift when both are held: asking for fine control is the
+                    // more specific request of the two.
+                    const scale = e.altKey ? 0.1 : (e.shiftKey ? 10 : 1);
+                    let value = startValue
+                        + Math.round(dx / PIXELS_PER_STEP) * stepSize * scale;
+
+                    const min = parseFloat(field.min);
+                    const max = parseFloat(field.max);
+                    if (Number.isFinite(min)) value = Math.max(value, min);
+                    if (Number.isFinite(max)) value = Math.min(value, max);
+
+                    field.value = String(Number(value.toFixed(places)));
+                    // What every listener on these fields is already waiting for. Bubbles,
+                    // because the pattern parameters are handled by one delegated listener
+                    // on the panel rather than per field.
+                    field.dispatchEvent(new Event('input', { bubbles: true }));
+                    e.preventDefault();
+                });
+
+                const end = (e) => {
+                    if (!field) return;
+                    if (handle) {
+                        handle.classList.remove('scrub-active');
+                        if (handle.hasPointerCapture(e.pointerId)) {
+                            handle.releasePointerCapture(e.pointerId);
+                        }
+                    }
+                    document.body.classList.remove('scrubbing');
+                    // A drag ends in a click on the label, which would focus the field and
+                    // on a phone raise the keyboard over the dial you were just adjusting.
+                    swallowClick = dragging;
+                    field = null;
+                    handle = null;
+                    dragging = false;
+                };
+
+                sidebar.addEventListener('pointerup', end);
+                sidebar.addEventListener('pointercancel', end);
+
+                // Capture phase, so it gets there before the label can act on it.
+                sidebar.addEventListener('click', (e) => {
+                    if (!swallowClick) return;
+                    swallowClick = false;
+                    if (e.target.closest('label.scrub')) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                    }
+                }, true);
+            }
 
             el('layer-list').addEventListener('click', (e) => {
                 const row = e.target.closest('.layer-row');
@@ -6199,15 +6364,32 @@
             }
 
             // --- Generation ----------------------------------------------------------
+            // How long the last one took. The only use for it is deciding whether the next
+            // one is worth announcing: nothing else here cares, and the number the readout
+            // shows is passed to it directly.
+            let lastGenerationMs = 0;
+
+            // Under this, a regeneration is over before anyone could read a word of the
+            // panel saying it had started.
+            const BUSY_THRESHOLD_MS = 60;
+
             function scheduleRegenerate() {
                 if (regenerateTimer !== null) return;
-                Readout.setBusy(true);
+                // A cheap pattern says nothing. Dragging a value produces a regeneration
+                // every couple of frames, and a panel that flashed on and off throughout
+                // would sit over the very thing being adjusted -- while saying, wrongly,
+                // that there was a wait to sit through.
+                const announce = lastGenerationMs >= BUSY_THRESHOLD_MS;
+                if (announce) Readout.setBusy(true);
                 // Two frames, not one: the first lets the browser paint the busy panel, and
                 // the generation that follows blocks the main thread until it is done.
                 regenerateTimer = requestAnimationFrame(() => {
                     requestAnimationFrame(() => {
                         regenerateTimer = null;
                         regenerate();
+                        // Unconditionally, not `if (announce)`: this is the one place the
+                        // panel is ever taken down, and a pattern that was slow last time
+                        // and quick this time must not leave it on screen.
                         Readout.setBusy(false);
                     });
                 });
@@ -6358,11 +6540,12 @@
                 cutMask = view.mask;
                 applyDisplay();
 
+                lastGenerationMs = performance.now() - started;
                 Readout.setStats({
                     paths: totalPaths,
                     segments: totalSegments,
                     length: totalLength,
-                    ms: performance.now() - started,
+                    ms: lastGenerationMs,
                     layers: results.length
                 });
 
