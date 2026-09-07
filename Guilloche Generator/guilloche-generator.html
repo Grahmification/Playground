@@ -1208,6 +1208,28 @@
             <div class="panel-title">Program</div>
             <div class="field-pair">
                 <div class="control-group">
+                    <div class="label-row">
+                        <label for="gc-origin-x">Origin X (mm)</label>
+                        <span class="help" tabindex="0">?<span class="help-bubble">Where the
+                            program's zero sits, measured from the centre of the dial face. At
+                            0,&nbsp;0,&nbsp;0 the file is written about the dial centre with Z0 on
+                            the face. Setting Z to &minus;0.6 puts zero 0.6&nbsp;mm below the face
+                            &mdash; on the fixture, say &mdash; so the face is then cut at
+                            Z0.6.</span></span>
+                    </div>
+                    <input type="number" id="gc-origin-x" value="0" step="0.5">
+                </div>
+                <div class="control-group">
+                    <label for="gc-origin-y">Origin Y (mm)</label>
+                    <input type="number" id="gc-origin-y" value="0" step="0.5">
+                </div>
+                <div class="control-group">
+                    <label for="gc-origin-z">Origin Z (mm)</label>
+                    <input type="number" id="gc-origin-z" value="0" step="0.1">
+                </div>
+            </div>
+            <div class="field-pair">
+                <div class="control-group">
                     <label for="gc-work-offset">Work Offset</label>
                     <select id="gc-work-offset">
                         <option value="G54" selected>G54</option>
@@ -4663,7 +4685,12 @@
                 return {
                     arcTolerance: Number.isFinite(tolerance) ? Math.max(tolerance, 0) : 0,
                     workOffset: Util.el('gc-work-offset').value,
-                    coolant: Util.el('gc-coolant').value
+                    coolant: Util.el('gc-coolant').value,
+                    origin: {
+                        x: readNumber('gc-origin-x', 0),
+                        y: readNumber('gc-origin-y', 0),
+                        z: readNumber('gc-origin-z', 0)
+                    }
                 };
             }
 
@@ -4671,6 +4698,14 @@
                 if (!saved || typeof saved !== 'object') return;
                 if (Number.isFinite(saved.arcTolerance)) {
                     Util.el('gc-arc-tol').value = saved.arcTolerance;
+                }
+                const origin = saved.origin;
+                if (origin && typeof origin === 'object') {
+                    for (const axis of ['x', 'y', 'z']) {
+                        if (Number.isFinite(origin[axis])) {
+                            Util.el(`gc-origin-${axis}`).value = origin[axis];
+                        }
+                    }
                 }
                 const setChoice = (id, value) => {
                     const field = Util.el(id);
@@ -5111,8 +5146,20 @@
                 const workOffset = (options && options.workOffset) || 'G54';
                 const coolant = (options && options.coolant) || '';
 
-                const fx = (v) => (v - b.ox).toFixed(4);
-                const fy = (v) => (v - b.oy).toFixed(4);
+                // Where the program's zero sits, measured from the centre of the dial face.
+                // Subtracted from every position, so moving the origin one way moves the
+                // numbers the other -- which is what "the zero is over there" means.
+                //
+                // Nothing has to be done to the arcs: I and J are incremental from the start
+                // of the arc to its centre, so a shift applied to both cancels out of them.
+                const origin = (options && options.origin) || {};
+                const ox = Number.isFinite(origin.x) ? origin.x : 0;
+                const oy = Number.isFinite(origin.y) ? origin.y : 0;
+                const oz = Number.isFinite(origin.z) ? origin.z : 0;
+
+                const fx = (v) => (v - b.ox - ox).toFixed(4);
+                const fy = (v) => (v - b.oy - oy).toFixed(4);
+                const fz = (v) => (v - oz).toFixed(3);
                 // Every dimensional word carries a decimal point. Without one a control on
                 // Fanuc's increment system reads the number in least-increment units, and
                 // an F300 meant as 300 mm/min is obeyed as three tenths of one.
@@ -5136,7 +5183,7 @@
                     // simulated is what gets cut.
                     const layer = result.layer;
                     const depth = Math.max(layer.depth, 0);
-                    const safeZ = layer.safeZ.toFixed(3);
+                    const safeZ = fz(layer.safeZ);
                     const description = layer.cutter === 'ball'
                         ? `ball nose R${layer.radius}`
                         : `${layer.angle} deg chamfer`;
@@ -5235,7 +5282,7 @@
                             out.push(`G0 Z${safeZ}`);
                             atZ = safeZ;
                         }
-                        out.push(`G1 Z${(-depth).toFixed(3)} F${rate(layer.plunge)}`);
+                        out.push(`G1 Z${fz(-depth)} F${rate(layer.plunge)}`);
 
                         // The feed is stated once per path rather than on every move: the
                         // files run to hundreds of thousands of blocks, and a repeated F
@@ -5262,7 +5309,9 @@
                     '%',
                     '(Guilloche pattern)',
                     `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
-                    '(Origin: dial centre. Z0 = dial face.)',
+                    (ox || oy || oz)
+                        ? `(Origin: X${ox} Y${oy} Z${oz} from the dial centre and face)`
+                        : '(Origin: dial centre. Z0 = dial face.)',
                     tolerance > 0
                         ? `(Arcs fitted to ${tolerance} mm: ${Util.count(arcCount)} arcs, ` +
                           `${Util.count(lineCount)} lines)`
@@ -5271,8 +5320,10 @@
                 // The tool list, so the setup and the depth limit can be checked before
                 // anyone presses cycle start.
                 for (const [tool, info] of tools) {
+                    // ZMIN in the coordinates the operator will read off the control, so it
+                    // can be checked against the machine rather than against the dial.
                     head.push(`(${tool} - ${comment(info.description)} - cuts ` +
-                              `${info.width.toFixed(3)}mm wide - ZMIN=${info.zmin.toFixed(3)})`);
+                              `${info.width.toFixed(3)}mm wide - ZMIN=${fz(info.zmin)})`);
                 }
                 head.push('G90 G94 G17 G40 G49 G80 G91.1 G64');
                 head.push('G21 (mm)');
