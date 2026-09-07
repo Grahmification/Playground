@@ -1,0 +1,133 @@
+{
+  "format": "guilloche-dial",
+  "version": 2,
+  "saved": "2026-09-07T04:22:10.085Z",
+  "dial": {
+    "kind": "sample",
+    "name": "Sample dial (34 mm)",
+    "units": "mm"
+  },
+  "settings": {
+    "units": "auto",
+    "joinTolerance": 0.05,
+    "margin": 0.3,
+    "thickness": 0.6,
+    "material": "silver",
+    "gcode": {
+      "arcTolerance": 0.0001,
+      "workOffset": "G54",
+      "coolant": "",
+      "origin": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      }
+    }
+  },
+  "selectedIndex": 1,
+  "layers": [
+    {
+      "id": 1,
+      "type": "spirograph",
+      "name": "Spirograph Rosette",
+      "enabled": true,
+      "color": "#ffc94a",
+      "cutter": "vee",
+      "depth": 0.12,
+      "angle": 90,
+      "radius": 0.15,
+      "tool": 1,
+      "safeZ": 1,
+      "feed": 300,
+      "plunge": 80,
+      "speed": 10000,
+      "cx": 0,
+      "cy": 0,
+      "rot": 0,
+      "rMin": 0,
+      "rMax": 0,
+      "values": {
+        "rosette-spiral": {
+          "lobes": 36,
+          "amplitude": 0.3,
+          "waveform": "sine",
+          "pitch": 0.45,
+          "innerRadius": 1.5,
+          "phaseDrift": 0
+        },
+        "sunburst": {
+          "count": 180,
+          "innerRadius": 2.5,
+          "outerRadius": 0,
+          "twist": 0,
+          "alternate": 0
+        },
+        "concentric": {
+          "spacing": 0.5,
+          "innerRadius": 0.5,
+          "count": 0
+        },
+        "waves": {
+          "spacing": 0.6,
+          "wavelength": 6,
+          "amplitude": 0.6,
+          "waveform": "sine",
+          "angle": 0,
+          "phaseStep": 24
+        },
+        "spirograph": {
+          "ringR": 60,
+          "rollR": 23,
+          "penD": 18,
+          "fit": true,
+          "scale": 0.25,
+          "copies": 1
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "sunburst",
+      "name": "Sunburst (Soleil)",
+      "enabled": true,
+      "color": "#4ec9b0",
+      "cutter": "vee",
+      "depth": 0.12,
+      "angle": 90,
+      "radius": 0.15,
+      "tool": 2,
+      "safeZ": 1,
+      "feed": 300,
+      "plunge": 80,
+      "speed": 10000,
+      "cx": 0,
+      "cy": 0,
+      "rot": 0,
+      "rMin": 0,
+      "rMax": 0,
+      "values": {
+        "rosette-spiral": {
+          "lobes": 36,
+          "amplitude": 0.3,
+          "waveform": "sine",
+          "pitch": 0.45,
+          "innerRadius": 1.5,
+          "phaseDrift": 0
+        },
+        "trace": {
+          "offset": 0.3,
+          "passes": 1,
+          "spacing": 0.4,
+          "holes": true
+        },
+        "sunburst": {
+          "count": 102,
+          "innerRadius": 2,
+          "outerRadius": 8,
+          "twist": 0,
+          "alternate": 0
+        }
+      }
+    }
+  ]
+}
