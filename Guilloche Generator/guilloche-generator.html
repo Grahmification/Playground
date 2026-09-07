@@ -5014,11 +5014,32 @@
                 // Within the band. Squared throughout, so the check costs no square roots.
                 const inner = (circle.r - tolerance) * (circle.r - tolerance);
                 const outer = (circle.r + tolerance) * (circle.r + tolerance);
+
+                // ...and no further from the path between those points than from the points
+                // themselves. Proving every sample sits on the circle proves nothing about
+                // the gaps between them: there the arc is free, and what it leaves behind is
+                // the straight segment joining the two, which it departs from by that
+                // chord's sagitta. Collinear collapsing makes this the common case rather
+                // than a corner one -- a straight run is cut down to its two endpoints, so a
+                // single sample gap can be millimetres long, and an arc reaching across one
+                // bulges away from a side that is supposed to be dead straight.
+                //
+                // So bound the chord. Solving sagitta <= tolerance for the chord gives
+                // s^2 <= 4(2*r*t - t^2), which lets a long jump through when the radius is
+                // large enough for it to be genuinely flat, and stops it when it is not.
+                const maxChordSq = Math.max(4 * (2 * circle.r * tolerance - tolerance * tolerance), 0);
+
                 for (let i = from; i <= to; i++) {
                     const dx = pts[i * 2] - circle.cx;
                     const dy = pts[i * 2 + 1] - circle.cy;
                     const distance = dx * dx + dy * dy;
                     if (distance < inner || distance > outer) return null;
+
+                    if (i > from) {
+                        const gx = pts[i * 2] - pts[(i - 1) * 2];
+                        const gy = pts[i * 2 + 1] - pts[(i - 1) * 2 + 1];
+                        if (gx * gx + gy * gy > maxChordSq) return null;
+                    }
                 }
 
                 // And going round it one way. Walking the turn point by point is what
