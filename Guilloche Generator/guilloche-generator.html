@@ -1304,7 +1304,7 @@
            dependencies only ever point *up* this list -- so a module can be read, changed
            or replaced knowing exactly what can be affected:
 
-             Util          formatting and maths helpers; depends on nothing
+             Util          formatting, maths and field helpers; depends on nothing
              Palette       every colour and material the generator uses, in one place
              DxfParser     DXF text -> flat polylines. No DOM, no three.js
              Loops         polylines -> closed loops, chained end to end
@@ -1320,9 +1320,10 @@
              Layers        the pattern layer stack: the document being edited
              Sidebar       the left-hand controls: values in, states out
              ViewToggles   the "what is drawn" panel floated over the 3D view
-             Readout       the figures floated over the 3D view
+             Readout       the figures and the busy notice floated over the 3D view
              GCodeDialog   the machining setup, asked for at the moment it is needed
              Preset        the saved design, to and from JSON
+             ArcFit        a polyline -> the fewest straight and circular moves for it
              Exporter      SVG / DXF / G-code writers
              App           the wiring: what happens when, and in what order
 
@@ -1345,6 +1346,28 @@
                 return document.getElementById(id);
             }
 
+            // --- Reading and writing fields ------------------------------------------
+            // Shared by the two modules that own forms. Which fields belong to whom is
+            // still theirs alone; how a number is got out of one is not worth two copies,
+            // and having had two is how one of them once lost its copy and threw.
+            function readNumber(id, fallback) {
+                const value = parseFloat(el(id).value);
+                return Number.isFinite(value) ? value : fallback;
+            }
+
+            function setNumber(id, value) {
+                if (Number.isFinite(value)) el(id).value = value;
+            }
+
+            // Only where the option still exists: a saved file may name one that has since
+            // been removed, and the field is better left as it was than set to nothing.
+            function setChoice(id, value) {
+                const field = el(id);
+                if (typeof value !== 'string') return;
+                if (!Array.from(field.options).some(option => option.value === value)) return;
+                field.value = value;
+            }
+
             const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 
             function escapeHtml(s) {
@@ -1359,6 +1382,58 @@
 
             function mm(v, digits = 2) {
                 return `${v.toFixed(digits)} mm`;
+            }
+
+            // --- Mitred normals ------------------------------------------------------
+            // Perpendiculars to a path, lengthened at the corners so a constant-width band
+            // built along it keeps its width through a turn instead of pinching.
+            //
+            // `closed` wraps the last point back to the first; an open polyline takes the
+            // one segment it has at each end and mitres nothing there. `fallback` is what to
+            // use where a path doubles back on itself exactly, leaving no mitre to compute:
+            // a cut wants a unit normal there so it keeps its width, an outline offset wants
+            // a zero so the point does not move. Both are deliberate, so the answer is the
+            // caller's to give.
+            const MITER_FALLBACK = [0, 1];
+
+            function miterNormals(pts, n, options) {
+                const closed = !!(options && options.closed);
+                const fallback = (options && options.fallback) || MITER_FALLBACK;
+                const nx = new Float64Array(n);
+                const ny = new Float64Array(n);
+
+                for (let i = 0; i < n; i++) {
+                    const before = closed ? (i - 1 + n) % n : i - 1;
+                    const after = closed ? (i + 1) % n : i + 1;
+                    let ax = 0;
+                    let ay = 0;
+                    let count = 0;
+
+                    for (const [from, to] of [[before, i], [i, after]]) {
+                        if (from < 0 || to >= n) continue;
+                        const dx = pts[to * 2] - pts[from * 2];
+                        const dy = pts[to * 2 + 1] - pts[from * 2 + 1];
+                        const length = Math.hypot(dx, dy) || 1;
+                        ax += -dy / length;
+                        ay += dx / length;
+                        count++;
+                    }
+
+                    const length = Math.hypot(ax, ay);
+                    if (length < 1e-9) {
+                        nx[i] = fallback[0];
+                        ny[i] = fallback[1];
+                        continue;
+                    }
+                    // |n_prev + n_next| / 2 is the cosine of half the turn, so its
+                    // reciprocal is exactly the mitre length. Clamped, because a hairpin's
+                    // is unbounded and letting it run fires a spike across the dial.
+                    const scale = count === 2 ? Math.min(1 / Math.max(length / 2, 0.34), 3) : 1;
+                    nx[i] = (ax / length) * scale;
+                    ny[i] = (ay / length) * scale;
+                }
+
+                return { nx, ny };
             }
 
             // Drops the points that lie on the straight line between their neighbours.
@@ -1430,7 +1505,11 @@
                 requestAnimationFrame(() => URL.revokeObjectURL(url));
             }
 
-            return { clamp, el, escapeHtml, count, mm, gcd, collapseCollinear, download };
+            return {
+                clamp, el, escapeHtml, count, mm, gcd,
+                readNumber, setNumber, setChoice,
+                miterNormals, collapseCollinear, download
+            };
         })();
 
         // --- Palette -----------------------------------------------------------------
@@ -2439,29 +2518,10 @@
             // boundary whether that landed in material. A vote over sample points rather
             // than one test, so a single degenerate vertex cannot invert a whole loop.
             function metalNormals(loop, n, boundary) {
-                const nx = new Float64Array(n);
-                const ny = new Float64Array(n);
-
-                for (let i = 0; i < n; i++) {
-                    const prev = (i - 1 + n) % n;
-                    const next = (i + 1) % n;
-                    let ax = 0;
-                    let ay = 0;
-                    for (const [from, to] of [[prev, i], [i, next]]) {
-                        const dx = loop[to * 2] - loop[from * 2];
-                        const dy = loop[to * 2 + 1] - loop[from * 2 + 1];
-                        const length = Math.hypot(dx, dy) || 1;
-                        ax += -dy / length;
-                        ay += dx / length;
-                    }
-                    const length = Math.hypot(ax, ay);
-                    if (length < 1e-9) { nx[i] = 0; ny[i] = 0; continue; }
-                    // |n_prev + n_next| / 2 is the cosine of half the turn, so its
-                    // reciprocal is the mitre length. Clamped: a hairpin has none.
-                    const scale = Math.min(1 / Math.max(length / 2, 0.34), 3);
-                    nx[i] = (ax / length) * scale;
-                    ny[i] = (ay / length) * scale;
-                }
+                // Wrapped, since a boundary loop is a ring. The fallback is zero rather than
+                // a unit normal: where an outline doubles back on itself there is no
+                // direction to offset in, and the right answer is not to move the point.
+                const { nx, ny } = Util.miterNormals(loop, n, { closed: true, fallback: [0, 0] });
 
                 let vote = 0;
                 const probe = Math.max(boundary.diagonal * 1e-4, 1e-5);
@@ -3672,36 +3732,10 @@
             }
 
             // Mitred normals, so a cut keeps its width through a corner instead of pinching.
-            // The scale is clamped: a hairpin turn has an unbounded mitre, and letting it
-            // run would fire a spike across the dial.
+            // These paths are open, and where one doubles back exactly the fallback is a
+            // unit normal: the cut still has to be as wide there as anywhere else.
             function miterNormals(pts, n) {
-                const nx = new Float64Array(n);
-                const ny = new Float64Array(n);
-                for (let i = 0; i < n; i++) {
-                    let ax = 0;
-                    let ay = 0;
-                    let count = 0;
-                    if (i > 0) {
-                        const dx = pts[i * 2] - pts[(i - 1) * 2];
-                        const dy = pts[i * 2 + 1] - pts[(i - 1) * 2 + 1];
-                        const len = Math.hypot(dx, dy) || 1;
-                        ax += -dy / len; ay += dx / len; count++;
-                    }
-                    if (i < n - 1) {
-                        const dx = pts[(i + 1) * 2] - pts[i * 2];
-                        const dy = pts[(i + 1) * 2 + 1] - pts[i * 2 + 1];
-                        const len = Math.hypot(dx, dy) || 1;
-                        ax += -dy / len; ay += dx / len; count++;
-                    }
-                    const len = Math.hypot(ax, ay);
-                    if (len < 1e-9) { nx[i] = 0; ny[i] = 1; continue; }
-                    // |n_prev + n_next| / 2 is the cosine of half the turn, so its
-                    // reciprocal is exactly the mitre length.
-                    const scale = count === 2 ? Math.min(1 / Math.max(len / 2, 0.34), 3) : 1;
-                    nx[i] = (ax / len) * scale;
-                    ny[i] = (ay / len) * scale;
-                }
-                return { nx, ny };
+                return Util.miterNormals(pts, n);
             }
 
             // The profile is symmetric about its own centre, so its right half -- the tip
@@ -4233,10 +4267,9 @@
                 reparse: () => {}
             };
 
-            function readNumber(id, fallback) {
-                const v = parseFloat(el(id).value);
-                return Number.isFinite(v) ? v : fallback;
-            }
+            // Borrowed from Util rather than kept here. Which fields belong to this module
+            // is still its own business; how a number is got out of one is not.
+            const { readNumber, setNumber, setChoice } = Util;
 
             function settings() {
                 return {
@@ -4254,16 +4287,6 @@
             // or to name an option that still exists.
             function applySettings(saved) {
                 if (!saved || typeof saved !== 'object') return;
-
-                const setNumber = (id, value) => {
-                    if (Number.isFinite(value)) el(id).value = value;
-                };
-                const setChoice = (id, value) => {
-                    const field = el(id);
-                    if (typeof value !== 'string') return;
-                    if (!Array.from(field.options).some(o => o.value === value)) return;
-                    field.value = value;
-                };
 
                 setChoice('dxf-units', saved.units);
                 setNumber('join-tol', saved.joinTolerance);
@@ -4567,14 +4590,10 @@
                 status.className = bad ? 'hint hint-bad' : 'hint hint-muted';
             }
 
-            function setBusy(on) {
-                el('busy').hidden = !on;
-            }
-
             return {
                 hooks, settings, applySettings, refresh,
                 setDialInfo, setReliefWarning, setMarginHint,
-                setSettingsStatus, setBusy
+                setSettingsStatus
             };
         })();
 
@@ -4615,8 +4634,9 @@
         })();
 
         // --- Readout -----------------------------------------------------------------
-        // The figures floated over the top-right of the 3D view: what was loaded, and what
-        // the last generation made of it.
+        // What the 3D view says in words: the figures floated over its top-right corner --
+        // what was loaded, and what the last generation made of it -- and the notice that
+        // covers the middle of it while a regeneration is in flight.
         //
         // They read better here than in the sidebar. None of them is a control -- there is
         // nothing to do to any of them -- and every one is a fact about the thing on screen,
@@ -4642,7 +4662,14 @@
                     : `${Math.round(stats.ms)} ms`;
             }
 
-            return { setDial, setStats };
+            // Lives here rather than in Sidebar, where it used to: #busy sits inside the
+            // canvas container, and a module that owns the sidebar has no business writing
+            // to the viewport.
+            function setBusy(on) {
+                Util.el('busy').hidden = !on;
+            }
+
+            return { setDial, setStats, setBusy };
         })();
         // --- GCodeDialog -------------------------------------------------------------
         // The machining setup, asked for at the moment it is needed rather than kept in the
@@ -4733,12 +4760,9 @@
                 `).join('');
             }
 
-            // This module's own, not the sidebar's: the two panels are read independently
-            // and neither reaches into the other's fields.
-            function readNumber(id, fallback) {
-                const value = parseFloat(Util.el(id).value);
-                return Number.isFinite(value) ? value : fallback;
-            }
+            // Same helpers the sidebar borrows. The two panels are still read independently
+            // and neither reaches into the other's fields; only the arithmetic is shared.
+            const { readNumber, setNumber, setChoice } = Util;
 
             function settings() {
                 return {
@@ -4755,23 +4779,13 @@
 
             function applySettings(saved) {
                 if (!saved || typeof saved !== 'object') return;
-                if (Number.isFinite(saved.arcTolerance)) {
-                    Util.el('gc-arc-tol').value = saved.arcTolerance;
-                }
+                setNumber('gc-arc-tol', saved.arcTolerance);
                 const origin = saved.origin;
                 if (origin && typeof origin === 'object') {
                     for (const axis of ['x', 'y', 'z']) {
-                        if (Number.isFinite(origin[axis])) {
-                            Util.el(`gc-origin-${axis}`).value = origin[axis];
-                        }
+                        setNumber(`gc-origin-${axis}`, origin[axis]);
                     }
                 }
-                const setChoice = (id, value) => {
-                    const field = Util.el(id);
-                    if (typeof value !== 'string') return;
-                    if (!Array.from(field.options).some(o => o.value === value)) return;
-                    field.value = value;
-                };
                 setChoice('gc-work-offset', saved.workOffset);
                 setChoice('gc-coolant', saved.coolant);
             }
@@ -4943,109 +4957,24 @@
             return { write, read };
         })();
 
-        // --- Exporter ----------------------------------------------------------------
-        // The generated pattern, written out three ways. All three re-origin the drawing on
-        // the dial's centre: the incoming DXF may have been drawn anywhere on a sheet, and
-        // a dial is always fixtured about its own axis.
-        const Exporter = (() => {
-            function bounds(boundary) {
-                return {
-                    ox: boundary.centerX,
-                    oy: boundary.centerY,
-                    minX: boundary.minX - boundary.centerX,
-                    maxX: boundary.maxX - boundary.centerX,
-                    minY: boundary.minY - boundary.centerY,
-                    maxY: boundary.maxY - boundary.centerY
-                };
-            }
-
-            function svg(results, boundary) {
-                const b = bounds(boundary);
-                const pad = 1;
-                const width = (b.maxX - b.minX) + pad * 2;
-                const height = (b.maxY - b.minY) + pad * 2;
-                // SVG's Y runs down the page and the drawing's runs up it, so the whole
-                // thing is flipped once here rather than at every point.
-                const flip = (y) => b.maxY - y + pad;
-                const shift = (x) => x - b.minX + pad;
-
-                const parts = [
-                    `<?xml version="1.0" encoding="UTF-8"?>`,
-                    `<svg xmlns="http://www.w3.org/2000/svg" width="${width.toFixed(3)}mm" height="${height.toFixed(3)}mm" viewBox="0 0 ${width.toFixed(3)} ${height.toFixed(3)}">`,
-                    `<g fill="none" stroke-width="0.08" stroke-linecap="round" stroke-linejoin="round">`
-                ];
-
-                for (const loop of boundary.loops) {
-                    const d = [];
-                    for (let i = 0; i < loop.length; i += 2) {
-                        d.push(`${shift(loop[i] - b.ox).toFixed(3)},${flip(loop[i + 1] - b.oy).toFixed(3)}`);
-                    }
-                    parts.push(`<polygon stroke="#c00000" points="${d.join(' ')}"/>`);
-                }
-
-                for (const result of results) {
-                    parts.push(`<g stroke="${result.layer.color}">`);
-                    for (const pts of result.polys) {
-                        const d = [];
-                        for (let i = 0; i < pts.length; i += 2) {
-                            d.push(`${shift(pts[i] - b.ox).toFixed(3)},${flip(pts[i + 1] - b.oy).toFixed(3)}`);
-                        }
-                        parts.push(`<polyline points="${d.join(' ')}"/>`);
-                    }
-                    parts.push(`</g>`);
-                }
-
-                parts.push('</g></svg>');
-                return parts.join('\n');
-            }
-
-            // R12-flavoured ASCII: POLYLINE/VERTEX rather than LWPOLYLINE, because every
-            // CAM package still reads it and nothing here needs the newer entity.
-            function dxf(results, boundary) {
-                const b = bounds(boundary);
-                const out = ['0', 'SECTION', '2', 'ENTITIES'];
-
-                const write = (pts, layerName, closed) => {
-                    out.push('0', 'POLYLINE', '8', layerName, '66', '1', '70', closed ? '1' : '0');
-                    for (let i = 0; i < pts.length; i += 2) {
-                        out.push('0', 'VERTEX', '8', layerName,
-                            '10', (pts[i] - b.ox).toFixed(4),
-                            '20', (pts[i + 1] - b.oy).toFixed(4),
-                            '30', '0.0');
-                    }
-                    out.push('0', 'SEQEND', '8', layerName);
-                };
-
-                for (const loop of boundary.loops) write(loop, 'DIAL_OUTLINE', true);
-                results.forEach((result, i) => {
-                    const name = `GUILLOCHE_${i + 1}`;
-                    for (const pts of result.polys) write(pts, name, false);
-                });
-
-                out.push('0', 'ENDSEC', '0', 'EOF');
-                return out.join('\n');
-            }
-
-            // Parentheses delimit a comment, and they do not nest: a pattern label like
-            // "Rosette Spiral (Rose Engine)" carries a pair of its own, and dropped into a
-            // comment verbatim it would end that comment early and leave the rest of the
-            // line to be read as code.
-            function comment(text) {
-                return String(text).replace(/[()]/g, '');
-            }
-
-            // --- Arc fitting ---------------------------------------------------------
-            // Most of what a rose engine draws is curved -- a rosette's arches, a turned
-            // circle, a traced outline -- and as G1 those are thousands of short moves. A
-            // control has to look ahead through every one of them, and the feed drops to
-            // whatever it can plan. The same curve as G2/G3 is a handful of blocks.
-            //
-            // The fit is the standard greedy one: take the longest run of points that lies
-            // on a single circle within tolerance, emit it, start again from its end.
-            // Straight stretches never arrive here as long runs -- collinear collapsing has
-            // already cut each one down to its two endpoints -- so nothing special is
-            // needed to stop a line being mistaken for an enormous arc.
-
+        // --- ArcFit ------------------------------------------------------------------
+        // A polyline, as the fewest moves that still describe it: straight where it is
+        // straight, circular arcs where a run of points turns out to lie on one.
+        //
+        // Most of what a rose engine draws is curved -- a rosette's arches, a turned circle,
+        // a traced outline -- and written as straight moves those are thousands of blocks. A
+        // control has to look ahead through every one, and the feed drops to whatever it can
+        // plan. The same curve as arcs is a handful.
+        //
+        // The fit is the standard greedy one: take the longest run of points lying on a
+        // single circle within tolerance, emit it, start again from its end. Straight
+        // stretches never arrive here as long runs -- collinear collapsing has already cut
+        // each down to its two endpoints -- so nothing is needed to stop a line being
+        // mistaken for an enormous arc.
+        //
+        // It knows nothing about G-code. It is given points and gives back moves; that they
+        // are later written as G2 and G3 is the exporter's business, not this module's.
+        const ArcFit = (() => {
             const MIN_ARC_POINTS = 4;            // three segments; fewer never pays for itself
             const MIN_ARC_RADIUS = 0.05;         // mm
             const MAX_ARC_RADIUS = 5000;         // mm, past which it is a line in all but name
@@ -5159,7 +5088,8 @@
             }
 
             // A polyline as a list of moves: straight where it is straight, arcs where a
-            // run of points turns out to lie on one.
+            // run of points turns out to lie on one. A tolerance of zero fits nothing and
+            // every move comes back straight.
             function toMoves(pts, tolerance) {
                 const count = pts.length / 2;
                 const moves = [];
@@ -5187,6 +5117,100 @@
                     }
                 }
                 return moves;
+            }
+
+            return { toMoves };
+        })();
+
+        // --- Exporter ----------------------------------------------------------------
+        // The generated pattern, written out three ways. All three re-origin the drawing on
+        // the dial's centre: the incoming DXF may have been drawn anywhere on a sheet, and a
+        // dial is always fixtured about its own axis.
+        const Exporter = (() => {
+            function bounds(boundary) {
+                return {
+                    ox: boundary.centerX,
+                    oy: boundary.centerY,
+                    minX: boundary.minX - boundary.centerX,
+                    maxX: boundary.maxX - boundary.centerX,
+                    minY: boundary.minY - boundary.centerY,
+                    maxY: boundary.maxY - boundary.centerY
+                };
+            }
+
+            function svg(results, boundary) {
+                const b = bounds(boundary);
+                const pad = 1;
+                const width = (b.maxX - b.minX) + pad * 2;
+                const height = (b.maxY - b.minY) + pad * 2;
+                // SVG's Y runs down the page and the drawing's runs up it, so the whole
+                // thing is flipped once here rather than at every point.
+                const flip = (y) => b.maxY - y + pad;
+                const shift = (x) => x - b.minX + pad;
+
+                const parts = [
+                    `<?xml version="1.0" encoding="UTF-8"?>`,
+                    `<svg xmlns="http://www.w3.org/2000/svg" width="${width.toFixed(3)}mm" height="${height.toFixed(3)}mm" viewBox="0 0 ${width.toFixed(3)} ${height.toFixed(3)}">`,
+                    `<g fill="none" stroke-width="0.08" stroke-linecap="round" stroke-linejoin="round">`
+                ];
+
+                for (const loop of boundary.loops) {
+                    const d = [];
+                    for (let i = 0; i < loop.length; i += 2) {
+                        d.push(`${shift(loop[i] - b.ox).toFixed(3)},${flip(loop[i + 1] - b.oy).toFixed(3)}`);
+                    }
+                    parts.push(`<polygon stroke="#c00000" points="${d.join(' ')}"/>`);
+                }
+
+                for (const result of results) {
+                    parts.push(`<g stroke="${result.layer.color}">`);
+                    for (const pts of result.polys) {
+                        const d = [];
+                        for (let i = 0; i < pts.length; i += 2) {
+                            d.push(`${shift(pts[i] - b.ox).toFixed(3)},${flip(pts[i + 1] - b.oy).toFixed(3)}`);
+                        }
+                        parts.push(`<polyline points="${d.join(' ')}"/>`);
+                    }
+                    parts.push(`</g>`);
+                }
+
+                parts.push('</g></svg>');
+                return parts.join('\n');
+            }
+
+            // R12-flavoured ASCII: POLYLINE/VERTEX rather than LWPOLYLINE, because every
+            // CAM package still reads it and nothing here needs the newer entity.
+            function dxf(results, boundary) {
+                const b = bounds(boundary);
+                const out = ['0', 'SECTION', '2', 'ENTITIES'];
+
+                const write = (pts, layerName, closed) => {
+                    out.push('0', 'POLYLINE', '8', layerName, '66', '1', '70', closed ? '1' : '0');
+                    for (let i = 0; i < pts.length; i += 2) {
+                        out.push('0', 'VERTEX', '8', layerName,
+                            '10', (pts[i] - b.ox).toFixed(4),
+                            '20', (pts[i + 1] - b.oy).toFixed(4),
+                            '30', '0.0');
+                    }
+                    out.push('0', 'SEQEND', '8', layerName);
+                };
+
+                for (const loop of boundary.loops) write(loop, 'DIAL_OUTLINE', true);
+                results.forEach((result, i) => {
+                    const name = `GUILLOCHE_${i + 1}`;
+                    for (const pts of result.polys) write(pts, name, false);
+                });
+
+                out.push('0', 'ENDSEC', '0', 'EOF');
+                return out.join('\n');
+            }
+
+            // Parentheses delimit a comment, and they do not nest: a pattern label like
+            // "Rosette Spiral (Rose Engine)" carries a pair of its own, and dropped into a
+            // comment verbatim it would end that comment early and leave the rest of the
+            // line to be read as code.
+            function comment(text) {
+                return String(text).replace(/[()]/g, '');
             }
 
             // Fanuc / Haas / LinuxCNC flavour.
@@ -5349,7 +5373,7 @@
                         // each path, though, because the plunge above changed it -- and it
                         // goes on whichever move comes first, arc or line.
                         let pending = ` F${rate(layer.feed)}`;
-                        for (const move of toMoves(pts, tolerance)) {
+                        for (const move of ArcFit.toMoves(pts, tolerance)) {
                             if (move.arc) {
                                 arcCount++;
                                 out.push(`G${move.ccw ? 3 : 2} X${fx(move.x)} Y${fy(move.y)} ` +
@@ -5587,14 +5611,14 @@
             // --- Generation ----------------------------------------------------------
             function scheduleRegenerate() {
                 if (regenerateTimer !== null) return;
-                Sidebar.setBusy(true);
+                Readout.setBusy(true);
                 // Two frames, not one: the first lets the browser paint the busy panel, and
                 // the generation that follows blocks the main thread until it is done.
                 regenerateTimer = requestAnimationFrame(() => {
                     requestAnimationFrame(() => {
                         regenerateTimer = null;
                         regenerate();
-                        Sidebar.setBusy(false);
+                        Readout.setBusy(false);
                     });
                 });
             }
