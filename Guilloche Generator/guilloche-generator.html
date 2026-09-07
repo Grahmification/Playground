@@ -2920,6 +2920,77 @@
                     }
                 },
 
+                'log-spiral': {
+                    label: 'Logarithmic Spiral',
+                    note: 'Equiangular spirals — r = a·e^(bθ), which crosses every radius at the ' +
+                          'same angle, so the figure looks the same at any magnification. A ' +
+                          'counter-rotating second family crosses the first into a lattice of ' +
+                          'lenses.',
+                    params: [
+                        { k: 'arms', label: 'Arms per Family', type: 'number', value: 16, min: 1, max: 400, step: 1 },
+                        { k: 'angle', label: 'Constant Angle (°)', type: 'number', value: 72.97, step: 1,
+                          help: 'The angle the spiral cuts every radius at, and the only thing ' +
+                                'that decides its shape. 90° is a circle; tighter numbers wind ' +
+                                'harder; past 90° it winds the other way. 72.97° is the golden ' +
+                                'spiral, whose radius grows φ-fold every quarter turn.' },
+                        { k: 'innerRadius', label: 'Start Radius (mm)', type: 'number', value: 1.5, min: 0.01, step: 0.5,
+                          help: 'A logarithmic spiral never reaches the centre — it circles in ' +
+                                'forever at ever smaller scale. This is where the arms are cut off.' },
+                        { k: 'mirror', label: 'Counter-rotating family', type: 'check', value: true,
+                          help: 'Draws the mirror image of the family as well. The two cross at ' +
+                                'the same angle everywhere they meet, which is what tiles the dial ' +
+                                'with lenses rather than with a plain swirl.' }
+                    ],
+                    generate(p, ctx) {
+                        const arms = Util.clamp(Math.round(p.arms), 1, 400);
+                        const a = Math.max(p.innerRadius, 0.01);
+                        if (ctx.reach <= a) return [];
+
+                        // b = cot(angle). The angle is the spiral's defining property, the one
+                        // it holds against every radius; b is what the parametrisation wants.
+                        // This is the only line where the two meet.
+                        const alpha = p.angle * DEG;
+                        const sin = Math.sin(alpha);
+                        const cos = Math.cos(alpha);
+                        // A right angle is a circle and a straight one is a radial ray. Neither
+                        // grows out to the rim the way what follows assumes, and both divide by
+                        // zero on the way to saying so.
+                        if (Math.abs(cos) < 1e-9 || Math.abs(sin) < 1e-9) return [];
+                        const b = cos / sin;
+
+                        // Stepped along the arm's length, not its angle. For this spiral the two
+                        // are not the same thing: ds = r·√(1+b²)·dθ, so an even angular step
+                        // leaves chords proportional to the radius -- far finer than anyone
+                        // needs at the centre and visibly faceted at the rim. Even steps in r
+                        // are exactly even steps in arc length, which is what is wanted.
+                        const span = ctx.reach - a;
+                        const steps = Util.clamp(
+                            Math.ceil((Math.hypot(1, b) / Math.abs(b)) * span / CHORD), 64, 60000);
+
+                        // The mirror family is the same arms with the angle negated, so it costs
+                        // a sign rather than a second copy of the geometry.
+                        const hands = p.mirror ? [1, -1] : [1];
+
+                        const out = [];
+                        for (const hand of hands) {
+                            for (let j = 0; j < arms; j++) {
+                                if (!ctx.room()) return out;
+                                const turn = (j / arms) * TAU;
+                                const pts = [];
+                                const budget = Math.min(steps, ctx.left());
+                                for (let i = 0; i <= budget; i++) {
+                                    const r = a + span * (i / steps);
+                                    const angle = hand * (Math.log(r / a) / b) + turn;
+                                    pts.push(Math.cos(angle) * r, Math.sin(angle) * r);
+                                }
+                                out.push({ pts, closed: false });
+                                ctx.spend(pts.length / 2);
+                            }
+                        }
+                        return out;
+                    }
+                },
+
                 'waves': {
                     label: 'Straight-Line Waves',
                     note: 'Straight-line engine turning: parallel passes with the rubber rocking, ' +
@@ -3223,8 +3294,8 @@
 
             const ORDER = [
                 'rosette-spiral', 'rosette-rings', 'spirograph', 'spirograph-field',
-                'spiral-vortex', 'waves', 'sunburst', 'concentric', 'crosshatch',
-                'clous', 'basket', 'arcs', 'trace'
+                'spiral-vortex', 'log-spiral', 'waves', 'sunburst', 'concentric',
+                'crosshatch', 'clous', 'basket', 'arcs', 'trace'
             ];
 
             function defaults(type) {
