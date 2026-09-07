@@ -1182,6 +1182,19 @@
                 in millimetres above the dial face; feeds are in mm/min. Consecutive layers set to
                 the same tool number are cut without a change between them.</div>
             <div id="gcode-tools"></div>
+
+            <div class="panel-title">Arc Fitting</div>
+            <div class="control-group">
+                <div class="label-row">
+                    <label for="gc-arc-tol">Arc Tolerance (mm)</label>
+                    <span class="help" tabindex="0">?<span class="help-bubble">How far a fitted
+                        G2/G3 arc may stray from the path it replaces. Curved passes come out as a
+                        handful of arc blocks instead of thousands of short straight ones, which is
+                        what lets a control hold the feed through them. Set to 0 to write straight
+                        moves only.</span></span>
+                </div>
+                <input type="number" id="gc-arc-tol" value="0.005" min="0" step="0.001">
+            </div>
         </div>
         <div class="dialog-foot">
             <button id="gcode-cancel" class="btn btn-secondary" type="button">Cancel</button>
@@ -4525,9 +4538,11 @@
         // be written down in markup at all: it is one row per layer, built from the stack
         // every time the dialog opens.
         //
-        // Nothing is held here. Every value is written back onto its layer -- it belongs to
-        // the layer, travels in a saved design with it, and has to survive the dialog being
-        // closed. This module owns the panel and nothing else.
+        // Almost nothing is held here. Every per-layer value is written back onto its layer
+        // -- it belongs to the layer, travels in a saved design with it, and has to survive
+        // the dialog being closed. The arc tolerance is the exception, and deliberately so:
+        // it is one decision about how closely the machine should follow the design, not a
+        // property of any layer, so it stays a single field and is saved with the job.
         const GCodeDialog = (() => {
             const dialog = Util.el('gcode-dialog');
             const rows = Util.el('gcode-tools');
@@ -4595,6 +4610,18 @@
                 `).join('');
             }
 
+            function settings() {
+                const value = parseFloat(Util.el('gc-arc-tol').value);
+                return { arcTolerance: Number.isFinite(value) ? Math.max(value, 0) : 0 };
+            }
+
+            function applySettings(saved) {
+                if (!saved || typeof saved !== 'object') return;
+                if (Number.isFinite(saved.arcTolerance)) {
+                    Util.el('gc-arc-tol').value = saved.arcTolerance;
+                }
+            }
+
             function commit() {
                 for (const input of rows.querySelectorAll('.tool-field')) {
                     const layer = Layers.list.find(l => l.id === Number(input.dataset.id));
@@ -4606,8 +4633,9 @@
                     layer[field.key] = Util.clamp(field.integer ? Math.round(value) : value,
                         field.min, field.max);
                 }
+                const options = settings();
                 dialog.close();
-                if (onConfirm) onConfirm();
+                if (onConfirm) onConfirm(options);
             }
 
             Util.el('gcode-dialog-close').addEventListener('click', () => dialog.close());
@@ -4615,6 +4643,8 @@
             writeButton.addEventListener('click', commit);
 
             return {
+                settings,
+                applySettings,
                 open(callback) {
                     onConfirm = callback;
                     render();
@@ -4847,21 +4877,172 @@
                 return String(text).replace(/[()]/g, '');
             }
 
-            function gcode(results, boundary) {
-                const b = bounds(boundary);
-                // Nothing to retract to before the first layer says what its safe height is,
-                // so the opening rapid borrows it -- and with no cuttable layer at all there
-                // is no opening rapid to write.
-                const cutting = results.filter(r => r.polys.length && r.layer.depth > 0);
-                const out = [
-                    '(Guilloche pattern)',
-                    `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
-                    '(Origin: dial centre. Z0 = dial face.)',
-                    'G21 G90 G17',
-                    'G94'
-                ];
-                if (cutting.length) out.push(`G0 Z${cutting[0].layer.safeZ.toFixed(3)}`);
+            // --- Arc fitting ---------------------------------------------------------
+            // Most of what a rose engine draws is curved -- a rosette's arches, a turned
+            // circle, a traced outline -- and as G1 those are thousands of short moves. A
+            // control has to look ahead through every one of them, and the feed drops to
+            // whatever it can plan. The same curve as G2/G3 is a handful of blocks.
+            //
+            // The fit is the standard greedy one: take the longest run of points that lies
+            // on a single circle within tolerance, emit it, start again from its end.
+            // Straight stretches never arrive here as long runs -- collinear collapsing has
+            // already cut each one down to its two endpoints -- so nothing special is
+            // needed to stop a line being mistaken for an enormous arc.
 
+            const MIN_ARC_POINTS = 4;            // three segments; fewer never pays for itself
+            const MIN_ARC_RADIUS = 0.05;         // mm
+            const MAX_ARC_RADIUS = 5000;         // mm, past which it is a line in all but name
+            const MAX_ARC_SWEEP = Math.PI / 2;   // a quarter turn, split beyond that
+
+            // The circle through three points. Null when they are too nearly in line for
+            // the construction to mean anything.
+            function circleThrough(x1, y1, x2, y2, x3, y3) {
+                const d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+                if (Math.abs(d) < 1e-12) return null;
+                const s1 = x1 * x1 + y1 * y1;
+                const s2 = x2 * x2 + y2 * y2;
+                const s3 = x3 * x3 + y3 * y3;
+                const cx = (s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / d;
+                const cy = (s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / d;
+                return { cx, cy, r: Math.hypot(x1 - cx, y1 - cy) };
+            }
+
+            // Does pts[from..to] lie on one circle within tolerance, and go round it one
+            // way? Built from the first, middle and last point, which is what makes the
+            // arc pass exactly through the two endpoints it will be written with -- the
+            // centre lands on the perpendicular bisector of the chord by construction, so
+            // the radius a control measures from the start and from the end agree, and it
+            // has nothing to alarm about.
+            function fitArc(pts, from, to, tolerance) {
+                if (to - from + 1 < MIN_ARC_POINTS) return null;
+
+                const mid = from + ((to - from) >> 1);
+                const circle = circleThrough(
+                    pts[from * 2], pts[from * 2 + 1],
+                    pts[mid * 2], pts[mid * 2 + 1],
+                    pts[to * 2], pts[to * 2 + 1]
+                );
+                if (!circle) return null;
+                if (circle.r < MIN_ARC_RADIUS || circle.r > MAX_ARC_RADIUS) return null;
+
+                // Within the band. Squared throughout, so the check costs no square roots.
+                const inner = (circle.r - tolerance) * (circle.r - tolerance);
+                const outer = (circle.r + tolerance) * (circle.r + tolerance);
+                for (let i = from; i <= to; i++) {
+                    const dx = pts[i * 2] - circle.cx;
+                    const dy = pts[i * 2 + 1] - circle.cy;
+                    const distance = dx * dx + dy * dy;
+                    if (distance < inner || distance > outer) return null;
+                }
+
+                // And going round it one way. Walking the turn point by point is what
+                // catches a zig-zag that happens to stay inside the band, and it totals the
+                // sweep on the way, which is the other thing that has to be capped.
+                let sweep = 0;
+                let direction = 0;
+                let previous = Math.atan2(pts[from * 2 + 1] - circle.cy, pts[from * 2] - circle.cx);
+
+                for (let i = from + 1; i <= to; i++) {
+                    const angle = Math.atan2(pts[i * 2 + 1] - circle.cy, pts[i * 2] - circle.cx);
+                    let step = angle - previous;
+                    // Into (-pi, pi]. Consecutive points are far closer together than half a
+                    // turn, so the short way round is always the way they actually went.
+                    if (step > Math.PI) step -= Math.PI * 2;
+                    else if (step <= -Math.PI) step += Math.PI * 2;
+                    previous = angle;
+                    if (step === 0) continue;
+
+                    const sign = step > 0 ? 1 : -1;
+                    if (direction === 0) direction = sign;
+                    else if (sign !== direction) return null;    // doubled back on itself
+
+                    sweep += Math.abs(step);
+                    if (sweep > MAX_ARC_SWEEP) return null;
+                }
+                if (direction === 0) return null;
+
+                return { cx: circle.cx, cy: circle.cy, ccw: direction > 0 };
+            }
+
+            // The longest run starting at `from` that fits one arc: doubled until it stops
+            // fitting, then bisected. Each attempt costs a walk of the whole run, so growing
+            // one point at a time would make a thousand-point circle cost half a million
+            // checks where this costs ten thousand.
+            function longestArc(pts, from, count, tolerance) {
+                const last = count - 1;
+                let good = -1;
+                let goodArc = null;
+                let bad = -1;
+
+                let span = MIN_ARC_POINTS - 1;
+                while (from + span <= last) {
+                    const arc = fitArc(pts, from, from + span, tolerance);
+                    if (!arc) { bad = from + span; break; }
+                    good = from + span;
+                    goodArc = arc;
+                    span *= 2;
+                }
+                if (good < 0) return null;
+
+                if (bad < 0) {
+                    // The doubling ran off the end still fitting; the tail is the candidate.
+                    if (good >= last) return { to: good, arc: goodArc };
+                    const arc = fitArc(pts, from, last, tolerance);
+                    if (arc) return { to: last, arc };
+                    bad = last;
+                }
+
+                while (bad - good > 1) {
+                    const middle = (good + bad) >> 1;
+                    const arc = fitArc(pts, from, middle, tolerance);
+                    if (arc) { good = middle; goodArc = arc; }
+                    else bad = middle;
+                }
+                return { to: good, arc: goodArc };
+            }
+
+            // A polyline as a list of moves: straight where it is straight, arcs where a
+            // run of points turns out to lie on one.
+            function toMoves(pts, tolerance) {
+                const count = pts.length / 2;
+                const moves = [];
+                let at = 0;
+
+                while (at < count - 1) {
+                    const found = tolerance > 0 ? longestArc(pts, at, count, tolerance) : null;
+                    if (found) {
+                        moves.push({
+                            arc: true,
+                            x: pts[found.to * 2],
+                            y: pts[found.to * 2 + 1],
+                            // Incremental from the start of the arc to its centre. Written
+                            // this way rather than as a radius because R cannot say which of
+                            // the two arcs through those points was meant once the sweep
+                            // nears half a turn, and cannot express a full circle at all.
+                            i: found.arc.cx - pts[at * 2],
+                            j: found.arc.cy - pts[at * 2 + 1],
+                            ccw: found.arc.ccw
+                        });
+                        at = found.to;
+                    } else {
+                        moves.push({ arc: false, x: pts[(at + 1) * 2], y: pts[(at + 1) * 2 + 1] });
+                        at += 1;
+                    }
+                }
+                return moves;
+            }
+
+            function gcode(results, boundary, options) {
+                const b = bounds(boundary);
+                const tolerance = Math.max((options && options.arcTolerance) || 0, 0);
+                const fx = (v) => (v - b.ox).toFixed(4);
+                const fy = (v) => (v - b.oy).toFixed(4);
+
+                const cutting = results.filter(r => r.polys.length && r.layer.depth > 0);
+                // Built first, so the header can say what came of the fitting.
+                const out = [];
+                let arcCount = 0;
+                let lineCount = 0;
                 let loadedTool = null;
 
                 for (const result of cutting) {
@@ -4892,22 +5073,47 @@
                              `width ${Cutter.width(layer).toFixed(3)}mm)`);
                     for (const pts of result.polys) {
                         if (pts.length < 4) continue;
-                        out.push(`G0 X${(pts[0] - b.ox).toFixed(4)} Y${(pts[1] - b.oy).toFixed(4)}`);
+                        out.push(`G0 X${fx(pts[0])} Y${fy(pts[1])}`);
                         out.push(`G1 Z${(-depth).toFixed(3)} F${layer.plunge.toFixed(0)}`);
-                        // The feed is stated once per path rather than on every line: the
-                        // files run to hundreds of thousands of moves, and a repeated F word
-                        // is a fifth of the file for nothing. It has to be restated on each
-                        // path, though, because the plunge above changed it.
-                        out.push(`G1 X${(pts[2] - b.ox).toFixed(4)} Y${(pts[3] - b.oy).toFixed(4)} F${layer.feed.toFixed(0)}`);
-                        for (let i = 4; i < pts.length; i += 2) {
-                            out.push(`G1 X${(pts[i] - b.ox).toFixed(4)} Y${(pts[i + 1] - b.oy).toFixed(4)}`);
+
+                        // The feed is stated once per path rather than on every move: the
+                        // files run to hundreds of thousands of blocks, and a repeated F
+                        // word is a fifth of the file for nothing. It has to be restated on
+                        // each path, though, because the plunge above changed it -- and it
+                        // goes on whichever move comes first, arc or line.
+                        let pending = ` F${layer.feed.toFixed(0)}`;
+                        for (const move of toMoves(pts, tolerance)) {
+                            if (move.arc) {
+                                arcCount++;
+                                out.push(`G${move.ccw ? 3 : 2} X${fx(move.x)} Y${fy(move.y)} ` +
+                                         `I${move.i.toFixed(4)} J${move.j.toFixed(4)}${pending}`);
+                            } else {
+                                lineCount++;
+                                out.push(`G1 X${fx(move.x)} Y${fy(move.y)}${pending}`);
+                            }
+                            pending = '';
                         }
                         out.push(`G0 Z${safeZ}`);
                     }
                 }
 
-                out.push('G0 X0 Y0', 'M30', '');
-                return out.join('\n');
+                // Nothing to retract to before the first layer says what its safe height is,
+                // so the opening rapid borrows it -- and with no cuttable layer at all there
+                // is no opening rapid to write.
+                const head = [
+                    '(Guilloche pattern)',
+                    `(Generated ${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
+                    '(Origin: dial centre. Z0 = dial face.)',
+                    tolerance > 0
+                        ? `(Arcs fitted to ${tolerance} mm: ${Util.count(arcCount)} arcs, ` +
+                          `${Util.count(lineCount)} lines)`
+                        : `(${Util.count(lineCount)} linear moves, no arc fitting)`,
+                    'G21 G90 G17',
+                    'G94'
+                ];
+                if (cutting.length) head.push(`G0 Z${cutting[0].layer.safeZ.toFixed(3)}`);
+
+                return head.concat(out, ['G0 X0 Y0', 'M30', '']).join('\n');
             }
 
             return { svg, dxf, gcode };
@@ -5293,9 +5499,10 @@
                         joinTolerance: settings.joinTolerance,
                         margin: settings.margin,
                         thickness: settings.thickness,
-                        material: settings.material
-                        // The machining settings are not here: they live on the layers now,
-                        // and the layers are saved below.
+                        material: settings.material,
+                        // Only what belongs to the job. The per-layer machining settings
+                        // live on the layers, which are saved below.
+                        gcode: GCodeDialog.settings()
                     },
                     Layers.list,
                     Layers.indexOfSelected()
@@ -5310,6 +5517,7 @@
                 // read, so they have to be in their fields before the dial is rebuilt from
                 // it -- rebuildBoundary reads them back out of the sidebar.
                 Sidebar.applySettings(doc.settings);
+                GCodeDialog.applySettings(doc.settings && doc.settings.gcode);
                 Layers.replace(doc.layers, doc.selectedIndex);
                 Sidebar.refresh();
 
@@ -5358,12 +5566,13 @@
                 }
             }
 
-            // Called back by the dialog once it has written what was set in it onto the
-            // layers, which is where the exporter reads it from.
-            function exportGcode() {
+            // Called back by the dialog once it has written the per-layer settings onto the
+            // layers, which is where the exporter reads those from. What comes through here
+            // is only what belongs to the job rather than to a layer.
+            function exportGcode(options) {
                 if (!boundary) return;
                 Util.download(`${baseName()}-guilloche.nc`,
-                    Exporter.gcode(results, boundary), 'text/plain');
+                    Exporter.gcode(results, boundary, options), 'text/plain');
             }
 
             // --- Wiring --------------------------------------------------------------
