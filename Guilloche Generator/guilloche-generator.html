@@ -63,6 +63,45 @@
 
         /* Only ever shown by the narrow-width rules at the end of the sheet. Sized for a
            fingertip rather than matching the 18px .panel-toggle glyphs. */
+        /* The document actions in the title row: save and load, as icons. They sit with the
+           heading rather than in a panel of their own because they act on the whole design
+           rather than on any one part of it. The auto margin lives here rather than on
+           .sidebar-toggle, so the group and the toggle stay together on the right instead of
+           splitting the free space between them. */
+        .head-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+        }
+
+        .icon-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            cursor: pointer;
+        }
+
+        .icon-btn:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        .icon-btn svg {
+            display: block;
+            width: 15px;
+            height: 15px;
+            fill: currentColor;
+        }
+
         .sidebar-toggle {
             display: none;
             flex: 0 0 auto;
@@ -70,7 +109,6 @@
             justify-content: center;
             width: 32px;
             height: 32px;
-            margin-left: auto;
             padding: 0;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
@@ -897,9 +935,33 @@
     <div id="sidebar">
         <div class="sidebar-head">
             <h1>Dial Guilloch&eacute;</h1>
+            <div class="head-actions">
+                <!-- A real button rather than a label over the file input, so it can be
+                     reached from the keyboard: the input itself is display:none and so is
+                     not focusable, which leaves a bare label unreachable. -->
+                <button id="btn-load-settings" class="icon-btn" type="button"
+                        title="Load settings" aria-label="Load settings">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8.75 9.5h-1.5V4.31L5.03 6.53 3.97 5.47 8 1.44l4.03 4.03-1.06 1.06L8.75 4.31z"/>
+                        <path d="M2.5 12h11v1.5h-11z"/>
+                    </svg>
+                </button>
+                <input type="file" id="settings-file" accept=".json,application/json" hidden>
+                <button id="btn-save-settings" class="icon-btn" type="button"
+                        title="Save settings" aria-label="Save settings">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M7.25 1.5h1.5v5.19l2.22-2.22 1.06 1.06L8 9.56 3.97 5.53l1.06-1.06L7.25 6.69z"/>
+                        <path d="M2.5 12h11v1.5h-11z"/>
+                    </svg>
+                </button>
+            </div>
             <button id="sidebar-toggle" class="sidebar-toggle" type="button"
                     title="Hide sidebar" aria-expanded="true" aria-controls="sidebar">&#9664;</button>
         </div>
+        <!-- Kept, though the panel around it is gone: this is where a load reports what it
+             restored, and more to the point where it reports that a file could not be read.
+             Hidden until there is something to say, so it costs no room. -->
+        <div id="settings-status" class="hint" hidden></div>
 
         <!-- Dial -->
         <div class="panel">
@@ -1119,24 +1181,6 @@
             <div class="stats-row"><span>Cut length:</span> <span id="stat-length" class="stats-value">0 mm</span></div>
             <div class="stats-row"><span>Generated in:</span> <span id="stat-time" class="stats-value">&mdash;</span></div>
             <div id="relief-warning" class="hint" hidden></div>
-        </div>
-
-        <!-- Save / Load -->
-        <div class="panel">
-            <div class="panel-title panel-title-row">
-                <span>Save / Load</span>
-            </div>
-            <div class="btn-row">
-                <button id="btn-save-settings" class="btn btn-secondary" type="button">Save</button>
-                <div class="file-input-wrapper">
-                    <label for="settings-file" class="btn btn-secondary">Load</label>
-                    <input type="file" id="settings-file" accept=".json,application/json">
-                </div>
-            </div>
-            <div class="hint hint-muted">Saves every layer with its pattern and cutter, the
-                containment and dial settings, and the outline itself &mdash; so the file opens
-                back to exactly this.</div>
-            <div id="settings-status" class="hint" hidden></div>
         </div>
 
         <!-- Export -->
@@ -5824,6 +5868,7 @@
             });
 
             Util.el('btn-save-settings').addEventListener('click', saveSettings);
+            Util.el('btn-load-settings').addEventListener('click', () => Util.el('settings-file').click());
 
             Util.el('settings-file').addEventListener('change', (e) => {
                 const file = e.target.files && e.target.files[0];
