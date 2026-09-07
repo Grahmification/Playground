@@ -20,8 +20,24 @@
             overscroll-behavior: none;
         }
 
+        /* The one place the bar's height is written down, and the only place that needs it:
+           the drawer is positioned against the grid row rather than against a repeat of
+           this number, so there is nothing here for it to drift out of step with. */
+        :root {
+            --topbar-h: 44px;
+        }
+
+        /* Two rows: the bar across the full width, then the sidebar beside the 3D view.
+           A grid rather than a column holding a row, so the sidebar and the viewport stay
+           direct children of the body and keep the layout one level deep.
+
+           Column 1 is `auto`, so when the sidebar goes out of flow to become a drawer the
+           column collapses to nothing and the viewport keeps the whole width -- which is
+           what stops the canvas resizing every time the drawer opens. */
         body {
-            display: flex;
+            display: grid;
+            grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+            grid-template-columns: auto minmax(0, 1fr);
             /* dvh is what is on screen now, with a phone's toolbars showing; vh is the
                fallback for browsers that do not know the unit. */
             height: 100vh;
@@ -31,9 +47,29 @@
             color: #e0e0e0;
         }
 
+        /* --- Top bar ------------------------------------------------------------
+           Outside every scroller and outside the drawer, so the title, the document
+           actions and the exports are in the same place whatever the sidebar is doing.
+           Deliberately shallow -- a strip rather than a header, since every pixel of it
+           comes off the 3D view. */
+        #topbar {
+            grid-row: 1;
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            background-color: #252526;
+            border-bottom: 1px solid #3c3c3c;
+            /* Over the drawer (30) and its backdrop (25), which at narrow widths are
+               positioned against the body and would otherwise cover the bar. */
+            z-index: 40;
+        }
+
         #sidebar {
+            grid-row: 2;
+            grid-column: 1;
             width: 330px;
-            flex: 0 0 auto;
             background-color: #252526;
             border-right: 1px solid #3c3c3c;
             display: flex;
@@ -44,64 +80,185 @@
             overflow-y: auto;
         }
 
-        /* The rule and the padding under it belong to the row rather than the heading, so
-           the collapse button sits above the line with it instead of beside it. */
-        .sidebar-head {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            border-bottom: 1px solid #3c3c3c;
-            padding-bottom: 8px;
+        /* Takes the free space between the drawer button and the actions, and gives it all
+           up again before any of them wrap: at a phone's width there is not room for the
+           whole name, and a truncated title costs less than a two-line bar. */
+        #topbar h1 {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-size: 1.05rem;
+            color: #ffffff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
-        h1 {
-            font-size: 1.15rem;
-            color: #ffffff;
+        /* Everything on the right of the bar: the document actions as icons, then the
+           exports. They are here rather than in a panel because they act on the whole
+           design rather than on any one part of it. */
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
+            gap: 6px;
+            /* Only does anything at the width where the title is taken out of the flow --
+               above that the title's own flex-grow has already eaten the free space. */
+            margin-left: auto;
+        }
+
+        /* Load and save, and the positioning context for the message they leave behind. */
+        .doc-actions {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
+            gap: 6px;
+        }
+
+        /* The result of the last load or save, hung under the two buttons it is about. It
+           overhangs the bar rather than sitting inside it -- there is no room for a
+           sentence up there, and a bar that changed height whenever it had something to
+           say would shove the 3D view down with it. Inside #topbar's stacking context, so
+           it clears the drawer without needing a z-index of its own. */
+        #settings-status {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            width: max-content;
+            max-width: 320px;
+            padding: 8px 10px;
+            border: 1px solid #3c3c3c;
+            border-left: 3px solid #4ec9b0;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+            color: #e0e0e0;
+            font-size: 0.78rem;
+            line-height: 1.35;
+            text-align: left;
+            /* Held out of sight rather than display:none, so the fade has something to
+               animate. visibility is what keeps the invisible panel from taking a click
+               meant for the view behind it, and it is held back until the fade finishes
+               so it does not cut it short. */
+            visibility: hidden;
+            opacity: 0;
+            transform: translateY(-4px);
+            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0.18s;
+        }
+
+        /* Wraps rather than pushing the close button off the panel: the skipped-layer
+           warning is a sentence and a half, and none of it is bounded. */
+        #settings-status-text {
+            flex: 1 1 auto;
             min-width: 0;
             overflow-wrap: anywhere;
         }
 
-        /* Only ever shown by the narrow-width rules at the end of the sheet. Sized for a
-           fingertip rather than matching the 18px .panel-toggle glyphs. */
-        /* The document actions in the title row: save and load, as icons. They sit with the
-           heading rather than in a panel of their own because they act on the whole design
-           rather than on any one part of it. The auto margin lives here rather than on
-           .sidebar-toggle, so the group and the toggle stay together on the right instead of
-           splitting the free space between them. */
-        .head-actions {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            margin-left: auto;
+        #settings-status.show {
+            visibility: visible;
+            opacity: 1;
+            transform: none;
+            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s;
         }
 
+        /* A skipped layer or a file that would not read. The same panel in a different
+           colour, and the only state that stays on screen -- which is what the close
+           button is for, so it is only ever shown here. */
+        #settings-status.bad {
+            border-left-color: #e06c6c;
+            color: #f0c8c8;
+        }
+
+        #settings-status:not(.bad) .toast-close {
+            display: none;
+        }
+
+        .toast-close {
+            flex: 0 0 auto;
+            width: 18px;
+            height: 18px;
+            padding: 0;
+            border: none;
+            border-radius: 3px;
+            background-color: transparent;
+            color: #909090;
+            font-size: 0.7rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .toast-close:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Divides the two groups -- what the design is stored as, and what it is handed
+           to a machine as. */
+        .topbar-sep {
+            flex: 0 0 auto;
+            width: 1px;
+            height: 20px;
+            margin: 0 2px;
+            background-color: #3c3c3c;
+        }
+
+        /* .btn is a full-width block built for the sidebar's column; a bar wants buttons
+           that are as wide as their own labels and no wider. */
+        .topbar-btn {
+            flex: 0 0 auto;
+            padding: 5px 10px;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 0.8rem;
+            line-height: 1.2;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .topbar-btn:hover {
+            background-color: #3c3c3c;
+            color: #ffffff;
+        }
+
+        /* Filled with the accent rather than the bar's own greys: these two are the only
+           controls up here that are worth finding in a hurry, and as icons alone they have
+           no label to be found by. The same fill, hover and fade as .btn -- this is a
+           square version of the primary button, not a treatment of its own. */
         .icon-btn {
             display: flex;
             align-items: center;
             justify-content: center;
             flex: 0 0 auto;
-            width: 28px;
-            height: 28px;
+            width: 30px;
+            height: 30px;
             padding: 0;
-            border: 1px solid #3c3c3c;
+            border: none;
             border-radius: 4px;
-            background-color: #2b2b2b;
-            color: #e0e0e0;
+            background-color: #0e639c;
+            color: #ffffff;
             cursor: pointer;
+            transition: background 0.2s;
         }
 
         .icon-btn:hover {
-            background-color: #3c3c3c;
-            color: #ffffff;
+            background-color: #1177bb;
         }
 
         .icon-btn svg {
             display: block;
-            width: 15px;
-            height: 15px;
+            width: 17px;
+            height: 17px;
             fill: currentColor;
         }
 
+        /* The one control that both opens and closes the drawer, and the only thing in the
+           bar that narrow widths add. Shown by the rules at the end of the sheet; sized for
+           a fingertip rather than matching the 28px icon buttons beside it. */
         .sidebar-toggle {
             display: none;
             flex: 0 0 auto;
@@ -114,7 +271,7 @@
             border-radius: 4px;
             background-color: #2b2b2b;
             color: #e0e0e0;
-            font-size: 0.9rem;
+            font-size: 1rem;
             line-height: 1;
             cursor: pointer;
         }
@@ -124,39 +281,16 @@
             color: #ffffff;
         }
 
-        /* The only part of the sidebar left on screen once it is collapsed, and likewise
-           shown only by the narrow-width rules. Floats over the 3D view, so it is opaque
-           enough to stay legible against whatever is drawn behind it. */
-        .sidebar-open {
-            display: none;
-            position: absolute;
-            top: 12px;
-            left: 12px;
-            z-index: 20;
-            align-items: center;
-            justify-content: center;
-            width: 40px;
-            height: 40px;
-            padding: 0;
-            border: 1px solid #3c3c3c;
-            border-radius: 6px;
-            background-color: rgba(37, 37, 38, 0.92);
-            color: #e0e0e0;
-            font-size: 1.1rem;
-            line-height: 1;
-            cursor: pointer;
-        }
-
-        .sidebar-open:hover {
-            background-color: #3c3c3c;
-            color: #ffffff;
-        }
-
         /* Dismisses the drawer, and darkens the view behind it so it reads as covered
            rather than merely obscured. Same narrow-widths-only story. */
+        /* Placed in the grid like the drawer it belongs to, for the same reason: that is
+           what makes `inset: 0` mean the row under the bar rather than the whole body.
+           Spans both columns, though column one is empty whenever this is on screen. */
         #sidebar-backdrop {
             display: none;
             position: absolute;
+            grid-row: 2;
+            grid-column: 1 / -1;
             inset: 0;
             z-index: 25;
             background-color: rgba(0, 0, 0, 0.5);
@@ -691,7 +825,8 @@
         }
 
         #viewport {
-            flex: 1 1 auto;
+            grid-row: 2;
+            grid-column: 2;
             position: relative;
             display: flex;
             flex-direction: column;
@@ -831,11 +966,14 @@
 
         /* Narrow widths. A 330px sidebar is most of a phone screen, so it becomes a drawer
            that slides over the 3D view and is dismissed by the backdrop behind it. Out of
-           flow, so #viewport keeps the whole screen in both states and the canvas never
-           resizes; collapsed, nothing of it is left on screen but #sidebar-open. */
+           flow, so #viewport keeps the whole width in both states and the canvas never
+           resizes; collapsed, nothing of it is left on screen at all -- the button that
+           brings it back is in the bar, which is there either way. */
         @media (max-width: 700px) {
-            /* The drawer and backdrop measure against this. Not `fixed`: that would
-               measure the layout viewport and run under the browser's toolbars. */
+            /* What makes the body the drawer's containing block -- and so, since both the
+               drawer and the backdrop name a grid row, what hands them the area under the
+               bar to measure against. Not `fixed`: that would measure the layout viewport
+               and run under the browser's toolbars. */
             body {
                 position: relative;
             }
@@ -844,6 +982,38 @@
                 display: flex;
             }
 
+            #topbar {
+                gap: 8px;
+                padding: 0 10px;
+            }
+
+            #topbar h1 {
+                font-size: 0.95rem;
+            }
+
+            .topbar-btn {
+                padding: 5px 8px;
+            }
+
+            /* Hung from the two buttons, there is not enough screen to the left of them
+               for a sentence -- the panel would run off the edge. `fixed` steps out of
+               the containing block and spans the width under the bar instead, which is
+               what a message on a phone wants to do anyway. It still paints inside
+               #topbar's stacking context, so it stays over the drawer. */
+            #settings-status {
+                position: fixed;
+                top: calc(var(--topbar-h) + 8px);
+                left: 10px;
+                right: 10px;
+                width: auto;
+                max-width: none;
+            }
+
+            /* The offsets are against the second grid row, not against the body: an
+               absolutely positioned child of a grid container that names a definite row
+               and column is laid out inside that grid area rather than inside the padding
+               box. So `top: 0` is already under the bar, and adding the bar's height on
+               top of it would push the drawer down by it twice. */
             #sidebar {
                 position: absolute;
                 top: 0;
@@ -864,17 +1034,8 @@
                 transition: transform 0.2s ease, visibility 0s linear 0.2s;
             }
 
-            body.sidebar-collapsed .sidebar-open {
-                display: flex;
-            }
-
             body:not(.sidebar-collapsed) #sidebar-backdrop {
                 display: block;
-            }
-
-            /* Stops short of the floating sidebar button rather than the edge of the view. */
-            #overlay-stack {
-                max-width: calc(100vw - 76px);
             }
 
             /* Six fixed columns do not fit a phone. Here a row gives up on aligning with
@@ -907,16 +1068,20 @@
                 display: block;
                 margin-bottom: 2px;
             }
+        }
 
-            /* Down to the bottom-left. The top-left corner belongs to the button that
-               brings the drawer back, and the readout stack is already using the width
-               beside it. The ViewCube has the other bottom corner.
-
-               `top: auto` matters -- an absolutely positioned box with both offsets set
-               stretches between them instead of sizing to its contents. */
-            #view-toggles {
-                top: auto;
-                bottom: 12px;
+        /* No room left for the name once the drawer button and both groups of actions have
+           taken their width. Taken out of the flow rather than out of the document: the
+           heading is still read out, it simply stops asking for space. `display: none`
+           would drop it from the outline as well, and the page would have no <h1> at all
+           on a phone. */
+        @media (max-width: 480px) {
+            #topbar h1 {
+                position: absolute;
+                width: 1px;
+                height: 1px;
+                overflow: hidden;
+                clip-path: inset(50%);
             }
         }
     </style>
@@ -926,42 +1091,68 @@
 </head>
 <body>
 
-    <!-- Both are narrow widths only, where the sidebar is a drawer: the button that brings
-         it back, and the backdrop that sends it away. -->
-    <button id="sidebar-open" class="sidebar-open" type="button"
-            title="Show sidebar" aria-label="Show sidebar" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
-    <div id="sidebar-backdrop"></div>
-
-    <div id="sidebar">
-        <div class="sidebar-head">
-            <h1>Dial Guilloch&eacute;</h1>
-            <div class="head-actions">
+    <!-- The bar. Everything in it acts on the whole design rather than on any one part of
+         it, which is why none of it is in the sidebar with the settings it would otherwise
+         sit among. -->
+    <header id="topbar">
+        <!-- Narrow widths only, where the sidebar is a drawer. One button for both
+             directions: at this size there is nowhere else for a "show" control to live,
+             so the same control has to serve. -->
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button"
+                title="Hide sidebar" aria-label="Toggle sidebar"
+                aria-expanded="true" aria-controls="sidebar">&#9776;</button>
+        <h1>Guilloch&eacute; Generator</h1>
+        <div class="topbar-actions">
+            <!-- Grouped, and the anchor the message hangs from: it is about these two
+                 buttons, so it lines up under them rather than under the bar at large. -->
+            <div class="doc-actions">
                 <!-- A real button rather than a label over the file input, so it can be
                      reached from the keyboard: the input itself is display:none and so is
                      not focusable, which leaves a bare label unreachable. -->
                 <button id="btn-load-settings" class="icon-btn" type="button"
                         title="Load settings" aria-label="Load settings">
+                    <!-- A folder, for open. -->
                     <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M8.75 9.5h-1.5V4.31L5.03 6.53 3.97 5.47 8 1.44l4.03 4.03-1.06 1.06L8.75 4.31z"/>
-                        <path d="M2.5 12h11v1.5h-11z"/>
+                        <path d="M1.5 3.5c0-.55.45-1 1-1h3.3c.32 0 .62.15.8.4l.9 1.2h6c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1h-11c-.55 0-1-.45-1-1z"/>
                     </svg>
                 </button>
                 <input type="file" id="settings-file" accept=".json,application/json" hidden>
                 <button id="btn-save-settings" class="icon-btn" type="button"
                         title="Save settings" aria-label="Save settings">
+                    <!-- A floppy disc, for save. One path rather than three: the shutter
+                         and the label are holes punched in the body by the even-odd rule,
+                         since everything in here is the same colour and a second solid
+                         shape drawn over the first would be invisible. -->
                     <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M7.25 1.5h1.5v5.19l2.22-2.22 1.06 1.06L8 9.56 3.97 5.53l1.06-1.06L7.25 6.69z"/>
-                        <path d="M2.5 12h11v1.5h-11z"/>
+                        <path fill-rule="evenodd" d="M2.5 1.5h8L14.5 5.5v8a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM5.5 2.5h4v3h-4zM4 8.5h8v5h-8z"/>
                     </svg>
                 </button>
+                <!-- What the last load or save had to say. `role="status"` rather than an
+                     alert: it is announced when it appears without interrupting whatever
+                     is being read, which is right for a confirmation and for a bad file
+                     alike. -->
+                <div id="settings-status" role="status">
+                    <span id="settings-status-text"></span>
+                    <button id="settings-status-close" class="toast-close" type="button"
+                            title="Dismiss" aria-label="Dismiss">&#10005;</button>
+                </div>
             </div>
-            <button id="sidebar-toggle" class="sidebar-toggle" type="button"
-                    title="Hide sidebar" aria-expanded="true" aria-controls="sidebar">&#9664;</button>
+            <span class="topbar-sep" aria-hidden="true"></span>
+            <button id="btn-export-svg" class="topbar-btn" type="button"
+                    title="Export SVG">SVG</button>
+            <button id="btn-export-dxf" class="topbar-btn" type="button"
+                    title="Export DXF">DXF</button>
+            <!-- The ellipsis is kept: it is the one export of the three that asks a page
+                 of questions before it writes anything. -->
+            <button id="btn-export-gcode" class="topbar-btn" type="button"
+                    title="Export G-Code">G-Code&hellip;</button>
         </div>
-        <!-- Kept, though the panel around it is gone: this is where a load reports what it
-             restored, and more to the point where it reports that a file could not be read.
-             Hidden until there is something to say, so it costs no room. -->
-        <div id="settings-status" class="hint" hidden></div>
+    </header>
+
+    <!-- Narrow widths only: what sends the drawer away again. -->
+    <div id="sidebar-backdrop"></div>
+
+    <div id="sidebar">
         <!-- Rehoused here when Statistics moved over the view. It is a notice rather than a
              number, and this is where the notices are; the panel it used to sit in had no
              claim on it beyond both being about the last generation. -->
@@ -1168,18 +1359,6 @@
                 </div>
             </div>
             <div class="stats-row"><span>Cut width:</span> <span id="cut-width" class="stats-value">&mdash;</span></div>
-        </div>
-
-        <!-- Export -->
-        <div class="panel">
-            <div class="panel-title panel-title-row">
-                <span>Export</span>
-            </div>
-            <div class="btn-row">
-                <button id="btn-export-svg" class="btn btn-secondary" type="button">SVG</button>
-                <button id="btn-export-dxf" class="btn btn-secondary" type="button">DXF</button>
-            </div>
-            <button id="btn-export-gcode" class="btn btn-secondary" type="button">G-Code&hellip;</button>
         </div>
     </div>
 
@@ -4846,15 +5025,21 @@
             }
 
             // --- Narrow-width drawer -------------------------------------------------
-            const setCollapsed = (collapsed) => {
-                document.body.classList.toggle('sidebar-collapsed', collapsed);
-                el('sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
-                el('sidebar-open').setAttribute('aria-expanded', String(!collapsed));
-                Viewer.resize();
-            };
-            el('sidebar-toggle').addEventListener('click', () => setCollapsed(true));
-            el('sidebar-open').addEventListener('click', () => setCollapsed(false));
-            el('sidebar-backdrop').addEventListener('click', () => setCollapsed(true));
+            // One button in the bar, working both ways: when the drawer is away there is
+            // nothing else left on screen that could bring it back.
+            {
+                const toggle = el('sidebar-toggle');
+                const setCollapsed = (collapsed) => {
+                    document.body.classList.toggle('sidebar-collapsed', collapsed);
+                    toggle.setAttribute('aria-expanded', String(!collapsed));
+                    toggle.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+                    Viewer.resize();
+                };
+                toggle.addEventListener('click', () => {
+                    setCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+                });
+                el('sidebar-backdrop').addEventListener('click', () => setCollapsed(true));
+            }
 
             // --- Readouts ------------------------------------------------------------
             function setDialInfo(info) {
@@ -4879,12 +5064,42 @@
                 hint.textContent = text || '';
             }
 
-            function setSettingsStatus(text, bad) {
-                const status = el('settings-status');
-                status.hidden = !text;
-                status.textContent = text || '';
-                status.className = bad ? 'hint hint-bad' : 'hint hint-muted';
-            }
+            // What a load or a save has to report, shown under the two buttons in the bar
+            // rather than in the sidebar -- which is where those buttons went, and which
+            // at narrow widths is closed for most of the time anyway.
+            //
+            // A confirmation clears itself after a moment; a warning or a failure does
+            // not. Something you asked for and got needs no more than a glance, but a file
+            // that would not load is the one message that must still be there when you
+            // look up.
+            const setSettingsStatus = (() => {
+                const box = el('settings-status');
+                const label = el('settings-status-text');
+                let timer = 0;
+
+                const hide = () => {
+                    clearTimeout(timer);
+                    timer = 0;
+                    box.classList.remove('show');
+                };
+
+                el('settings-status-close').addEventListener('click', hide);
+
+                return (text, bad) => {
+                    // Whatever was on screen is about the last file, not this one, so its
+                    // timer goes with it.
+                    clearTimeout(timer);
+                    timer = 0;
+                    if (!text) {
+                        box.classList.remove('show');
+                        return;
+                    }
+                    label.textContent = text;
+                    box.classList.toggle('bad', Boolean(bad));
+                    box.classList.add('show');
+                    if (!bad) timer = setTimeout(hide, 3200);
+                };
+            })();
 
             return {
                 hooks, settings, applySettings, refresh,
