@@ -962,6 +962,10 @@
              restored, and more to the point where it reports that a file could not be read.
              Hidden until there is something to say, so it costs no room. -->
         <div id="settings-status" class="hint" hidden></div>
+        <!-- Rehoused here when Statistics moved over the view. It is a notice rather than a
+             number, and this is where the notices are; the panel it used to sit in had no
+             claim on it beyond both being about the last generation. -->
+        <div id="relief-warning" class="hint" hidden></div>
 
         <!-- Dial -->
         <div class="panel">
@@ -1170,19 +1174,6 @@
             </div>
         </div>
 
-        <!-- Statistics -->
-        <div class="panel">
-            <div class="panel-title panel-title-row">
-                <span>Statistics</span>
-            </div>
-            <div class="stats-row"><span>Status:</span> <span id="stat-status" class="stats-value">Idle</span></div>
-            <div class="stats-row"><span>Paths:</span> <span id="stat-paths" class="stats-value">0</span></div>
-            <div class="stats-row"><span>Segments:</span> <span id="stat-segments" class="stats-value">0</span></div>
-            <div class="stats-row"><span>Cut length:</span> <span id="stat-length" class="stats-value">0 mm</span></div>
-            <div class="stats-row"><span>Generated in:</span> <span id="stat-time" class="stats-value">&mdash;</span></div>
-            <div id="relief-warning" class="hint" hidden></div>
-        </div>
-
         <!-- Export -->
         <div class="panel">
             <div class="panel-title panel-title-row">
@@ -1210,7 +1201,10 @@
                 <div id="readout" class="overlay-panel">
                     <div class="readout-row"><span>Dial</span> <span id="ov-dial">&mdash;</span></div>
                     <div class="readout-row"><span>Layers</span> <span id="ov-layers">0</span></div>
+                    <div class="readout-row"><span>Paths</span> <span id="ov-paths">0</span></div>
                     <div class="readout-row"><span>Segments</span> <span id="ov-segments">0</span></div>
+                    <div class="readout-row"><span>Cut length</span> <span id="ov-length">0.0 mm</span></div>
+                    <div class="readout-row"><span>Generated</span> <span id="ov-time">&mdash;</span></div>
                 </div>
             </div>
             <div id="busy" hidden>Generating pattern&hellip;</div>
@@ -1330,6 +1324,7 @@
              Layers        the pattern layer stack: the document being edited
              Sidebar       the left-hand controls: values in, states out
              ViewToggles   the "what is drawn" panel floated over the 3D view
+             Readout       the figures floated over the 3D view
              GCodeDialog   the machining setup, asked for at the moment it is needed
              Preset        the saved design, to and from JSON
              Exporter      SVG / DXF / G-code writers
@@ -4555,19 +4550,6 @@
                 warning.hidden = !info.warning;
                 warning.textContent = info.warning || '';
                 warning.className = info.error ? 'hint hint-bad' : 'hint';
-                el('ov-dial').textContent = info.size;
-            }
-
-            function setStats(stats) {
-                el('stat-status').textContent = stats.status;
-                el('stat-paths').textContent = Util.count(stats.paths);
-                el('stat-segments').textContent = Util.count(stats.segments);
-                el('stat-length').textContent = stats.length >= 1000
-                    ? `${(stats.length / 1000).toFixed(2)} m`
-                    : Util.mm(stats.length, 1);
-                el('stat-time').textContent = stats.ms === null ? '—' : `${Math.round(stats.ms)} ms`;
-                el('ov-layers').textContent = stats.layers;
-                el('ov-segments').textContent = Util.count(stats.segments);
             }
 
             function setReliefWarning(text) {
@@ -4595,7 +4577,7 @@
 
             return {
                 hooks, settings, applySettings, refresh,
-                setDialInfo, setStats, setReliefWarning, setMarginHint,
+                setDialInfo, setReliefWarning, setMarginHint,
                 setSettingsStatus, setBusy
             };
         })();
@@ -4634,6 +4616,37 @@
             }
 
             return { hooks, state };
+        })();
+
+        // --- Readout -----------------------------------------------------------------
+        // The figures floated over the top-right of the 3D view: what was loaded, and what
+        // the last generation made of it.
+        //
+        // They read better here than in the sidebar. None of them is a control -- there is
+        // nothing to do to any of them -- and every one is a fact about the thing on screen,
+        // so they belong beside it rather than at the foot of a column of fields. It also
+        // ends the duplication that had crept in, with the dial's size and the segment count
+        // being written in two places from two modules.
+        const Readout = (() => {
+            function setDial(size) {
+                Util.el('ov-dial').textContent = size;
+            }
+
+            function setStats(stats) {
+                Util.el('ov-layers').textContent = stats.layers;
+                Util.el('ov-paths').textContent = Util.count(stats.paths);
+                Util.el('ov-segments').textContent = Util.count(stats.segments);
+                // Metres once it passes one: a rosette on a 34mm dial cuts several thousand
+                // millimetres, and that many digits says nothing at a glance.
+                Util.el('ov-length').textContent = stats.length >= 1000
+                    ? `${(stats.length / 1000).toFixed(2)} m`
+                    : Util.mm(stats.length, 1);
+                Util.el('ov-time').textContent = stats.ms === null
+                    ? '—'
+                    : `${Math.round(stats.ms)} ms`;
+            }
+
+            return { setDial, setStats };
         })();
         // --- GCodeDialog -------------------------------------------------------------
         // The machining setup, asked for at the moment it is needed rather than kept in the
@@ -5464,6 +5477,14 @@
             }
 
             // --- Loading -------------------------------------------------------------
+            // The dial's description goes to two places now -- the panel that carries the
+            // detail and the warning, and the overlay that carries the size. Sent through
+            // one call so the two cannot fall out of step.
+            function showDialInfo(info) {
+                Sidebar.setDialInfo(info);
+                Readout.setDial(info.size);
+            }
+
             function unitScale(settings) {
                 if (settings.units !== 'auto') return UNIT_SCALE[settings.units] || 1;
                 return UNIT_SCALE[sourceUnits] || 1;
@@ -5501,7 +5522,7 @@
                               '(shown in red). Raise the join tolerance if they should have closed.';
                 }
 
-                Sidebar.setDialInfo({
+                showDialInfo({
                     name: sourceName,
                     size: boundary
                         ? `${boundary.width.toFixed(2)} × ${boundary.height.toFixed(2)} mm`
@@ -5552,14 +5573,14 @@
                         if (!parsed.paths.length) throw new Error('No 2D geometry found in this DXF.');
                         loadPaths(parsed.paths, parsed.units, file.name, true, { kind: 'dxf', text });
                     } catch (err) {
-                        Sidebar.setDialInfo({
+                        showDialInfo({
                             name: file.name, size: '—', loops: 0,
                             warning: err.message, error: true
                         });
                     }
                 };
                 reader.onerror = () => {
-                    Sidebar.setDialInfo({
+                    showDialInfo({
                         name: file.name, size: '—', loops: 0,
                         warning: 'The file could not be read.', error: true
                     });
@@ -5591,7 +5612,7 @@
                     PatternView.set([], null);
                     cutMask = null;
                     applyDisplay();
-                    Sidebar.setStats({ status: 'No dial outline', paths: 0, segments: 0, length: 0, ms: null, layers: 0 });
+                    Readout.setStats({ paths: 0, segments: 0, length: 0, ms: null, layers: 0 });
                     Sidebar.setReliefWarning('');
                     Sidebar.setMarginHint('');
                     return;
@@ -5711,8 +5732,7 @@
                 cutMask = view.mask;
                 applyDisplay();
 
-                Sidebar.setStats({
-                    status: truncated ? 'Truncated — pattern too dense' : 'Ready',
+                Readout.setStats({
                     paths: totalPaths,
                     segments: totalSegments,
                     length: totalLength,
