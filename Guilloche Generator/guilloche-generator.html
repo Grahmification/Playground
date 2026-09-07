@@ -4680,10 +4680,16 @@
                 `).join('');
             }
 
+            // This module's own, not the sidebar's: the two panels are read independently
+            // and neither reaches into the other's fields.
+            function readNumber(id, fallback) {
+                const value = parseFloat(Util.el(id).value);
+                return Number.isFinite(value) ? value : fallback;
+            }
+
             function settings() {
-                const tolerance = parseFloat(Util.el('gc-arc-tol').value);
                 return {
-                    arcTolerance: Number.isFinite(tolerance) ? Math.max(tolerance, 0) : 0,
+                    arcTolerance: Math.max(readNumber('gc-arc-tol', 0), 0),
                     workOffset: Util.el('gc-work-offset').value,
                     coolant: Util.el('gc-coolant').value,
                     origin: {
