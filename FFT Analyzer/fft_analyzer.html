@@ -334,6 +334,11 @@
             if (el) el.classList.toggle('hidden', hidden);
         }
 
+        function setClass(id, className, enabled) {
+            const el = $(id);
+            if (el) el.classList.toggle(className, enabled);
+        }
+
         /** Builds a table cell / header with the given text and Tailwind classes. */
         function cell(tag, value, className) {
             const el = document.createElement(tag);
@@ -356,7 +361,7 @@
             setTimeout(() => URL.revokeObjectURL(url), 0);
         }
 
-        return { $, text, setDimmed, setHidden, cell, downloadFile };
+        return { $, text, setDimmed, setHidden, setClass, cell, downloadFile };
     })();
     </script>
 
@@ -414,6 +419,103 @@
                 return previousPowerOfTwo(sampleCount);
             }
             return nextPowerOfTwo(sampleCount);
+        }
+
+        // ------------------------------------------------------------------
+        // Sampling grid
+        // ------------------------------------------------------------------
+
+        /** Deviation from a whole grid step, in fractions of a step, still called regular. */
+        const DEFAULT_GRID_TOLERANCE = 0.25;
+
+        /**
+         * Infers the sampling grid from time stamps, robustly enough to survive what real
+         * loggers produce: a bad first row, dropped samples, and jitter.
+         *
+         * Taking the rate from the first gap alone lets one bad row scale every frequency
+         * in the result, and averaging the whole span over `n - 1` breaks as soon as a
+         * sample is dropped, because the surviving stamps keep their grid positions while
+         * their array indices shift. So this does both, in order:
+         *
+         *  1. The middle observed gap anchors the grid. Being a rank statistic it ignores
+         *     any minority of bad gaps, however wild they are.
+         *  2. Every gap is then expressed as a whole number of anchor steps and the step
+         *     re-measured across all of them at once, which recovers the precision of a
+         *     whole-span average while still counting dropped samples correctly.
+         *
+         * Note the one ambiguity it cannot resolve: when stamps are quantised as coarsely
+         * as the interval itself, "1 ms steps with drops" and "1.4 ms steps rounded to
+         * 1 ms" are indistinguishable from the stamps alone. It reports the former, and
+         * `missingCount` will be a large fraction of `gapCount` when that happens.
+         *
+         * @param {ArrayLike<number>} times Ascending sample time stamps.
+         * @param {{tolerance?: number}} [options]
+         * @returns {{
+         *   ok: boolean, reason: ?string, step: number, sampleRate: number,
+         *   gapCount: number, missingCount: number, irregularCount: number,
+         *   maxJitter: number, uniform: boolean
+         * }} When `ok` is false no rate could be inferred and every other field is zero.
+         *   `maxJitter` describes only the gaps accepted onto the grid; the ones that were
+         *   not are counted in `irregularCount` instead.
+         */
+        function estimateSampling(times, options) {
+            const opts = options || {};
+            const tolerance = opts.tolerance !== undefined ? opts.tolerance : DEFAULT_GRID_TOLERANCE;
+
+            const failure = (reason) => ({
+                ok: false, reason: reason, step: 0, sampleRate: 0,
+                gapCount: 0, missingCount: 0, irregularCount: 0, maxJitter: 0, uniform: false
+            });
+
+            const n = times.length;
+            if (n < 2) return failure('at least two samples are needed');
+
+            const gaps = new Array(n - 1);
+            for (let i = 1; i < n; i++) gaps[i - 1] = times[i] - times[i - 1];
+
+            // An observed gap, not an interpolated one: averaging the two middle values
+            // of an even-length set can land the anchor between two real step sizes.
+            const ranked = gaps.slice().sort((a, b) => a - b);
+            const anchor = ranked[ranked.length >> 1];
+            if (!(anchor > 0)) {
+                return failure('time stamps are duplicated or out of order');
+            }
+
+            let stepSum = 0;
+            let stepCount = 0;
+            let missing = 0;
+            let irregular = 0;
+            let maxJitter = 0;
+
+            for (let i = 0; i < gaps.length; i++) {
+                const steps = Math.max(1, Math.round(gaps[i] / anchor));
+                const jitter = Math.abs(gaps[i] / anchor - steps);
+
+                if (gaps[i] <= 0 || jitter > tolerance) {
+                    irregular++;
+                    continue;
+                }
+
+                stepSum += gaps[i];
+                stepCount += steps;
+                missing += steps - 1;
+                if (jitter > maxJitter) maxJitter = jitter;
+            }
+
+            if (stepCount === 0) return failure('no two samples are regularly spaced');
+
+            const step = stepSum / stepCount;
+            return {
+                ok: true,
+                reason: null,
+                step: step,
+                sampleRate: 1 / step,
+                gapCount: gaps.length,
+                missingCount: missing,
+                irregularCount: irregular,
+                maxJitter: maxJitter,
+                uniform: missing === 0 && irregular === 0
+            };
         }
 
         // ------------------------------------------------------------------
@@ -937,6 +1039,7 @@
         return {
             PSD_FLOOR, STRATEGIES, WINDOW_TYPES,
             isPowerOfTwo, nextPowerOfTwo, previousPowerOfTwo, frameLengthFor,
+            estimateSampling,
             fft, applyWindow, unwrapPhase,
             sliceFrame, buildFrames, buildSeries,
             frameSpectrum, analyze,
@@ -955,7 +1058,11 @@
         fileName: '',
         /** Raw rows straight out of PapaParse, kept for the column-picker preview. */
         rawRows: null,
-        /** { fileName, times, amplitudes } once a dataset has been accepted. */
+        /**
+         * { fileName, times, amplitudes, sampling } once a dataset has been accepted,
+         * where `sampling` is the FFTLib.estimateSampling result for its time column.
+         * Replaced wholesale on every load - Analysis caches against its identity.
+         */
         dataset: null,
         /** Latest FFTLib.analyze result. */
         spectrum: null,
@@ -1025,17 +1132,8 @@
     window.Analysis = (function () {
         'use strict';
 
-        /** Fallback used when the time column gives no usable spacing. */
-        const DEFAULT_SAMPLE_RATE = 100;
-
         /** Where a freshly loaded dataset parks the magnitude threshold. */
         const DEFAULT_THRESHOLD_FRACTION = 0.1;
-
-        /** Sample rate inferred from the first two time stamps. */
-        function sampleRateOf(times) {
-            const dt = times[1] - times[0];
-            return dt > 0 ? 1.0 / dt : DEFAULT_SAMPLE_RATE;
-        }
 
         function buildRows(spectrum) {
             const contributions = FFTLib.magnitudeContributions(spectrum.magnitudes);
@@ -1111,7 +1209,7 @@
                 return cached;
             }
 
-            const spectrum = FFTLib.analyze(dataset.times, dataset.amplitudes, sampleRateOf(dataset.times), {
+            const spectrum = FFTLib.analyze(dataset.times, dataset.amplitudes, dataset.sampling.sampleRate, {
                 strategy: cfg.strategy,
                 windowType: cfg.windowType
             });
@@ -1178,7 +1276,7 @@
             });
         }
 
-        return { run, sampleRateOf };
+        return { run };
     })();
     </script>
 
@@ -2093,16 +2191,27 @@
                 return;
             }
 
+            const times = points.map((point) => point[0]);
+            const sampling = FFTLib.estimateSampling(times);
+
+            // Every frequency in the analysis is a multiple of the sample rate, so a
+            // guessed one would make the whole result quietly wrong. Refuse instead.
+            if (!sampling.ok) {
+                alert(`Cannot determine the sample rate: ${sampling.reason}.\n\n` +
+                    'Check that the chosen X column holds ascending time stamps, and that ' +
+                    'the data start row is past any header or settling rows.');
+                return;
+            }
+
             AppState.dataset = {
                 fileName: AppState.fileName,
-                times: points.map((point) => point[0]),
-                amplitudes: points.map((point) => point[1])
+                times: times,
+                amplitudes: points.map((point) => point[1]),
+                sampling: sampling
             };
 
-            const sampleRate = Analysis.sampleRateOf(AppState.dataset.times);
-            Dom.text('statusText',
-                `Loaded: ${AppState.fileName} (${points.length} points, fs = ${sampleRate.toFixed(2)}Hz)`);
             Controls.updateExportButtonState();
+            Controls.showDatasetStatus(sampling, points.length);
             Analysis.run({ rescaleThreshold: 'reset' });
         }
 
@@ -2119,6 +2228,39 @@
 
         const TAB_ACTIVE = 'px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer';
         const TAB_INACTIVE = 'px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer';
+
+        /** Jitter below this fraction of a sample is not worth mentioning. */
+        const JITTER_WORTH_REPORTING = 0.02;
+
+        const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
+        /**
+         * Reports the loaded dataset and everything the sampling estimate noticed about
+         * it. Defects are called out here rather than absorbed silently, because a
+         * mis-read sample rate scales every frequency in the analysis.
+         *
+         * @param {object} sampling FFTLib.estimateSampling result.
+         * @param {number} sampleCount
+         */
+        function showDatasetStatus(sampling, sampleCount) {
+            const notes = [];
+            if (sampling.missingCount > 0) {
+                notes.push(`${plural(sampling.missingCount, 'sample')} missing`);
+            }
+            if (sampling.irregularCount > 0) {
+                notes.push(`${plural(sampling.irregularCount, 'irregular gap')}`);
+            }
+            if (sampling.maxJitter > JITTER_WORTH_REPORTING) {
+                notes.push(`jitter to ${(sampling.maxJitter * 100).toFixed(0)}% of a sample`);
+            }
+
+            const summary = `Loaded: ${AppState.fileName} ` +
+                `(${sampleCount} points, fs = ${sampling.sampleRate.toFixed(2)}Hz)`;
+
+            Dom.text('statusText', notes.length === 0 ? summary : `${summary} — ${notes.join(', ')}`);
+            Dom.setClass('statusText', 'text-amber-600', notes.length > 0);
+            Dom.setClass('statusText', 'text-gray-500', notes.length === 0);
+        }
 
         /** @param {'charts'|'table'} tabName */
         function switchTab(tabName) {
@@ -2206,7 +2348,10 @@
             });
         }
 
-        return { init, switchTab, toggleExportDropdown, hideExportDropdown, updateExportButtonState };
+        return {
+            init, switchTab, toggleExportDropdown, hideExportDropdown,
+            updateExportButtonState, showDatasetStatus
+        };
     })();
     </script>
 
