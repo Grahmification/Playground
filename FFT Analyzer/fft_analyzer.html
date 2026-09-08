@@ -352,6 +352,8 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            // Release the blob once the click has started the download.
+            setTimeout(() => URL.revokeObjectURL(url), 0);
         }
 
         return { $, text, setDimmed, setHidden, cell, downloadFile };
@@ -378,7 +380,12 @@
      *
      *   const peaks = FFTLib.findPeaks(spectrum.magnitudes, { sensitivity: 0.05 });
      *   const fit   = FFTLib.reconstruct(spectrum.series.times,
-     *                                    FFTLib.componentsAt(spectrum, peaks));
+     *                                    FFTLib.componentsAt(spectrum, peaks),
+     *                                    spectrum.series.origin);
+     *
+     * Phase throughout is measured from the first sample of the analysis, which is
+     * what `series.origin` holds - pass it to `reconstruct` or the result comes out
+     * phase shifted whenever the time stamps do not start at zero.
      */
     window.FFTLib = (function () {
         'use strict';
@@ -491,10 +498,12 @@
         // Window functions
         // ------------------------------------------------------------------
 
+        // A single-sample window has no span to taper across, and n - 1 would divide
+        // by zero, so the tapered windows degrade to rectangular there.
         const WINDOW_FUNCTIONS = {
             none: () => 1.0,
-            hann: (i, n) => 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1))),
-            hamming: (i, n) => 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1))
+            hann: (i, n) => (n < 2 ? 1.0 : 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)))),
+            hamming: (i, n) => (n < 2 ? 1.0 : 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1)))
         };
 
         const WINDOW_TYPES = Object.keys(WINDOW_FUNCTIONS);
@@ -537,16 +546,20 @@
         /**
          * Splits a signal into the power-of-two frames `strategy` calls for:
          * one frame for PAD / TRUNCATE, head and tail frames for FRAMING.
+         *
+         * @returns {Array<{start: number, samples: number[]}>} `start` is the frame's
+         *   offset in samples from the beginning of the signal, which `analyze` needs
+         *   to refer every frame's phase to a common time origin.
          */
         function buildFrames(amplitudes, strategy, frameLength) {
             if (strategy === STRATEGIES.FRAMING) {
                 const tailStart = Math.max(0, amplitudes.length - frameLength);
                 return [
-                    sliceFrame(amplitudes, 0, frameLength),
-                    sliceFrame(amplitudes, tailStart, frameLength)
+                    { start: 0, samples: sliceFrame(amplitudes, 0, frameLength) },
+                    { start: tailStart, samples: sliceFrame(amplitudes, tailStart, frameLength) }
                 ];
             }
-            return [sliceFrame(amplitudes, 0, frameLength)];
+            return [{ start: 0, samples: sliceFrame(amplitudes, 0, frameLength) }];
         }
 
         /**
@@ -554,10 +567,15 @@
          * reconstructions against. PAD / TRUNCATE return exactly `frameLength` samples
          * (extrapolating time stamps for zero-padded samples); FRAMING spans two frames
          * so it keeps the original series.
+         *
+         * `origin` is the time stamp phase is measured from - the first sample of the
+         * analysis - which `reconstruct` needs to place its sinusoids correctly.
          */
         function buildSeries(times, amplitudes, strategy, frameLength) {
+            const origin = times.length > 0 ? times[0] : 0;
+
             if (strategy === STRATEGIES.FRAMING) {
-                return { times: times, amplitudes: amplitudes };
+                return { times: times, amplitudes: amplitudes, origin: origin };
             }
 
             const dt = times.length > 1 ? times[1] - times[0] : 1.0;
@@ -567,7 +585,7 @@
                 seriesAmplitudes[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
                 seriesTimes[i] = times[i] !== undefined ? times[i] : (times[0] + i * dt);
             }
-            return { times: seriesTimes, amplitudes: seriesAmplitudes };
+            return { times: seriesTimes, amplitudes: seriesAmplitudes, origin: origin };
         }
 
         // ------------------------------------------------------------------
@@ -599,7 +617,9 @@
          *
          * Magnitudes are amplitude-corrected: scaled by 1/n, doubled for every bin
          * above DC to fold in the negative frequencies, then divided by the window's
-         * coherent gain. PSD is returned un-floored (see `analyze`).
+         * coherent gain. PSD is returned un-floored (see `analyze`). Phase is measured
+         * from this frame's own first sample, so combining frames means aligning them
+         * to a shared origin first (again, see `analyze`).
          */
         function frameSpectrum(frame, sampleRate, windowType) {
             const n = frame.length;
@@ -642,8 +662,20 @@
 
         /**
          * Full analysis of a time series: frames it per `strategy`, transforms every
-         * frame and averages the results bin by bin (a single frame therefore passes
-         * through untouched). The PSD floor is applied after averaging.
+         * frame and combines the results bin by bin. A single frame passes through
+         * untouched.
+         *
+         * Magnitude and PSD are averaged arithmetically; the PSD floor is applied
+         * afterwards. Phase gets two corrections that a plain mean would get wrong:
+         *
+         *  - Each frame's phase is measured from that frame's own first sample, so a
+         *    frame starting `start` samples in reads 2*pi*i*start/frameLength ahead.
+         *    That advance is subtracted, referring every frame to the first sample of
+         *    the signal - the same origin `series.origin` reports.
+         *  - The aligned phases are averaged as unit phasors, not as angles. A mean of
+         *    angles puts +3.0 and -3.0 rad at 0 rather than near pi.
+         *
+         * Unwrapping then runs once, over the averaged result.
          *
          * @param {ArrayLike<number>} times      Sample time stamps, aligned with `amplitudes`.
          * @param {ArrayLike<number>} amplitudes Sample values.
@@ -657,7 +689,7 @@
 
             const frameLength = frameLengthFor(strategy, amplitudes.length);
             const frames = buildFrames(amplitudes, strategy, frameLength);
-            const spectra = frames.map((frame) => frameSpectrum(frame, sampleRate, windowType));
+            const spectra = frames.map((frame) => frameSpectrum(frame.samples, sampleRate, windowType));
             const frameCount = spectra.length;
             const binCount = frameLength / 2;
 
@@ -666,7 +698,11 @@
             const magnitudes = new Array(binCount);
             const psd = new Array(binCount);
             const phases = new Array(binCount);
-            const unwrappedPhases = new Array(binCount);
+
+            // A lone frame already sits on the signal's origin and has nothing to be
+            // averaged against, so it skips the phasor round trip entirely - which
+            // would only cost two trig calls per bin and add rounding.
+            const combinePhase = frameCount > 1;
 
             for (let i = 0; i < binCount; i++) {
                 const frequency = (i * sampleRate) / frameLength;
@@ -675,20 +711,24 @@
 
                 let magnitudeSum = 0;
                 let psdSum = 0;
-                let phaseSum = 0;
-                let unwrappedSum = 0;
+                let phasorRe = 0;
+                let phasorIm = 0;
                 for (let f = 0; f < frameCount; f++) {
                     magnitudeSum += spectra[f].magnitudes[i];
                     psdSum += spectra[f].psd[i];
-                    phaseSum += spectra[f].phases[i];
-                    unwrappedSum += spectra[f].unwrappedPhases[i];
+
+                    if (combinePhase) {
+                        const aligned = spectra[f].phases[i]
+                            - (2 * Math.PI * i * frames[f].start) / frameLength;
+                        phasorRe += Math.cos(aligned);
+                        phasorIm += Math.sin(aligned);
+                    }
                 }
 
                 magnitudes[i] = magnitudeSum / frameCount;
                 const averagePsd = psdSum / frameCount;
                 psd[i] = averagePsd > 0 ? averagePsd : PSD_FLOOR;
-                phases[i] = phaseSum / frameCount;
-                unwrappedPhases[i] = unwrappedSum / frameCount;
+                phases[i] = combinePhase ? Math.atan2(phasorIm, phasorRe) : spectra[0].phases[i];
             }
 
             return {
@@ -703,7 +743,7 @@
                 magnitudes: magnitudes,
                 psd: psd,
                 phases: phases,
-                unwrappedPhases: unwrappedPhases,
+                unwrappedPhases: unwrapPhase(phases),
                 series: buildSeries(times, amplitudes, strategy, frameLength)
             };
         }
@@ -787,19 +827,27 @@
          * Sums the given components back into the time domain.
          * DC contributes its magnitude directly rather than as a cosine.
          *
+         * Phase is measured from the first sample of the analysis, so elapsed time is
+         * what matters: pass `spectrum.series.origin` as `timeOrigin` whenever the time
+         * stamps do not start at zero, or the whole reconstruction comes out phase
+         * shifted by 2*pi*f*timeOrigin.
+         *
          * @param {ArrayLike<number>} times
          * @param {Array<{freq: number, mag: number, phase: number}>} components
+         * @param {number} [timeOrigin=0] Time stamp the components' phase refers to.
          * @returns {number[]} One value per entry in `times`.
          */
-        function reconstruct(times, components) {
+        function reconstruct(times, components, timeOrigin) {
+            const origin = timeOrigin !== undefined ? timeOrigin : 0;
             return Array.prototype.map.call(times, (t) => {
+                const elapsed = t - origin;
                 let sum = 0;
                 for (let k = 0; k < components.length; k++) {
                     const component = components[k];
                     if (component.freq === 0) {
                         sum += component.mag;
                     } else {
-                        sum += component.mag * Math.cos(2 * Math.PI * component.freq * t + component.phase);
+                        sum += component.mag * Math.cos(2 * Math.PI * component.freq * elapsed + component.phase);
                     }
                 }
                 return sum;
@@ -860,6 +908,14 @@
         const magThreshEnabled = () => Dom.$('enableMagThresh').checked;
         const magThreshold = () => parseFloat(Dom.$('magThreshRange').value);
 
+        /**
+         * Formats a magnitude threshold for the readout beside its slider. Two decimals
+         * reads as 0.00 for every position on a small-amplitude dataset, so anything
+         * that small switches to significant figures instead.
+         */
+        const formatMagThreshold = (value) =>
+            (value !== 0 && Math.abs(value) < 0.01) ? value.toPrecision(3) : value.toFixed(2);
+
         /** All control values in one object, for a single analysis pass. */
         const snapshot = () => ({
             strategy: strategy(),
@@ -875,7 +931,8 @@
 
         return {
             UNITS, strategy, unit, windowType, peaksEnabled, sensitivity,
-            includeDc, includeBin1, magThreshEnabled, magThreshold, snapshot
+            includeDc, includeBin1, magThreshEnabled, magThreshold,
+            formatMagThreshold, snapshot
         };
     })();
     </script>
@@ -890,6 +947,9 @@
 
         /** Fallback used when the time column gives no usable spacing. */
         const DEFAULT_SAMPLE_RATE = 100;
+
+        /** Where a freshly loaded dataset parks the magnitude threshold. */
+        const DEFAULT_THRESHOLD_FRACTION = 0.1;
 
         /** Sample rate inferred from the first two time stamps. */
         function sampleRateOf(times) {
@@ -921,43 +981,76 @@
         }
 
         /**
-         * Rescales the magnitude-threshold slider to the loaded dataset, using the
-         * first frame's spectrum, and starts it at 10% of the largest magnitude.
+         * Rescales the magnitude-threshold slider to the spectrum just computed, so its
+         * full scale always matches the magnitudes actually on screen.
+         *
+         * @param {object} spectrum FFTLib.analyze result.
+         * @param {'reset'|'preserve'} mode 'reset' parks the threshold at the default
+         *   fraction of full scale, for a newly loaded dataset; 'preserve' keeps the
+         *   user's threshold at the same fraction of the new scale, so switching window
+         *   function or length strategy barely moves the set of included components.
          */
-        function calibrateMagnitudeThreshold() {
-            const dataset = AppState.dataset;
-            if (!dataset) return;
-
-            const frameLength = FFTLib.frameLengthFor(Settings.strategy(), dataset.amplitudes.length);
-            const firstFrame = FFTLib.sliceFrame(dataset.amplitudes, 0, frameLength);
-            const spectrum = FFTLib.frameSpectrum(firstFrame, sampleRateOf(dataset.times), Settings.windowType());
-            const maxMagnitude = FFTLib.maxOf(spectrum.magnitudes);
-
+        function rescaleThresholdSlider(spectrum, mode) {
             const slider = Dom.$('magThreshRange');
-            slider.max = maxMagnitude > 0 ? maxMagnitude : 1.0;
-            slider.step = (maxMagnitude / 200).toFixed(4);
-            slider.value = (maxMagnitude * 0.1).toFixed(4);
-            Dom.text('magThreshVal', parseFloat(slider.value).toFixed(2));
+            const maxMagnitude = FFTLib.maxOf(spectrum.magnitudes);
+            const scale = maxMagnitude > 0 ? maxMagnitude : 1.0;
+
+            let fraction = DEFAULT_THRESHOLD_FRACTION;
+            if (mode === 'preserve') {
+                const previousScale = parseFloat(slider.max);
+                const previousValue = parseFloat(slider.value);
+                if (previousScale > 0) fraction = previousValue / previousScale;
+            }
+
+            // max first: assigning value clamps it against the range in force.
+            slider.max = scale;
+            // toPrecision rather than toFixed: a step of 0 is invalid, and a fixed 4
+            // decimals rounds small-amplitude datasets straight down to zero.
+            slider.step = (scale / 200).toPrecision(4);
+            slider.value = (scale * fraction).toPrecision(4);
+            Dom.text('magThreshVal', Settings.formatMagThreshold(parseFloat(slider.value)));
         }
 
-        /** Re-runs the whole pipeline. Safe to call on every control change. */
-        function run() {
+        /** Time-domain sum of the given bins, over the analysed sample grid. */
+        function rebuildSignal(spectrum, bins) {
+            return FFTLib.reconstruct(
+                spectrum.series.times,
+                FFTLib.componentsAt(spectrum, bins),
+                spectrum.series.origin
+            );
+        }
+
+        /**
+         * Re-runs the whole pipeline. Safe to call on every control change.
+         *
+         * @param {{rescaleThreshold?: 'reset'|'preserve'}} [options] Set when this change
+         *   invalidates the magnitude-threshold slider's scale: 'reset' on a new dataset,
+         *   'preserve' after a window function or length strategy change.
+         */
+        function run(options) {
             const dataset = AppState.dataset;
             if (!dataset) return;
 
+            const opts = options || {};
             const cfg = Settings.snapshot();
             const spectrum = FFTLib.analyze(dataset.times, dataset.amplitudes, sampleRateOf(dataset.times), {
                 strategy: cfg.strategy,
                 windowType: cfg.windowType
             });
 
+            // The slider's scale comes from the spectrum, so rescale it here and re-read
+            // the threshold before anything downstream consumes it.
+            if (opts.rescaleThreshold) {
+                rescaleThresholdSlider(spectrum, opts.rescaleThreshold);
+                cfg.magThreshold = Settings.magThreshold();
+            }
+
             AppState.spectrum = spectrum;
             AppState.rows = buildRows(spectrum);
             AppState.peakIndices = cfg.peaksEnabled
                 ? FFTLib.findPeaks(spectrum.magnitudes, {
                     sensitivity: cfg.sensitivity,
-                    // DC is never summed on a period axis, where it cannot be plotted.
-                    includeDc: cfg.includeDc && cfg.unit !== Settings.UNITS.PERIOD,
+                    includeDc: cfg.includeDc,
                     includeBin1: cfg.includeBin1
                 })
                 : new Set();
@@ -975,16 +1068,12 @@
                 spectrum: spectrum,
                 peakIndices: AppState.peakIndices,
                 activeBins: activeBinsFor(spectrum, cfg.unit),
-                peakSignal: cfg.peaksEnabled
-                    ? FFTLib.reconstruct(spectrum.series.times, FFTLib.componentsAt(spectrum, AppState.peakIndices))
-                    : null,
-                thresholdSignal: cfg.magThreshEnabled
-                    ? FFTLib.reconstruct(spectrum.series.times, FFTLib.componentsAt(spectrum, thresholdBins))
-                    : null
+                peakSignal: cfg.peaksEnabled ? rebuildSignal(spectrum, AppState.peakIndices) : null,
+                thresholdSignal: cfg.magThreshEnabled ? rebuildSignal(spectrum, thresholdBins) : null
             });
         }
 
-        return { run, calibrateMagnitudeThreshold, sampleRateOf };
+        return { run, sampleRateOf };
     })();
     </script>
 
@@ -1691,11 +1780,10 @@
             };
 
             const sampleRate = Analysis.sampleRateOf(AppState.dataset.times);
-            Analysis.calibrateMagnitudeThreshold();
             Dom.text('statusText',
                 `Loaded: ${AppState.fileName} (${points.length} points, fs = ${sampleRate.toFixed(2)}Hz)`);
             Controls.updateExportButtonState();
-            Analysis.run();
+            Analysis.run({ rescaleThreshold: 'reset' });
         }
 
         return { init, closeColumnModal, confirmColumnSelection };
@@ -1768,19 +1856,23 @@
             });
 
             Dom.$('magThreshRange').addEventListener('input', (e) => {
-                Dom.text('magThreshVal', parseFloat(e.target.value).toFixed(2));
+                Dom.text('magThreshVal', Settings.formatMagThreshold(parseFloat(e.target.value)));
                 Analysis.run();
             });
 
-            ['includeDcPeaks', 'includeBin1Peaks', 'padStrategy', 'windowType'].forEach((id) => {
-                Dom.$(id).addEventListener('change', Analysis.run);
+            // Peak membership only: the spectrum and the threshold scale still stand.
+            ['includeDcPeaks', 'includeBin1Peaks'].forEach((id) => {
+                Dom.$(id).addEventListener('change', () => Analysis.run());
             });
 
-            // The table's x-axis unit decides which rows are listed at all.
-            Dom.$('freqDomainUnit').addEventListener('change', () => {
-                TableView.render();
-                Analysis.run();
+            // These change the magnitudes themselves, so the threshold slider's full
+            // scale has to follow them.
+            ['padStrategy', 'windowType'].forEach((id) => {
+                Dom.$(id).addEventListener('change', () => Analysis.run({ rescaleThreshold: 'preserve' }));
             });
+
+            // The x-axis unit decides which bins are plottable and which rows are listed.
+            Dom.$('freqDomainUnit').addEventListener('change', () => Analysis.run());
 
             // Dismiss the export menu on any click outside it.
             window.addEventListener('click', (e) => {
