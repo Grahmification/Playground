@@ -1101,7 +1101,44 @@
         }
 
         /**
-         * Re-runs the whole pipeline. Safe to call on every control change.
+         * The last analysis, reused for as long as its inputs hold.
+         *
+         * The spectrum and the table rows depend only on the dataset, the length
+         * strategy and the window function - never on the peak or threshold controls -
+         * so dragging a slider must not pay for another FFT and another set of per-bin
+         * row objects.
+         *
+         * Invalidation is by dataset identity, so loading data must produce a new
+         * dataset object rather than editing the existing one in place.
+         */
+        let cached = null;
+
+        function analysisFor(dataset, cfg) {
+            if (cached &&
+                cached.dataset === dataset &&
+                cached.strategy === cfg.strategy &&
+                cached.windowType === cfg.windowType) {
+                return cached;
+            }
+
+            const spectrum = FFTLib.analyze(dataset.times, dataset.amplitudes, sampleRateOf(dataset.times), {
+                strategy: cfg.strategy,
+                windowType: cfg.windowType
+            });
+
+            cached = {
+                dataset: dataset,
+                strategy: cfg.strategy,
+                windowType: cfg.windowType,
+                spectrum: spectrum,
+                rows: buildRows(spectrum)
+            };
+            return cached;
+        }
+
+        /**
+         * Re-runs the pipeline from whatever the controls now say. Safe to call on every
+         * control change; the transform itself only re-runs when its own inputs changed.
          *
          * @param {{rescaleThreshold?: 'reset'|'preserve'}} [options] Set when this change
          *   invalidates the magnitude-threshold slider's scale: 'reset' on a new dataset,
@@ -1113,10 +1150,8 @@
 
             const opts = options || {};
             const cfg = Settings.snapshot();
-            const spectrum = FFTLib.analyze(dataset.times, dataset.amplitudes, sampleRateOf(dataset.times), {
-                strategy: cfg.strategy,
-                windowType: cfg.windowType
-            });
+            const analysis = analysisFor(dataset, cfg);
+            const spectrum = analysis.spectrum;
 
             // The slider's scale comes from the spectrum, so rescale it here and re-read
             // the threshold before anything downstream consumes it.
@@ -1126,7 +1161,8 @@
             }
 
             AppState.spectrum = spectrum;
-            AppState.rows = buildRows(spectrum);
+            // Shared with the cache: consumers must read it without sorting or mutating.
+            AppState.rows = analysis.rows;
             AppState.peakIndices = cfg.peaksEnabled
                 ? FFTLib.findPeaks(spectrum.magnitudes, {
                     sensitivity: cfg.sensitivity,
