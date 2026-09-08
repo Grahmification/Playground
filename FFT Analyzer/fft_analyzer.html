@@ -6,10 +6,10 @@
     <title>Advanced FFT & Spectral Analysis Dashboard</title>
     <!-- Tailwind CSS for styling -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <!-- Chart.js for plotting -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Chart.js Zoom Plugin -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.2.0/chartjs-plugin-zoom.min.js"></script>
+    <!-- Plotly for plotting. The gl2d partial bundle (1.5 MB) carries scatter and the
+         WebGL scattergl trace, which is what keeps 65k-point spectra interactive. It
+         has no polar or 3D traces - the phase plot is drawn on the complex plane. -->
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-gl2d-dist-min@3.7.0/plotly-gl2d.min.js"></script>
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <style>
@@ -133,7 +133,7 @@
         </div>
 
         <div class="text-[10px] text-gray-400 mt-4 pt-2 border-t border-gray-100">
-            Powered by Chart.js, PapaParse & Native FFT
+            Powered by Plotly, PapaParse &amp; Native FFT
         </div>
     </aside>
 
@@ -193,7 +193,7 @@
                     <button type="button" onclick="resetChartZoom('time')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
                 </div>
                 <div class="relative w-full h-[360px]">
-                    <canvas id="timeChart" role="img" aria-label="Time domain chart: the processed input signal with any active reconstructions overlaid. The same values are listed in the Spectral Table tab."></canvas>
+                    <div id="timeChart" class="w-full h-full" role="figure" aria-label="Time domain chart: the processed input signal with any active reconstructions overlaid. The same values are listed in the Spectral Table tab."></div>
                 </div>
             </div>
 
@@ -204,7 +204,7 @@
                     <button type="button" onclick="resetChartZoom('fft')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
                 </div>
                 <div class="relative w-full h-[360px]">
-                    <canvas id="fftChart" role="img" aria-label="FFT magnitude spectrum, with detected peaks and the magnitude threshold cutoff. Per-bin values are listed in the Spectral Table tab."></canvas>
+                    <div id="fftChart" class="w-full h-full" role="figure" aria-label="FFT magnitude spectrum, with detected peaks and the magnitude threshold cutoff. Per-bin values are listed in the Spectral Table tab."></div>
                 </div>
             </div>
 
@@ -215,7 +215,7 @@
                     <button type="button" onclick="resetChartZoom('psd')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
                 </div>
                 <div class="relative w-full h-[360px]">
-                    <canvas id="psdChart" role="img" aria-label="Power spectral density on a logarithmic scale, with detected peaks marked."></canvas>
+                    <div id="psdChart" class="w-full h-full" role="figure" aria-label="Power spectral density on a logarithmic scale, with detected peaks marked."></div>
                 </div>
             </div>
 
@@ -226,7 +226,7 @@
                     <button type="button" onclick="resetChartZoom('phase')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
                 </div>
                 <div class="relative w-full h-[360px]">
-                    <canvas id="phaseChart" role="img" aria-label="Unwrapped phase spectrum in radians. Per-bin phase is listed in the Spectral Table tab."></canvas>
+                    <div id="phaseChart" class="w-full h-full" role="figure" aria-label="Unwrapped phase spectrum in radians. Per-bin phase is listed in the Spectral Table tab."></div>
                 </div>
             </div>
 
@@ -237,7 +237,7 @@
                     <button type="button" onclick="resetChartZoom('polar')" class="text-[11px] font-medium px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded border border-gray-200 transition-all cursor-pointer">Reset Zoom</button>
                 </div>
                 <div class="relative w-full h-[400px]">
-                    <canvas id="polarPhaseChart" role="img" aria-label="Each spectral component's phase projected onto the unit circle in the complex plane."></canvas>
+                    <div id="polarPhaseChart" class="w-full h-full" role="figure" aria-label="Each spectral component's phase projected onto the unit circle in the complex plane."></div>
                 </div>
             </div>
         </div>
@@ -375,7 +375,7 @@
     <!-- ==================================================================== -->
     <!-- FFTLib - self-contained spectral analysis library.                    -->
     <!--                                                                       -->
-    <!-- Pure computation: no DOM, no Chart.js, no globals other than its own  -->
+    <!-- Pure computation: no DOM, no plotting library, no globals but its own -->
     <!-- namespace. Lift this whole block into any other page, or save it as   -->
     <!-- fft-lib.js, and it works unchanged.                                   -->
     <!-- ==================================================================== -->
@@ -1566,7 +1566,7 @@
     </script>
 
     <!-- ==================================================================== -->
-    <!-- ChartsView - owns the five Chart.js instances and their configs.       -->
+    <!-- ChartsView - owns the five Plotly graphs, their traces and layouts.    -->
     <!-- ==================================================================== -->
     <script>
     window.ChartsView = (function () {
@@ -1581,14 +1581,17 @@
             thresholdLine: 'rgba(220, 38, 38, 0.8)',
             guide: 'rgba(209, 213, 219, 0.8)',
             axisGrid: 'rgba(156, 163, 175, 0.6)',
-            grid: 'rgba(229, 231, 235, 0.5)'
+            grid: 'rgba(229, 231, 235, 0.5)',
+            modebarBg: 'rgba(255, 255, 255, 0.85)',
+            modebarIcon: 'rgba(107, 114, 128, 0.85)',
+            modebarActive: 'rgb(37, 99, 235)'
         };
 
         /** Dataset labels the polar tooltip matches on, so they stay in sync. */
         const LABEL_PEAKS = 'Detected Peaks';
         const LABEL_INCLUDED = 'Included Components';
 
-        const CANVAS_IDS = {
+        const PLOT_IDS = {
             time: 'timeChart',
             fft: 'fftChart',
             psd: 'psdChart',
@@ -1596,171 +1599,232 @@
             polar: 'polarPhaseChart'
         };
 
-        const charts = { time: null, fft: null, psd: null, phase: null, polar: null };
+        /** Half-width of the complex plane the phase plot shows. */
+        const POLAR_EXTENT = 1.2;
 
-        /** Shared zoom/pan behaviour; the limits stop the user zooming out past the data. */
-        const ZOOM = {
-            limits: {
-                x: { min: 'original', max: 'original' },
-                y: { min: 'original', max: 'original' }
-            },
-            zoom: {
-                wheel: { enabled: true },
-                pinch: { enabled: true },
-                mode: 'xy'
-            },
-            pan: {
-                enabled: true,
-                mode: 'xy'
+        const AXES = ['xaxis', 'yaxis'];
+
+        /** Graph divs, keyed as above, once Plotly has taken them over. */
+        const charts = {};
+
+        /**
+         * Zoom the user has set, per chart. Plotly keeps the current range on the graph
+         * div's own layout, which the fresh layout of a re-render would discard - and a
+         * re-render happens on every slider drag.
+         */
+        const zoomState = {};
+
+        /**
+         * Drag zooms a box and the wheel is left to the page: with five charts on a
+         * scrolling dashboard, wheel zoom steals the scroll you actually wanted. Pan,
+         * autoscale and PNG export stay one click away on the modebar.
+         */
+        const CONFIG = {
+            responsive: true,
+            scrollZoom: false,
+            displayModeBar: true,   // pinned, rather than the default appear-on-hover
+            displaylogo: false,
+            modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+            toImageButtonOptions: { format: 'png', scale: 2 }
+        };
+
+        // -- Trace & layout builders ----------------------------------------
+
+        /** scattergl throughout: WebGL is what keeps 65k-point spectra interactive. */
+        const lineTrace = (name, x, y, color, width, extra) => Object.assign({
+            type: 'scattergl',
+            mode: 'lines',
+            name: name,
+            x: x,
+            y: y,
+            line: { color: color, width: width }
+        }, extra);
+
+        /** Marker-only overlay, for the peak and threshold-match layers. */
+        const markerTrace = (name, x, y, color, size, extra) => Object.assign({
+            type: 'scattergl',
+            mode: 'markers',
+            name: name,
+            x: x,
+            y: y,
+            marker: { color: color, size: size }
+        }, extra);
+
+        /**
+         * Plotly builds hover text from a template rather than a callback. `<extra>`
+         * is the trace-name badge, which is what now distinguishes a peak or threshold
+         * match - the old tooltip appended that by hand.
+         */
+        const hoverFor = (xLabel, yLabel) =>
+            `${xLabel}: %{x:.4g}<br>${yLabel}: %{y:.4g}<extra>%{fullData.name}</extra>`;
+
+        const POLAR_HOVER =
+            'Freq: %{customdata[0]:.2f} Hz (Period: %{customdata[1]})<br>' +
+            'Magnitude: %{customdata[2]:.4f}<br>' +
+            'Phase: %{customdata[3]:.3f} rad' +
+            '<extra>%{fullData.name}</extra>';
+
+        // A fresh layout per render: Plotly writes computed state back onto whatever
+        // object it is handed, so sharing one between charts would let them interfere.
+        const baseLayout = () => ({
+            dragmode: 'zoom',
+            hovermode: 'closest',
+            margin: { l: 62, r: 20, t: 34, b: 48 },
+            legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, x: 0, font: { size: 10 } },
+            font: { size: 11 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            // Spelt out because the default is paper_bgcolor at half opacity, and this
+            // paper is transparent *black* - which gives a dark bar with white icons.
+            modebar: {
+                bgcolor: COLORS.modebarBg,
+                color: COLORS.modebarIcon,
+                activecolor: COLORS.modebarActive
+            }
+        });
+
+        const axis = (title, extra) => Object.assign({
+            title: { text: title, font: { size: 11 } },
+            gridcolor: COLORS.grid,
+            zeroline: false
+        }, extra);
+
+        function cartesianLayout(xTitle, yTitle, yExtra) {
+            const layout = baseLayout();
+            layout.xaxis = axis(xTitle);
+            layout.yaxis = axis(yTitle, yExtra);
+            return layout;
+        }
+
+        /**
+         * The complex plane. scaleanchor pins one y unit to one x unit, so the unit
+         * circle is actually circular - in a wide card it rendered as an ellipse before.
+         */
+        function polarLayout() {
+            const layout = baseLayout();
+            const bounds = { range: [-POLAR_EXTENT, POLAR_EXTENT], zeroline: true, zerolinecolor: COLORS.axisGrid };
+            layout.xaxis = axis('Real (cos φ)', bounds);
+            layout.yaxis = axis('Imaginary (sin φ)',
+                Object.assign({ scaleanchor: 'x', scaleratio: 1 }, bounds));
+            return layout;
+        }
+
+        function unitCircle() {
+            const x = [];
+            const y = [];
+            for (let a = 0; a < Math.PI * 2; a += 0.05) {
+                x.push(Math.cos(a));
+                y.push(Math.sin(a));
+            }
+            x.push(1);   // close the ring rather than leaving the old few-degree gap
+            y.push(0);
+            return { x: x, y: y };
+        }
+
+        // -- State carried across re-renders --------------------------------
+
+        function rememberZoom(chartKey) {
+            const gd = charts[chartKey];
+            if (!gd || !gd.layout) return;
+
+            const ranges = {};
+            let zoomed = false;
+            AXES.forEach((name) => {
+                const spec = gd.layout[name];
+                if (spec && spec.autorange === false && spec.range) {
+                    ranges[name] = spec.range.slice();
+                    zoomed = true;
+                }
+            });
+            zoomState[chartKey] = zoomed ? ranges : null;
+        }
+
+        function applyZoom(chartKey, layout) {
+            const ranges = zoomState[chartKey];
+            if (!ranges) return layout;
+            Object.keys(ranges).forEach((name) => {
+                layout[name] = Object.assign({}, layout[name], {
+                    range: ranges[name],
+                    autorange: false
+                });
+            });
+            return layout;
+        }
+
+        /**
+         * Carries legend hide/show choices across a re-render. Matched by trace name
+         * rather than index, because layers appear and disappear as peak detection and
+         * the magnitude threshold are toggled.
+         */
+        function applyVisibility(chartKey, traces) {
+            const gd = charts[chartKey];
+            if (!gd || !gd.data) return traces;
+
+            const previous = new Map();
+            gd.data.forEach((trace) => {
+                if (trace.visible !== undefined) previous.set(trace.name, trace.visible);
+            });
+            traces.forEach((trace) => {
+                if (previous.has(trace.name)) trace.visible = previous.get(trace.name);
+            });
+            return traces;
+        }
+
+        /** Where a chart lands on reset; the complex plane is fixed, not fitted. */
+        const HOME_RANGE = {
+            polar: {
+                'xaxis.range': [-POLAR_EXTENT, POLAR_EXTENT],
+                'yaxis.range': [-POLAR_EXTENT, POLAR_EXTENT]
             }
         };
 
         function resetZoom(chartKey) {
-            if (charts[chartKey]) charts[chartKey].resetZoom();
+            const gd = charts[chartKey];
+            if (!gd) return;
+            zoomState[chartKey] = null;
+            Plotly.relayout(gd, HOME_RANGE[chartKey] ||
+                { 'xaxis.autorange': true, 'yaxis.autorange': true });
         }
 
-        const create = (chartKey, config) =>
-            new Chart(Dom.$(CANVAS_IDS[chartKey]).getContext('2d'), config);
+        /** Creates the plot on first use, then updates it in place. */
+        function drawChart(chartKey, traces, layout) {
+            const target = Dom.$(PLOT_IDS[chartKey]);
+            applyVisibility(chartKey, traces);
+            applyZoom(chartKey, layout);
 
-        /**
-         * Updates a chart in place so the user's zoom, pan and legend toggles survive
-         * a re-render, falling back to a rebuild when the dataset count changes
-         * (which happens whenever a peak or threshold layer is switched on or off).
-         */
-        function upsert(chartKey, config) {
-            const chart = charts[chartKey];
-            if (!chart) {
-                charts[chartKey] = create(chartKey, config);
+            if (!charts[chartKey]) {
+                charts[chartKey] = target;
+                Plotly.newPlot(target, traces, layout, CONFIG).then(() => {
+                    // Fires for drag zoom, pan, double-click autoscale and modebar alike.
+                    // Attached once the div is a graph, so the emitter exists.
+                    target.on('plotly_relayout', () => rememberZoom(chartKey));
+                });
                 return;
             }
-
-            const wasVisible = chart.data.datasets.map((ds, i) => chart.isDatasetVisible(i));
-
-            chart.data.labels = config.data.labels;
-            chart.data.datasets.forEach((ds, i) => {
-                const next = config.data.datasets[i];
-                if (!next) return;
-                ds.data = next.data;
-                if (next.label) ds.label = next.label;
-            });
-
-            if (chart.data.datasets.length !== config.data.datasets.length) {
-                chart.destroy();
-                charts[chartKey] = create(chartKey, config);
-                return;
-            }
-
-            chart.options = config.options;
-            chart.update('none');
-
-            wasVisible.forEach((visible, i) => {
-                if (i < chart.data.datasets.length && visible !== chart.isDatasetVisible(i)) {
-                    chart.setDatasetVisibility(i, visible);
-                }
-            });
-            chart.update('none');
-        }
-
-        // -- Dataset & option builders --------------------------------------
-
-        /** Scatter overlay used for the peak and threshold markers. */
-        const markerDataset = (label, data, color, pointRadius, order) => ({
-            label: label,
-            data: data,
-            borderColor: 'transparent',
-            backgroundColor: color,
-            pointRadius: pointRadius,
-            showLine: false,
-            order: order
-        });
-
-        /** Marker on the polar plot, which is a scatter chart and needs no showLine. */
-        const polarMarkerDataset = (label, data, color, pointRadius, order) => ({
-            label: label,
-            data: data,
-            borderColor: 'transparent',
-            backgroundColor: color,
-            pointRadius: pointRadius,
-            pointHoverRadius: pointRadius + 2,
-            order: order
-        });
-
-        const spectralOptions = (xLabel, yScale) => ({
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                x: { type: 'linear', title: { display: true, text: xLabel } },
-                y: yScale
-            },
-            plugins: { zoom: ZOOM }
-        });
-
-        /** Renders log-axis ticks as 1e-3 style scientific notation. */
-        function scientificTick(value) {
-            if (value === 0) return '0';
-            const exponent = Math.floor(Math.log10(value));
-            const mantissa = value / Math.pow(10, exponent);
-            if (mantissa === 1) return `1e${exponent}`;
-            return `${mantissa.toFixed(1)}e${exponent}`;
-        }
-
-        function unitCirclePoints() {
-            const points = [];
-            for (let a = 0; a <= Math.PI * 2; a += 0.05) {
-                points.push({ x: Math.cos(a), y: Math.sin(a) });
-            }
-            return points;
-        }
-
-        /** Axis that crosses at the origin, for the complex plane. */
-        const polarAxis = (label) => ({
-            type: 'linear',
-            position: 'center',
-            min: -1.2,
-            max: 1.2,
-            title: { display: true, text: label },
-            grid: { color: (ctx) => (ctx.tick.value === 0 ? COLORS.axisGrid : COLORS.grid) }
-        });
-
-        function polarTooltipLabel(context) {
-            if (context.datasetIndex === 0) return null;   // the unit-circle guide
-            const point = context.raw;
-            if (!point) return null;
-
-            let suffix = '';
-            if (context.dataset.label === LABEL_PEAKS) suffix = ' [Peak Match]';
-            if (context.dataset.label === LABEL_INCLUDED) suffix = ' [Threshold Match]';
-
-            const periodText = point.period === Infinity ? 'Infinite' : point.period.toFixed(3) + ' s';
-            const phase = point.phase.theta !== undefined ? point.phase.theta : point.phase;
-            return [
-                ` Freq: ${point.freq.toFixed(2)} Hz (Period: ${periodText})${suffix}`,
-                ` Magnitude: ${point.mag.toFixed(4)}`,
-                ` Phase: ${phase.toFixed(3)} rad`
-            ];
+            Plotly.react(target, traces, layout, CONFIG);
         }
 
         // -- Base series cache ----------------------------------------------
 
-        const pointsOf = (bins, values, xOf) => bins.map((i) => ({ x: xOf(i), y: values[i] }));
-
-        /** A component projected onto the unit circle, carrying its label data along. */
-        function polarPointOf(spectrum, i) {
-            const phi = spectrum.phases[i];
-            return {
-                x: Math.cos(phi),
-                y: Math.sin(phi),
-                freq: spectrum.frequencies[i],
-                period: spectrum.periods[i],
-                mag: spectrum.magnitudes[i],
-                phase: phi
-            };
+        /**
+         * Per-point hover data for the phase plot. The period is preformatted because a
+         * hover template cannot branch and DC's period is infinite.
+         */
+        function polarMetaFor(spectrum, i) {
+            const period = spectrum.periods[i];
+            return [
+                spectrum.frequencies[i],
+                period === Infinity ? 'Infinite' : period.toFixed(3) + ' s',
+                spectrum.magnitudes[i],
+                spectrum.phases[i]
+            ];
         }
 
         /**
-         * The series that depend only on the spectrum and the x-axis unit, cached so
-         * that a threshold or peak change does not reallocate one point object per bin,
-         * four series over, for data that has not changed.
+         * The series that depend only on the spectrum and the x-axis unit, cached so a
+         * threshold or peak change does not rebuild four full-length series that have
+         * not changed. Plotly wants parallel flat arrays rather than point objects,
+         * which also makes this far cheaper than the Chart.js shape it replaces.
          *
          * Analysis caches the spectrum object itself, so identity comparison suffices.
          */
@@ -1781,6 +1845,16 @@
                 activeBins.push(i);
             }
 
+            const polarX = [];
+            const polarY = [];
+            const polarMeta = [];
+            activeBins.forEach((i) => {
+                const phi = spectrum.phases[i];
+                polarX.push(Math.cos(phi));
+                polarY.push(Math.sin(phi));
+                polarMeta.push(polarMetaFor(spectrum, i));
+            });
+
             baseCache = {
                 spectrum: spectrum,
                 unit: unit,
@@ -1788,10 +1862,13 @@
                 xOf: xOf,
                 activeBins: activeBins,
                 xLabel: usePeriod ? 'Period (s)' : 'Frequency (Hz)',
-                magnitudePoints: pointsOf(activeBins, spectrum.magnitudes, xOf),
-                psdPoints: pointsOf(activeBins, spectrum.psd, xOf),
-                phasePoints: pointsOf(activeBins, spectrum.unwrappedPhases, xOf),
-                polarPoints: activeBins.map((i) => polarPointOf(spectrum, i))
+                x: activeBins.map(xOf),
+                magnitude: activeBins.map((i) => spectrum.magnitudes[i]),
+                psd: activeBins.map((i) => spectrum.psd[i]),
+                phase: activeBins.map((i) => spectrum.unwrappedPhases[i]),
+                polarX: polarX,
+                polarY: polarY,
+                polarMeta: polarMeta
             };
             return baseCache;
         }
@@ -1806,191 +1883,155 @@
          * @param {?number[]} model.peakSignal      Peak reconstruction, or null if off.
          * @param {?number[]} model.thresholdSignal Threshold reconstruction, or null if off.
          */
-        function render(model) {
+        function draw(model) {
             const { cfg, spectrum, peakIndices, peakSignal, thresholdSignal } = model;
 
             const base = baseSeriesFor(spectrum, cfg.unit);
-            const { activeBins, xOf, xLabel, magnitudePoints } = base;
+            const xLabel = base.xLabel;
 
             const isPlottable = (i) => !base.usePeriod || spectrum.frequencies[i] > 0;
             const isIncluded = (i) => spectrum.magnitudes[i] >= cfg.magThreshold;
 
             const peakBins = cfg.peaksEnabled ? [...peakIndices].filter(isPlottable) : [];
-            const includedBins = cfg.magThreshEnabled ? activeBins.filter(isIncluded) : [];
+            const includedBins = cfg.magThreshEnabled ? base.activeBins.filter(isIncluded) : [];
 
-            // A flat line needs only its endpoints. Matching the magnitude series point
-            // for point would allocate one object per bin on every drag.
-            const thresholdLine = magnitudePoints.length === 0 ? [] : [
-                { x: magnitudePoints[0].x, y: cfg.magThreshold },
-                { x: magnitudePoints[magnitudePoints.length - 1].x, y: cfg.magThreshold }
+            const peakX = peakBins.map(base.xOf);
+            const includedX = includedBins.map(base.xOf);
+            const yOf = (bins, values) => bins.map((i) => values[i]);
+
+            // -- 1. Time domain: original series plus any active reconstruction.
+            // A real linear axis in seconds, where Chart.js had a category axis of
+            // formatted labels - so zooming is now by time rather than by sample index.
+            const timeHover = hoverFor('Time (s)', 'Amplitude');
+            const timeTraces = [
+                lineTrace('Original Data (Processed)', spectrum.series.times,
+                    spectrum.series.amplitudes, COLORS.original, 1.5, { hovertemplate: timeHover })
             ];
+            if (cfg.peaksEnabled) {
+                timeTraces.push(lineTrace('Summed Peak Components', spectrum.series.times,
+                    peakSignal, COLORS.peak, 2, { hovertemplate: timeHover }));
+            }
+            if (cfg.magThreshEnabled) {
+                timeTraces.push(lineTrace('Mag Threshold Reconstruction', spectrum.series.times,
+                    thresholdSignal, COLORS.threshold, 2, { hovertemplate: timeHover }));
+            }
+            drawChart('time', timeTraces, cartesianLayout('Time (s)', 'Amplitude'));
 
-            // 1. Time domain: original series plus any active reconstruction.
-            upsert('time', {
-                type: 'line',
-                data: {
-                    labels: spectrum.series.times.map((t) => t.toFixed(2)),
-                    datasets: [
-                        {
-                            label: 'Original Data (Processed)',
-                            data: spectrum.series.amplitudes,
-                            borderColor: COLORS.original,
-                            borderWidth: 1.5,
-                            pointRadius: 0,
-                            spanGaps: true
-                        },
-                        ...(cfg.peaksEnabled ? [{
-                            label: 'Summed Peak Components',
-                            data: peakSignal,
-                            borderColor: COLORS.peak,
-                            borderWidth: 2,
-                            pointRadius: 0
-                        }] : []),
-                        ...(cfg.magThreshEnabled ? [{
-                            label: 'Mag Threshold Reconstruction',
-                            data: thresholdSignal,
-                            borderColor: COLORS.threshold,
-                            borderWidth: 2,
-                            pointRadius: 0
-                        }] : [])
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        x: { title: { display: true, text: 'Time (s)' } },
-                        y: { title: { display: true, text: 'Amplitude' } }
-                    },
-                    plugins: { zoom: ZOOM }
-                }
-            });
+            // -- 2. FFT magnitude, with the threshold as a horizontal cutoff line.
+            const magHover = hoverFor(xLabel, 'Magnitude');
+            const magTraces = [
+                lineTrace(`Magnitude (${cfg.windowType.toUpperCase()})`, base.x, base.magnitude,
+                    COLORS.spectrum, 1.5, { hovertemplate: magHover })
+            ];
+            if (cfg.peaksEnabled) {
+                magTraces.push(markerTrace(LABEL_PEAKS, peakX, yOf(peakBins, spectrum.magnitudes),
+                    COLORS.peak, 10, { hovertemplate: magHover }));
+            }
+            if (cfg.magThreshEnabled) {
+                // A flat line needs only its endpoints, and carries no information to
+                // hover over that the sidebar readout does not already show.
+                const edges = base.x.length === 0 ? [] : [base.x[0], base.x[base.x.length - 1]];
+                magTraces.push(lineTrace('Threshold Cutoff', edges,
+                    edges.map(() => cfg.magThreshold), COLORS.thresholdLine, 1.5, {
+                        line: { color: COLORS.thresholdLine, width: 1.5, dash: 'dash' },
+                        hoverinfo: 'skip'
+                    }));
+                magTraces.push(markerTrace(LABEL_INCLUDED, includedX,
+                    yOf(includedBins, spectrum.magnitudes), COLORS.threshold, 8,
+                    { hovertemplate: magHover }));
+            }
+            drawChart('fft', magTraces, cartesianLayout(xLabel, 'Magnitude'));
 
-            // 2. FFT magnitude, with the threshold drawn as a horizontal cutoff line.
-            upsert('fft', {
-                type: 'line',
-                data: {
-                    datasets: [
-                        {
-                            label: `Magnitude (${cfg.windowType.toUpperCase()})`,
-                            data: magnitudePoints,
-                            borderColor: COLORS.spectrum,
-                            borderWidth: 1.5,
-                            pointRadius: 0,
-                            order: 2
-                        },
-                        ...(cfg.peaksEnabled ? [
-                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.magnitudes, xOf), COLORS.peak, 5, 1)
-                        ] : []),
-                        ...(cfg.magThreshEnabled ? [
-                            {
-                                label: 'Threshold Cutoff',
-                                data: thresholdLine,
-                                borderColor: COLORS.thresholdLine,
-                                borderWidth: 1.5,
-                                borderDash: [5, 5],
-                                pointRadius: 0,
-                                order: 3
-                            },
-                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.magnitudes, xOf), COLORS.threshold, 4, 0)
-                        ] : [])
-                    ]
-                },
-                options: spectralOptions(xLabel, { title: { display: true, text: 'Magnitude' } })
-            });
+            // -- 3. Power spectral density on a log axis.
+            const psdHover = hoverFor(xLabel, 'PSD');
+            const psdTraces = [
+                lineTrace('PSD (V²/Hz)', base.x, base.psd, COLORS.spectrum, 1.5,
+                    { hovertemplate: psdHover })
+            ];
+            if (cfg.peaksEnabled) {
+                psdTraces.push(markerTrace(LABEL_PEAKS, peakX, yOf(peakBins, spectrum.psd),
+                    COLORS.peak, 10, { hovertemplate: psdHover }));
+            }
+            if (cfg.magThreshEnabled) {
+                psdTraces.push(markerTrace(LABEL_INCLUDED, includedX, yOf(includedBins, spectrum.psd),
+                    COLORS.threshold, 8, { hovertemplate: psdHover }));
+            }
+            drawChart('psd', psdTraces, cartesianLayout(xLabel, 'PSD (V²/Hz) [Log]', {
+                type: 'log',
+                exponentformat: 'e'
+            }));
 
-            // 3. Power spectral density on a log axis.
-            upsert('psd', {
-                type: 'line',
-                data: {
-                    datasets: [
-                        {
-                            label: 'PSD (V²/Hz)',
-                            data: base.psdPoints,
-                            borderColor: COLORS.spectrum,
-                            borderWidth: 1.5,
-                            pointRadius: 1,
-                            order: 2
-                        },
-                        ...(cfg.peaksEnabled ? [
-                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.psd, xOf), COLORS.peak, 5, 1)
-                        ] : []),
-                        ...(cfg.magThreshEnabled ? [
-                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.psd, xOf), COLORS.threshold, 4, 0)
-                        ] : [])
-                    ]
-                },
-                options: spectralOptions(xLabel, {
-                    type: 'logarithmic',
-                    title: { display: true, text: 'PSD (V²/Hz) [Log]' },
-                    ticks: { callback: scientificTick }
-                })
-            });
+            // -- 4. Unwrapped phase spectrum.
+            const phaseHover = hoverFor(xLabel, 'Phase (rad)');
+            const phaseTraces = [
+                lineTrace('Unwrapped Phase (rad)', base.x, base.phase, COLORS.phase, 1.5,
+                    { hovertemplate: phaseHover })
+            ];
+            if (cfg.peaksEnabled) {
+                phaseTraces.push(markerTrace(LABEL_PEAKS, peakX,
+                    yOf(peakBins, spectrum.unwrappedPhases), COLORS.peak, 10,
+                    { hovertemplate: phaseHover }));
+            }
+            if (cfg.magThreshEnabled) {
+                phaseTraces.push(markerTrace(LABEL_INCLUDED, includedX,
+                    yOf(includedBins, spectrum.unwrappedPhases), COLORS.threshold, 8,
+                    { hovertemplate: phaseHover }));
+            }
+            drawChart('phase', phaseTraces, cartesianLayout(xLabel, 'Unwrapped Phase (rad)'));
 
-            // 4. Unwrapped phase spectrum.
-            upsert('phase', {
-                type: 'line',
-                data: {
-                    datasets: [
-                        {
-                            label: 'Unwrapped Phase (rad)',
-                            data: base.phasePoints,
-                            borderColor: COLORS.phase,
-                            borderWidth: 1.5,
-                            pointRadius: 1,
-                            order: 2
-                        },
-                        ...(cfg.peaksEnabled ? [
-                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.unwrappedPhases, xOf), COLORS.peak, 5, 1)
-                        ] : []),
-                        ...(cfg.magThreshEnabled ? [
-                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.unwrappedPhases, xOf), COLORS.threshold, 4, 0)
-                        ] : [])
-                    ]
-                },
-                options: spectralOptions(xLabel, { title: { display: true, text: 'Unwrapped Phase (rad)' } })
-            });
+            // -- 5. Every component's phase projected onto the unit circle.
+            const cosOf = (bins) => bins.map((i) => Math.cos(spectrum.phases[i]));
+            const sinOf = (bins) => bins.map((i) => Math.sin(spectrum.phases[i]));
+            const metaOf = (bins) => bins.map((i) => polarMetaFor(spectrum, i));
 
-            // 5. Polar phase plot: every component projected onto the unit circle.
-            upsert('polar', {
-                type: 'scatter',
-                data: {
-                    datasets: [
-                        {
-                            label: 'Unit Circle (r = 1)',
-                            data: unitCirclePoints(),
-                            borderColor: COLORS.guide,
-                            borderWidth: 1.5,
-                            borderDash: [4, 4],
-                            showLine: true,
-                            pointRadius: 0,
-                            order: 4
-                        },
-                        polarMarkerDataset('Phase Components', base.polarPoints, COLORS.phase, 4, 3),
-                        ...(cfg.peaksEnabled ? [
-                            polarMarkerDataset(LABEL_PEAKS, peakBins.map((i) => polarPointOf(spectrum, i)), COLORS.peak, 6, 2)
-                        ] : []),
-                        ...(cfg.magThreshEnabled ? [
-                            polarMarkerDataset(LABEL_INCLUDED, includedBins.map((i) => polarPointOf(spectrum, i)), COLORS.threshold, 6, 1)
-                        ] : [])
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        x: polarAxis('Real (cos φ)'),
-                        y: polarAxis('Imaginary (sin φ)')
-                    },
-                    plugins: {
-                        zoom: ZOOM,
-                        tooltip: { callbacks: { label: polarTooltipLabel } }
-                    }
-                }
-            });
+            const circle = unitCircle();
+            const polarTraces = [
+                lineTrace('Unit Circle (r = 1)', circle.x, circle.y, COLORS.guide, 1.5, {
+                    line: { color: COLORS.guide, width: 1.5, dash: 'dash' },
+                    hoverinfo: 'skip'
+                }),
+                markerTrace('Phase Components', base.polarX, base.polarY, COLORS.phase, 8,
+                    { customdata: base.polarMeta, hovertemplate: POLAR_HOVER })
+            ];
+            if (cfg.peaksEnabled) {
+                polarTraces.push(markerTrace(LABEL_PEAKS, cosOf(peakBins), sinOf(peakBins),
+                    COLORS.peak, 12, { customdata: metaOf(peakBins), hovertemplate: POLAR_HOVER }));
+            }
+            if (cfg.magThreshEnabled) {
+                polarTraces.push(markerTrace(LABEL_INCLUDED, cosOf(includedBins), sinOf(includedBins),
+                    COLORS.threshold, 12, { customdata: metaOf(includedBins), hovertemplate: POLAR_HOVER }));
+            }
+            drawChart('polar', polarTraces, polarLayout());
         }
 
-        return { render, resetZoom };
+        const isVisible = () => !Dom.$('viewCharts').classList.contains('hidden');
+
+        /** Model whose draw was skipped because the Charts tab was hidden. */
+        let pendingModel = null;
+
+        function render(model) {
+            if (!isVisible()) {
+                pendingModel = model;
+                return;
+            }
+            pendingModel = null;
+            draw(model);
+        }
+
+        /**
+         * Called when the Charts tab comes to the front. Plotly sizes itself from its
+         * container, which has no dimensions while hidden, so both the deferred draw and
+         * a resize have to happen here.
+         */
+        function activate() {
+            if (pendingModel) {
+                draw(pendingModel);
+                pendingModel = null;
+            }
+            Object.keys(charts).forEach((key) => Plotly.Plots.resize(charts[key]));
+        }
+
+        return { render, activate, resetZoom };
     })();
     </script>
 
@@ -2339,8 +2380,13 @@
             Dom.setHidden('viewCharts', !showCharts);
             Dom.$('viewCharts').classList.toggle('grid', showCharts);
             Dom.setHidden('viewTable', showCharts);
-            // The table holds off while hidden, so draw it now it has a size to fill.
-            if (!showCharts) TableView.activate();
+            // Both views hold off while hidden, since neither has a size to lay out
+            // against, so whichever just came forward has to be drawn now.
+            if (showCharts) {
+                ChartsView.activate();
+            } else {
+                TableView.activate();
+            }
         }
 
         /** Keeps the menu's visibility and the trigger's aria-expanded in step. */
