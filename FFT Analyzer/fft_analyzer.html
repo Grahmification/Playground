@@ -306,111 +306,123 @@
         </div>
     </div>
 
+    <!-- ==================================================================== -->
+    <!-- Dom - the only place that talks to the document directly (besides     -->
+    <!-- the view modules, which build their own elements).                    -->
+    <!-- ==================================================================== -->
     <script>
-        let timeChart = null;
-        let fftChart = null;
-        let psdChart = null;
-        let phaseChart = null;
-        let polarPhaseChart = null;
-        let globalData = null;
-        let currentSpectralRows = [];
-        let currentPeakIndices = new Set();
-        let currentSortColumn = 'bin';
-        let currentSortAscending = true;
-        let rawParsedRows = null;
-        let currentFileName = "";
+    window.Dom = (function () {
+        'use strict';
 
-        // Function to reset individual chart zoom
-        function resetChartZoom(chartKey) {
-            const chartMap = {
-                'time': timeChart,
-                'fft': fftChart,
-                'psd': psdChart,
-                'phase': phaseChart,
-                'polar': polarPhaseChart
-            };
-            if (chartMap[chartKey]) {
-                chartMap[chartKey].resetZoom();
-            }
+        const $ = (id) => document.getElementById(id);
+
+        function text(id, value) {
+            const el = $(id);
+            if (el) el.textContent = value;
         }
 
-        function toggleExportDropdown() {
-            const menu = document.getElementById('exportDropdownMenu');
-            menu.classList.toggle('hidden');
+        /** Greys out a container and blocks interaction with it. */
+        function setDimmed(id, dimmed) {
+            const el = $(id);
+            if (!el) return;
+            el.classList.toggle('opacity-40', dimmed);
+            el.classList.toggle('pointer-events-none', dimmed);
         }
 
-        function hideExportDropdown() {
-            const menu = document.getElementById('exportDropdownMenu');
-            menu.classList.add('hidden');
+        function setHidden(id, hidden) {
+            const el = $(id);
+            if (el) el.classList.toggle('hidden', hidden);
         }
 
-        // Close dropdown when clicking outside
-        window.addEventListener('click', function(e) {
-            const btn = document.getElementById('exportDropdownBtn');
-            const menu = document.getElementById('exportDropdownMenu');
-            if (btn && menu && !btn.contains(e.target) && !menu.contains(e.target)) {
-                menu.classList.add('hidden');
-            }
-        });
-
-        function updateExportButtonState() {
-            const exportBtn = document.getElementById('exportDropdownBtn');
-            const exportPeaksOption = document.getElementById('exportPeaksOption');
-            const exportThreshOption = document.getElementById('exportThreshOption');
-
-            if (!globalData) {
-                exportBtn.setAttribute('disabled', 'true');
-                return;
-            }
-
-            exportBtn.removeAttribute('disabled');
-
-            const isPeaksEnabled = document.getElementById('enablePeaks').checked;
-            const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
-
-            if (!isPeaksEnabled) {
-                exportPeaksOption.classList.add('opacity-40', 'pointer-events-none');
-                exportPeaksOption.setAttribute('title', 'Peak detection is currently disabled');
-            } else {
-                exportPeaksOption.classList.remove('opacity-40', 'pointer-events-none');
-                exportPeaksOption.removeAttribute('title');
-            }
-
-            if (!isMagThreshEnabled) {
-                exportThreshOption.classList.add('opacity-40', 'pointer-events-none');
-                exportThreshOption.setAttribute('title', 'Magnitude threshold reconstruction is currently disabled');
-            } else {
-                exportThreshOption.classList.remove('opacity-40', 'pointer-events-none');
-                exportThreshOption.removeAttribute('title');
-            }
+        /** Builds a table cell / header with the given text and Tailwind classes. */
+        function cell(tag, value, className) {
+            const el = document.createElement(tag);
+            el.className = className;
+            el.textContent = value;
+            return el;
         }
 
-        function switchTab(tabName) {
-            const chartsBtn = document.getElementById('tabChartsBtn');
-            const tableBtn = document.getElementById('tabTableBtn');
-            const viewCharts = document.getElementById('viewCharts');
-            const viewTable = document.getElementById('viewTable');
-
-            if (tabName === 'charts') {
-                chartsBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer";
-                tableBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer";
-                viewCharts.classList.remove('hidden');
-                viewCharts.classList.add('grid');
-                viewTable.classList.add('hidden');
-            } else {
-                tableBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer";
-                chartsBtn.className = "px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer";
-                viewTable.classList.remove('hidden');
-                viewCharts.classList.remove('grid');
-                viewCharts.classList.add('hidden');
-            }
+        /** Hands the user a generated file without navigating away from the page. */
+        function downloadFile(fileName, contents, mimeType) {
+            const blob = new Blob([contents], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', fileName);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
-        // Cooley-Tukey Radix-2 FFT Implementation
-        function fourierTransform(signal) {
+        return { $, text, setDimmed, setHidden, cell, downloadFile };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- FFTLib - self-contained spectral analysis library.                    -->
+    <!--                                                                       -->
+    <!-- Pure computation: no DOM, no Chart.js, no globals other than its own  -->
+    <!-- namespace. Lift this whole block into any other page, or save it as   -->
+    <!-- fft-lib.js, and it works unchanged.                                   -->
+    <!-- ==================================================================== -->
+    <script>
+    /**
+     * FFTLib - radix-2 FFT plus the spectral analysis built on top of it.
+     *
+     *   const spectrum = FFTLib.analyze(times, amplitudes, sampleRate, {
+     *       strategy: FFTLib.STRATEGIES.PAD,
+     *       windowType: 'hann'
+     *   });
+     *   // spectrum.frequencies / periods / magnitudes / psd / phases /
+     *   // unwrappedPhases are all binCount long and index-aligned.
+     *
+     *   const peaks = FFTLib.findPeaks(spectrum.magnitudes, { sensitivity: 0.05 });
+     *   const fit   = FFTLib.reconstruct(spectrum.series.times,
+     *                                    FFTLib.componentsAt(spectrum, peaks));
+     */
+    window.FFTLib = (function () {
+        'use strict';
+
+        /** Smallest PSD value reported, so results stay plottable on a log axis. */
+        const PSD_FLOOR = 1e-12;
+
+        /** Ways of coercing an arbitrary sample count to a power of two. */
+        const STRATEGIES = {
+            PAD: 'pad',            // zero-pad up to the next power of two
+            TRUNCATE: 'truncate',  // drop samples down to the previous power of two
+            FRAMING: 'framing'     // head + tail frames of the previous power of two, averaged
+        };
+
+        // ------------------------------------------------------------------
+        // Power-of-two helpers
+        // ------------------------------------------------------------------
+
+        const isPowerOfTwo = (n) => n > 0 && (n & (n - 1)) === 0;
+        const nextPowerOfTwo = (n) => Math.pow(2, Math.ceil(Math.log2(n)));
+        const previousPowerOfTwo = (n) => Math.max(2, Math.pow(2, Math.floor(Math.log2(n))));
+
+        /** The frame length `strategy` will use for a signal of `sampleCount` samples. */
+        function frameLengthFor(strategy, sampleCount) {
+            if (strategy === STRATEGIES.TRUNCATE || strategy === STRATEGIES.FRAMING) {
+                return previousPowerOfTwo(sampleCount);
+            }
+            return nextPowerOfTwo(sampleCount);
+        }
+
+        // ------------------------------------------------------------------
+        // Discrete Fourier transform
+        // ------------------------------------------------------------------
+
+        /**
+         * Cooley-Tukey radix-2 FFT of a real-valued signal.
+         *
+         * @param {ArrayLike<number>} signal Real samples; length must be a power of 2.
+         * @returns {Float64Array} Interleaved [re0, im0, re1, im1, ...], length 2n.
+         */
+        function fft(signal) {
             const n = signal.length;
-            if ((n & (n - 1)) !== 0) {
-                throw new Error("FFT length must be a power of 2");
+            if (!isPowerOfTwo(n)) {
+                throw new Error('FFT length must be a power of 2');
             }
 
             const outRe = new Float64Array(n);
@@ -420,11 +432,12 @@
                 outIm[i] = 0;
             }
 
+            // Bit-reversal permutation.
             let j = 0;
             for (let i = 0; i < n - 1; i++) {
                 if (i < j) {
-                    let tempRe = outRe[i]; outRe[i] = outRe[j]; outRe[j] = tempRe;
-                    let tempIm = outIm[i]; outIm[i] = outIm[j]; outIm[j] = tempIm;
+                    const tempRe = outRe[i]; outRe[i] = outRe[j]; outRe[j] = tempRe;
+                    const tempIm = outIm[i]; outIm[i] = outIm[j]; outIm[j] = tempIm;
                 }
                 let k = n >> 1;
                 while (k <= j) {
@@ -434,31 +447,32 @@
                 j += k;
             }
 
+            // Butterfly stages, twiddle factors advanced by repeated rotation.
             for (let len = 2; len <= n; len <<= 1) {
-                let halfLen = len >> 1;
-                let angle = -2 * Math.PI / len;
-                let wStepRe = Math.cos(angle);
-                let wStepIm = Math.sin(angle);
+                const halfLen = len >> 1;
+                const angle = -2 * Math.PI / len;
+                const wStepRe = Math.cos(angle);
+                const wStepIm = Math.sin(angle);
 
                 for (let i = 0; i < n; i += len) {
                     let wRe = 1.0;
                     let wIm = 0.0;
                     for (let k = 0; k < halfLen; k++) {
-                        let pos = i + k;
-                        let matchPos = pos + halfLen;
+                        const pos = i + k;
+                        const matchPos = pos + halfLen;
 
-                        let uRe = outRe[pos];
-                        let uIm = outIm[pos];
-                        let vRe = outRe[matchPos] * wRe - outIm[matchPos] * wIm;
-                        let vIm = outRe[matchPos] * wIm + outIm[matchPos] * wRe;
+                        const uRe = outRe[pos];
+                        const uIm = outIm[pos];
+                        const vRe = outRe[matchPos] * wRe - outIm[matchPos] * wIm;
+                        const vIm = outRe[matchPos] * wIm + outIm[matchPos] * wRe;
 
                         outRe[pos] = uRe + vRe;
                         outIm[pos] = uIm + vIm;
                         outRe[matchPos] = uRe - vRe;
                         outIm[matchPos] = uIm - vIm;
 
-                        let nextWRe = wRe * wStepRe - wIm * wStepIm;
-                        let nextWIm = wRe * wStepIm + wIm * wStepRe;
+                        const nextWRe = wRe * wStepRe - wIm * wStepIm;
+                        const nextWIm = wRe * wStepIm + wIm * wStepRe;
                         wRe = nextWRe;
                         wIm = nextWIm;
                     }
@@ -473,19 +487,32 @@
             return interleaved;
         }
 
+        // ------------------------------------------------------------------
+        // Window functions
+        // ------------------------------------------------------------------
+
+        const WINDOW_FUNCTIONS = {
+            none: () => 1.0,
+            hann: (i, n) => 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1))),
+            hamming: (i, n) => 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1))
+        };
+
+        const WINDOW_TYPES = Object.keys(WINDOW_FUNCTIONS);
+
+        /**
+         * Multiplies a signal by a window and reports the gains needed to undo the
+         * window's attenuation: `gain` (coherent) corrects amplitudes, `powerGain`
+         * (incoherent) corrects power / PSD. Unknown types fall back to rectangular.
+         */
         function applyWindow(signal, type) {
             const n = signal.length;
+            const weightAt = WINDOW_FUNCTIONS[type] || WINDOW_FUNCTIONS.none;
             const windowed = new Array(n);
             let sumWeights = 0;
             let sumSquaredWeights = 0;
 
             for (let i = 0; i < n; i++) {
-                let w = 1.0;
-                if (type === 'hann') {
-                    w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
-                } else if (type === 'hamming') {
-                    w = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / (n - 1));
-                }
+                const w = weightAt(i, n);
                 windowed[i] = signal[i] * w;
                 sumWeights += w;
                 sumSquaredWeights += w * w;
@@ -493,313 +520,530 @@
             return { windowedData: windowed, gain: sumWeights / n, powerGain: sumSquaredWeights / n };
         }
 
-        document.getElementById('csvFile').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (!file) return;
-            currentFileName = file.name;
+        // ------------------------------------------------------------------
+        // Framing
+        // ------------------------------------------------------------------
 
-            Papa.parse(file, {
-                header: false,
-                dynamicTyping: true,
-                skipEmptyLines: true,
-                complete: function(results) {
-                    rawParsedRows = results.data.filter(row => Array.isArray(row) && row.length > 0);
-                    if (rawParsedRows.length === 0) {
-                        alert('The uploaded file contains no valid rows.');
-                        return;
-                    }
-
-                    // Automatic Data Validation & Column Detection
-                    let startRowIdx = 0;
-                    for (let i = 0; i < rawParsedRows.length; i++) {
-                        if (typeof rawParsedRows[i][0] === 'number' && typeof rawParsedRows[i][1] === 'number') {
-                            startRowIdx = i;
-                            break;
-                        }
-                    }
-
-                    const firstRow = rawParsedRows[startRowIdx];
-                    const numCols = firstRow.length;
-
-                    if (numCols > 2) {
-                        // Open Column Selection Popup if columns exceed 2
-                        openColumnModal(numCols, startRowIdx);
-                    } else if (numCols === 2) {
-                        processParsedDataset(0, 1, startRowIdx);
-                    } else {
-                        alert('Error: Dataset must contain at least 2 columns.');
-                    }
-                }
-            });
-        });
-
-        function openColumnModal(numCols, defaultStartRow) {
-            const xSelect = document.getElementById('modalXCol');
-            const ySelect = document.getElementById('modalYCol');
-            xSelect.innerHTML = '';
-            ySelect.innerHTML = '';
-
-            for (let c = 0; c < numCols; c++) {
-                const optX = document.createElement('option');
-                optX.value = c;
-                optX.textContent = `Column ${c + 1}`;
-                if (c === 0) optX.selected = true;
-                xSelect.appendChild(optX);
-
-                const optY = document.createElement('option');
-                optY.value = c;
-                optY.textContent = `Column ${c + 1}`;
-                if (c === 1) optY.selected = true;
-                ySelect.appendChild(optY);
+        /** Copies `length` samples from `start`, zero-filling anything past the end. */
+        function sliceFrame(amplitudes, start, length) {
+            const frame = new Array(length);
+            for (let i = 0; i < length; i++) {
+                const value = amplitudes[start + i];
+                frame[i] = value !== undefined ? value : 0;
             }
-
-            document.getElementById('modalStartRow').value = defaultStartRow;
-
-            // Populate Preview Table in Modal
-            const previewHead = document.getElementById('modalPreviewHead');
-            const previewBody = document.getElementById('modalPreviewBody');
-            previewHead.innerHTML = '';
-            previewBody.innerHTML = '';
-
-            // Header row for preview table (showing column indices)
-            let headTr = document.createElement('tr');
-            let thIdx = document.createElement('th');
-            thIdx.className = "py-1.5 px-3 border-b border-gray-300 text-[10px] text-gray-500 uppercase";
-            thIdx.textContent = "Row";
-            headTr.appendChild(thIdx);
-
-            for (let c = 0; c < numCols; c++) {
-                let th = document.createElement('th');
-                th.className = "py-1.5 px-3 border-b border-gray-300 text-[11px] font-semibold text-gray-700";
-                th.textContent = `Col ${c + 1}`;
-                headTr.appendChild(th);
-            }
-            previewHead.appendChild(headTr);
-
-            // Preview rows (up to first 8 rows)
-            const previewRowsCount = Math.min(8, rawParsedRows.length);
-            for (let i = 0; i < previewRowsCount; i++) {
-                let rowTr = document.createElement('tr');
-                rowTr.className = i === defaultStartRow ? "bg-blue-50/60 font-semibold" : "hover:bg-gray-100";
-                
-                let tdIdx = document.createElement('td');
-                tdIdx.className = "py-1 px-3 border-b border-gray-200 text-[10px] text-gray-400";
-                tdIdx.textContent = i;
-                rowTr.appendChild(tdIdx);
-
-                const rowData = rawParsedRows[i];
-                for (let c = 0; c < numCols; c++) {
-                    let td = document.createElement('td');
-                    td.className = "py-1 px-3 border-b border-gray-200 text-xs";
-                    td.textContent = rowData[c] !== undefined ? rowData[c] : '';
-                    rowTr.appendChild(td);
-                }
-                previewBody.appendChild(rowTr);
-            }
-
-            document.getElementById('columnModal').classList.remove('hidden');
+            return frame;
         }
 
-        function closeColumnModal() {
-            document.getElementById('columnModal').classList.add('hidden');
+        /**
+         * Splits a signal into the power-of-two frames `strategy` calls for:
+         * one frame for PAD / TRUNCATE, head and tail frames for FRAMING.
+         */
+        function buildFrames(amplitudes, strategy, frameLength) {
+            if (strategy === STRATEGIES.FRAMING) {
+                const tailStart = Math.max(0, amplitudes.length - frameLength);
+                return [
+                    sliceFrame(amplitudes, 0, frameLength),
+                    sliceFrame(amplitudes, tailStart, frameLength)
+                ];
+            }
+            return [sliceFrame(amplitudes, 0, frameLength)];
         }
 
-        function confirmColumnSelection() {
-            const xCol = parseInt(document.getElementById('modalXCol').value);
-            const yCol = parseInt(document.getElementById('modalYCol').value);
-            const startRow = parseInt(document.getElementById('modalStartRow').value) || 0;
-
-            if (xCol === yCol) {
-                alert('X-axis and Y-axis columns must be different.');
-                return;
+        /**
+         * The time-domain series that lines up with the framed analysis, for plotting
+         * reconstructions against. PAD / TRUNCATE return exactly `frameLength` samples
+         * (extrapolating time stamps for zero-padded samples); FRAMING spans two frames
+         * so it keeps the original series.
+         */
+        function buildSeries(times, amplitudes, strategy, frameLength) {
+            if (strategy === STRATEGIES.FRAMING) {
+                return { times: times, amplitudes: amplitudes };
             }
 
-            closeColumnModal();
-            processParsedDataset(xCol, yCol, startRow);
+            const dt = times.length > 1 ? times[1] - times[0] : 1.0;
+            const seriesTimes = new Array(frameLength);
+            const seriesAmplitudes = new Array(frameLength);
+            for (let i = 0; i < frameLength; i++) {
+                seriesAmplitudes[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
+                seriesTimes[i] = times[i] !== undefined ? times[i] : (times[0] + i * dt);
+            }
+            return { times: seriesTimes, amplitudes: seriesAmplitudes };
         }
 
-        function processParsedDataset(xCol, yCol, startRow) {
-            const validRows = [];
-            for (let i = startRow; i < rawParsedRows.length; i++) {
-                const row = rawParsedRows[i];
-                if (row[xCol] !== undefined && row[yCol] !== undefined) {
-                    const xVal = Number(row[xCol]);
-                    const yVal = Number(row[yCol]);
-                    if (!isNaN(xVal) && !isNaN(yVal)) {
-                        validRows.push([xVal, yVal]);
-                    }
+        // ------------------------------------------------------------------
+        // Spectra
+        // ------------------------------------------------------------------
+
+        /** Removes the 2*pi jumps from a wrapped phase sequence. */
+        function unwrapPhase(phases) {
+            const n = phases.length;
+            const unwrapped = new Array(n);
+            if (n === 0) return unwrapped;
+
+            unwrapped[0] = phases[0];
+            let correction = 0;
+            for (let i = 1; i < n; i++) {
+                const diff = phases[i] - phases[i - 1];
+                if (diff > Math.PI) {
+                    correction -= 2 * Math.PI;
+                } else if (diff < -Math.PI) {
+                    correction += 2 * Math.PI;
                 }
+                unwrapped[i] = phases[i] + correction;
+            }
+            return unwrapped;
+        }
+
+        /**
+         * Single-sided spectrum of one power-of-two frame.
+         *
+         * Magnitudes are amplitude-corrected: scaled by 1/n, doubled for every bin
+         * above DC to fold in the negative frequencies, then divided by the window's
+         * coherent gain. PSD is returned un-floored (see `analyze`).
+         */
+        function frameSpectrum(frame, sampleRate, windowType) {
+            const n = frame.length;
+            const binCount = n / 2;
+            const win = applyWindow(frame, windowType);
+            const spectrum = fft(win.windowedData);
+
+            const magnitudes = new Array(binCount);
+            const psd = new Array(binCount);
+            const phases = new Array(binCount);
+
+            for (let i = 0; i < binCount; i++) {
+                const re = spectrum[i * 2];
+                const im = spectrum[i * 2 + 1];
+                const power = re * re + im * im;
+
+                let magnitude = Math.sqrt(power) / n;
+                if (i > 0) magnitude *= 2;
+                if (win.gain > 0) magnitude /= win.gain;
+                magnitudes[i] = magnitude;
+
+                let density = power / (sampleRate * win.powerGain * n);
+                if (i > 0 && i < binCount - 1) density *= 2;
+                psd[i] = density;
+
+                phases[i] = Math.atan2(im, re);
             }
 
-            if (validRows.length < 4) {
-                alert('Not enough valid numeric data points found starting from the selected row.');
-                return;
-            }
-
-            globalData = {
-                fileName: currentFileName,
-                times: validRows.map(row => row[0]),
-                amplitudes: validRows.map(row => row[1])
+            return {
+                length: n,
+                binCount: binCount,
+                magnitudes: magnitudes,
+                psd: psd,
+                phases: phases,
+                unwrappedPhases: unwrapPhase(phases),
+                windowGain: win.gain,
+                windowPowerGain: win.powerGain
             };
-
-            const dt = globalData.times[1] - globalData.times[0];
-            const sampleRate = dt > 0 ? 1.0 / dt : 100;
-
-            const padStrategy = document.getElementById('padStrategy').value;
-            const origLen = validRows.length;
-
-            let targetLen;
-            if (padStrategy === 'truncate') {
-                targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
-            } else if (padStrategy === 'framing') {
-                targetLen = Math.max(2, Math.pow(2, Math.floor(Math.log2(origLen))));
-            } else {
-                targetLen = Math.pow(2, Math.ceil(Math.log2(origLen)));
-            }
-
-            const tempAmps = new Array(targetLen).fill(0);
-            for(let i=0; i<Math.min(origLen, targetLen); i++) tempAmps[i] = validRows[i][1];
-            const tempWindowed = applyWindow(tempAmps, document.getElementById('windowType').value);
-            const tempSpec = fourierTransform(tempWindowed.windowedData);
-            let tempMaxMag = 0;
-            for(let i=0; i<targetLen/2; i++) {
-                let m = Math.sqrt(tempSpec[i*2]**2 + tempSpec[i*2+1]**2) / targetLen;
-                if(i>0) m *= 2;
-                if(tempWindowed.gain > 0) m /= tempWindowed.gain;
-                if(m > tempMaxMag) tempMaxMag = m;
-            }
-
-            const magThreshRange = document.getElementById('magThreshRange');
-            magThreshRange.max = tempMaxMag > 0 ? tempMaxMag : 1.0;
-            magThreshRange.step = (tempMaxMag / 200).toFixed(4);
-            magThreshRange.value = (tempMaxMag * 0.1).toFixed(4);
-            document.getElementById('magThreshVal').textContent = parseFloat(magThreshRange.value).toFixed(2);
-
-            document.getElementById('statusText').textContent = `Loaded: ${currentFileName} (${origLen} points, fs = ${sampleRate.toFixed(2)}Hz)`;
-            updateExportButtonState();
-            triggerProcessing();
         }
 
-        const enablePeaksCheckbox = document.getElementById('enablePeaks');
-        const peakControlsContainer = document.getElementById('peakControlsContainer');
-        enablePeaksCheckbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                peakControlsContainer.classList.remove('opacity-40', 'pointer-events-none');
-            } else {
-                peakControlsContainer.classList.add('opacity-40', 'pointer-events-none');
+        /**
+         * Full analysis of a time series: frames it per `strategy`, transforms every
+         * frame and averages the results bin by bin (a single frame therefore passes
+         * through untouched). The PSD floor is applied after averaging.
+         *
+         * @param {ArrayLike<number>} times      Sample time stamps, aligned with `amplitudes`.
+         * @param {ArrayLike<number>} amplitudes Sample values.
+         * @param {number} sampleRate            Samples per second.
+         * @param {{strategy?: string, windowType?: string}} [options]
+         */
+        function analyze(times, amplitudes, sampleRate, options) {
+            const opts = options || {};
+            const strategy = opts.strategy || STRATEGIES.PAD;
+            const windowType = opts.windowType || 'none';
+
+            const frameLength = frameLengthFor(strategy, amplitudes.length);
+            const frames = buildFrames(amplitudes, strategy, frameLength);
+            const spectra = frames.map((frame) => frameSpectrum(frame, sampleRate, windowType));
+            const frameCount = spectra.length;
+            const binCount = frameLength / 2;
+
+            const frequencies = new Array(binCount);
+            const periods = new Array(binCount);
+            const magnitudes = new Array(binCount);
+            const psd = new Array(binCount);
+            const phases = new Array(binCount);
+            const unwrappedPhases = new Array(binCount);
+
+            for (let i = 0; i < binCount; i++) {
+                const frequency = (i * sampleRate) / frameLength;
+                frequencies[i] = frequency;
+                periods[i] = frequency > 0 ? (1.0 / frequency) : Infinity;
+
+                let magnitudeSum = 0;
+                let psdSum = 0;
+                let phaseSum = 0;
+                let unwrappedSum = 0;
+                for (let f = 0; f < frameCount; f++) {
+                    magnitudeSum += spectra[f].magnitudes[i];
+                    psdSum += spectra[f].psd[i];
+                    phaseSum += spectra[f].phases[i];
+                    unwrappedSum += spectra[f].unwrappedPhases[i];
+                }
+
+                magnitudes[i] = magnitudeSum / frameCount;
+                const averagePsd = psdSum / frameCount;
+                psd[i] = averagePsd > 0 ? averagePsd : PSD_FLOOR;
+                phases[i] = phaseSum / frameCount;
+                unwrappedPhases[i] = unwrappedSum / frameCount;
             }
-            updateExportButtonState();
-            triggerProcessing();
-        });
 
-        document.getElementById('sensRange').addEventListener('input', (e) => {
-            document.getElementById('sensVal').textContent = e.target.value + '%';
-            triggerProcessing();
-        });
-
-        document.getElementById('includeDcPeaks').addEventListener('change', triggerProcessing);
-        document.getElementById('includeBin1Peaks').addEventListener('change', triggerProcessing);
-        document.getElementById('padStrategy').addEventListener('change', triggerProcessing);
-        document.getElementById('freqDomainUnit').addEventListener('change', () => {
-            renderTable();
-            triggerProcessing();
-        });
-        document.getElementById('windowType').addEventListener('change', triggerProcessing);
-
-        const enableMagThreshCheckbox = document.getElementById('enableMagThresh');
-        const magThreshContainer = document.getElementById('magThreshContainer');
-        enableMagThreshCheckbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                magThreshContainer.classList.remove('opacity-40', 'pointer-events-none');
-            } else {
-                magThreshContainer.classList.add('opacity-40', 'pointer-events-none');
-            }
-            updateExportButtonState();
-            triggerProcessing();
-        });
-
-        document.getElementById('magThreshRange').addEventListener('input', (e) => {
-            document.getElementById('magThreshVal').textContent = parseFloat(e.target.value).toFixed(2);
-            triggerProcessing();
-        });
-
-        function triggerProcessing() {
-            if (!globalData) return;
-            const dt = globalData.times[1] - globalData.times[0];
-            const sampleRate = dt > 0 ? 1.0 / dt : 100;
-            const windowSelection = document.getElementById('windowType').value;
-            const unitSelection = document.getElementById('freqDomainUnit').value;
-            const padStrategy = document.getElementById('padStrategy').value;
-            const isPeaksEnabled = document.getElementById('enablePeaks').checked;
-            const sensitivity = parseFloat(document.getElementById('sensRange').value) / 100.0;
-            const includeDcInPeaks = document.getElementById('includeDcPeaks').checked;
-            const includeBin1InPeaks = document.getElementById('includeBin1Peaks').checked;
-
-            const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
-            const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
-
-            processAndPlot(globalData.times, globalData.amplitudes, sampleRate, windowSelection, unitSelection, padStrategy, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold);
+            return {
+                sampleRate: sampleRate,
+                strategy: strategy,
+                windowType: windowType,
+                frameLength: frameLength,
+                frameCount: frameCount,
+                binCount: binCount,
+                frequencies: frequencies,
+                periods: periods,
+                magnitudes: magnitudes,
+                psd: psd,
+                phases: phases,
+                unwrappedPhases: unwrappedPhases,
+                series: buildSeries(times, amplitudes, strategy, frameLength)
+            };
         }
 
-        function sortTable(columnKey) {
-            if (currentSortColumn === columnKey) {
-                currentSortAscending = !currentSortAscending;
-            } else {
-                currentSortColumn = columnKey;
-                currentSortAscending = true;
+        // ------------------------------------------------------------------
+        // Component selection & reconstruction
+        // ------------------------------------------------------------------
+
+        /** Maximum of an array-like; loop based, so it is safe for long spectra. */
+        function maxOf(values) {
+            let max = -Infinity;
+            for (let i = 0; i < values.length; i++) {
+                if (values[i] > max) max = values[i];
             }
-            renderTable();
+            return max;
         }
 
-        function renderTable() {
-            const unitType = document.getElementById('freqDomainUnit').value;
-            const tableBody = document.getElementById('spectralTableBody');
-            tableBody.innerHTML = '';
+        /** Each bin's share of the total magnitude, as a percentage. */
+        function magnitudeContributions(magnitudes) {
+            const total = magnitudes.reduce((a, b) => a + b, 0);
+            return magnitudes.map((magnitude) => (total > 0 ? (magnitude / total) * 100 : 0));
+        }
 
-            const keys = ['bin', 'freq', 'period', 'mag', 'contrib', 'phase', 'unwrappedPhase'];
-            keys.forEach(k => {
-                const indicator = document.getElementById(`sort-${k}`);
-                if (indicator) {
-                    if (currentSortColumn === k) {
-                        indicator.textContent = currentSortAscending ? ' ▲' : ' ▼';
+        /**
+         * Local maxima at or above `sensitivity` (a fraction of the largest
+         * magnitude), optionally forcing in DC and the lowest non-zero bin.
+         *
+         * @returns {Set<number>} Bin indices, in insertion order: DC, bin 1, then ascending.
+         */
+        function findPeaks(magnitudes, options) {
+            const opts = options || {};
+            const sensitivity = opts.sensitivity !== undefined ? opts.sensitivity : 0;
+            const binCount = magnitudes.length;
+            const threshold = maxOf(magnitudes) * sensitivity;
+            const indices = new Set();
+
+            if (opts.includeDc) indices.add(0);
+            if (opts.includeBin1 && binCount > 1) indices.add(1);
+
+            for (let i = 1; i < binCount - 1; i++) {
+                if (magnitudes[i] > magnitudes[i - 1] &&
+                    magnitudes[i] > magnitudes[i + 1] &&
+                    magnitudes[i] >= threshold) {
+                    indices.add(i);
+                }
+            }
+            return indices;
+        }
+
+        /** Ascending bin indices whose magnitude reaches `threshold`. */
+        function binsAboveMagnitude(magnitudes, threshold) {
+            const indices = [];
+            for (let i = 0; i < magnitudes.length; i++) {
+                if (magnitudes[i] >= threshold) indices.push(i);
+            }
+            return indices;
+        }
+
+        /**
+         * Turns bin indices into sinusoid descriptors for `reconstruct`.
+         * Uses unwrapped phase, which is equivalent to the wrapped phase inside a
+         * cosine but continuous if a caller wants to plot or interpolate it.
+         *
+         * @param {object} spectrum Result of `analyze`.
+         * @param {Iterable<number>} indices Bin indices (Set or Array).
+         */
+        function componentsAt(spectrum, indices) {
+            const components = [];
+            indices.forEach((i) => {
+                components.push({
+                    bin: i,
+                    freq: spectrum.frequencies[i],
+                    mag: spectrum.magnitudes[i],
+                    phase: spectrum.unwrappedPhases[i]
+                });
+            });
+            return components;
+        }
+
+        /**
+         * Sums the given components back into the time domain.
+         * DC contributes its magnitude directly rather than as a cosine.
+         *
+         * @param {ArrayLike<number>} times
+         * @param {Array<{freq: number, mag: number, phase: number}>} components
+         * @returns {number[]} One value per entry in `times`.
+         */
+        function reconstruct(times, components) {
+            return Array.prototype.map.call(times, (t) => {
+                let sum = 0;
+                for (let k = 0; k < components.length; k++) {
+                    const component = components[k];
+                    if (component.freq === 0) {
+                        sum += component.mag;
                     } else {
-                        indicator.textContent = '';
+                        sum += component.mag * Math.cos(2 * Math.PI * component.freq * t + component.phase);
                     }
                 }
+                return sum;
+            });
+        }
+
+        return {
+            PSD_FLOOR, STRATEGIES, WINDOW_TYPES,
+            isPowerOfTwo, nextPowerOfTwo, previousPowerOfTwo, frameLengthFor,
+            fft, applyWindow, unwrapPhase,
+            sliceFrame, buildFrames, buildSeries,
+            frameSpectrum, analyze,
+            maxOf, magnitudeContributions,
+            findPeaks, binsAboveMagnitude, componentsAt, reconstruct
+        };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- AppState - everything the views and exports read from.                -->
+    <!-- ==================================================================== -->
+    <script>
+    window.AppState = {
+        /** Name of the most recently chosen file (set before the dataset loads). */
+        fileName: '',
+        /** Raw rows straight out of PapaParse, kept for the column-picker preview. */
+        rawRows: null,
+        /** { fileName, times, amplitudes } once a dataset has been accepted. */
+        dataset: null,
+        /** Latest FFTLib.analyze result. */
+        spectrum: null,
+        /** One row per bin, as displayed in the spectral table and CSV exports. */
+        rows: [],
+        /** Bin indices currently counted as peaks. */
+        peakIndices: new Set(),
+        sortColumn: 'bin',
+        sortAscending: true
+    };
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- Settings - reads the sidebar controls into plain values, so no other   -->
+    <!-- module has to know which input a number came from.                    -->
+    <!-- ==================================================================== -->
+    <script>
+    window.Settings = (function () {
+        'use strict';
+
+        const UNITS = { FREQUENCY: 'frequency', PERIOD: 'period' };
+
+        const strategy = () => Dom.$('padStrategy').value;
+        const unit = () => Dom.$('freqDomainUnit').value;
+        const windowType = () => Dom.$('windowType').value;
+        const peaksEnabled = () => Dom.$('enablePeaks').checked;
+        const sensitivity = () => parseFloat(Dom.$('sensRange').value) / 100.0;
+        const includeDc = () => Dom.$('includeDcPeaks').checked;
+        const includeBin1 = () => Dom.$('includeBin1Peaks').checked;
+        const magThreshEnabled = () => Dom.$('enableMagThresh').checked;
+        const magThreshold = () => parseFloat(Dom.$('magThreshRange').value);
+
+        /** All control values in one object, for a single analysis pass. */
+        const snapshot = () => ({
+            strategy: strategy(),
+            unit: unit(),
+            windowType: windowType(),
+            peaksEnabled: peaksEnabled(),
+            sensitivity: sensitivity(),
+            includeDc: includeDc(),
+            includeBin1: includeBin1(),
+            magThreshEnabled: magThreshEnabled(),
+            magThreshold: magThreshold()
+        });
+
+        return {
+            UNITS, strategy, unit, windowType, peaksEnabled, sensitivity,
+            includeDc, includeBin1, magThreshEnabled, magThreshold, snapshot
+        };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- Analysis - drives FFTLib from the current dataset + control values,    -->
+    <!-- then hands the results to the views.                                  -->
+    <!-- ==================================================================== -->
+    <script>
+    window.Analysis = (function () {
+        'use strict';
+
+        /** Fallback used when the time column gives no usable spacing. */
+        const DEFAULT_SAMPLE_RATE = 100;
+
+        /** Sample rate inferred from the first two time stamps. */
+        function sampleRateOf(times) {
+            const dt = times[1] - times[0];
+            return dt > 0 ? 1.0 / dt : DEFAULT_SAMPLE_RATE;
+        }
+
+        /** Bins to plot: a period axis cannot show DC, whose period is infinite. */
+        function activeBinsFor(spectrum, unit) {
+            const bins = [];
+            for (let i = 0; i < spectrum.binCount; i++) {
+                if (unit === Settings.UNITS.PERIOD && spectrum.frequencies[i] === 0) continue;
+                bins.push(i);
+            }
+            return bins;
+        }
+
+        function buildRows(spectrum) {
+            const contributions = FFTLib.magnitudeContributions(spectrum.magnitudes);
+            return spectrum.magnitudes.map((magnitude, i) => ({
+                bin: i,
+                freq: spectrum.frequencies[i],
+                period: spectrum.periods[i],
+                mag: magnitude,
+                contrib: contributions[i],
+                phase: spectrum.phases[i],
+                unwrappedPhase: spectrum.unwrappedPhases[i]
+            }));
+        }
+
+        /**
+         * Rescales the magnitude-threshold slider to the loaded dataset, using the
+         * first frame's spectrum, and starts it at 10% of the largest magnitude.
+         */
+        function calibrateMagnitudeThreshold() {
+            const dataset = AppState.dataset;
+            if (!dataset) return;
+
+            const frameLength = FFTLib.frameLengthFor(Settings.strategy(), dataset.amplitudes.length);
+            const firstFrame = FFTLib.sliceFrame(dataset.amplitudes, 0, frameLength);
+            const spectrum = FFTLib.frameSpectrum(firstFrame, sampleRateOf(dataset.times), Settings.windowType());
+            const maxMagnitude = FFTLib.maxOf(spectrum.magnitudes);
+
+            const slider = Dom.$('magThreshRange');
+            slider.max = maxMagnitude > 0 ? maxMagnitude : 1.0;
+            slider.step = (maxMagnitude / 200).toFixed(4);
+            slider.value = (maxMagnitude * 0.1).toFixed(4);
+            Dom.text('magThreshVal', parseFloat(slider.value).toFixed(2));
+        }
+
+        /** Re-runs the whole pipeline. Safe to call on every control change. */
+        function run() {
+            const dataset = AppState.dataset;
+            if (!dataset) return;
+
+            const cfg = Settings.snapshot();
+            const spectrum = FFTLib.analyze(dataset.times, dataset.amplitudes, sampleRateOf(dataset.times), {
+                strategy: cfg.strategy,
+                windowType: cfg.windowType
             });
 
-            const sortedRows = [...currentSpectralRows].sort((a, b) => {
-                let valA = a[currentSortColumn];
-                let valB = b[currentSortColumn];
-                if (valA === Infinity) valA = Number.MAX_VALUE;
-                if (valB === Infinity) valB = Number.MAX_VALUE;
+            AppState.spectrum = spectrum;
+            AppState.rows = buildRows(spectrum);
+            AppState.peakIndices = cfg.peaksEnabled
+                ? FFTLib.findPeaks(spectrum.magnitudes, {
+                    sensitivity: cfg.sensitivity,
+                    // DC is never summed on a period axis, where it cannot be plotted.
+                    includeDc: cfg.includeDc && cfg.unit !== Settings.UNITS.PERIOD,
+                    includeBin1: cfg.includeBin1
+                })
+                : new Set();
 
-                if (valA < valB) return currentSortAscending ? -1 : 1;
-                if (valA > valB) return currentSortAscending ? 1 : -1;
+            const thresholdBins = cfg.magThreshEnabled
+                ? FFTLib.binsAboveMagnitude(spectrum.magnitudes, cfg.magThreshold)
+                : [];
+
+            Dom.text('peakCount', AppState.peakIndices.size);
+            Dom.text('magThreshCount', thresholdBins.length);
+
+            TableView.render();
+            ChartsView.render({
+                cfg: cfg,
+                spectrum: spectrum,
+                peakIndices: AppState.peakIndices,
+                activeBins: activeBinsFor(spectrum, cfg.unit),
+                peakSignal: cfg.peaksEnabled
+                    ? FFTLib.reconstruct(spectrum.series.times, FFTLib.componentsAt(spectrum, AppState.peakIndices))
+                    : null,
+                thresholdSignal: cfg.magThreshEnabled
+                    ? FFTLib.reconstruct(spectrum.series.times, FFTLib.componentsAt(spectrum, thresholdBins))
+                    : null
+            });
+        }
+
+        return { run, calibrateMagnitudeThreshold, sampleRateOf };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- TableView - the sortable spectral components table.                   -->
+    <!-- ==================================================================== -->
+    <script>
+    window.TableView = (function () {
+        'use strict';
+
+        const SORT_KEYS = ['bin', 'freq', 'period', 'mag', 'contrib', 'phase', 'unwrappedPhase'];
+        const DOT_OFF = 'bg-gray-200';
+
+        const dot = (colorClass, title) =>
+            `<span class="inline-block w-2.5 h-2.5 ${colorClass} rounded-full" title="${title}"></span>`;
+
+        /** Sorts by `columnKey`, or flips direction if it is already the sort column. */
+        function sortBy(columnKey) {
+            if (AppState.sortColumn === columnKey) {
+                AppState.sortAscending = !AppState.sortAscending;
+            } else {
+                AppState.sortColumn = columnKey;
+                AppState.sortAscending = true;
+            }
+            render();
+        }
+
+        function updateSortIndicators() {
+            SORT_KEYS.forEach((key) => {
+                const indicator = Dom.$(`sort-${key}`);
+                if (!indicator) return;
+                indicator.textContent = AppState.sortColumn !== key
+                    ? ''
+                    : (AppState.sortAscending ? ' ▲' : ' ▼');
+            });
+        }
+
+        /** Sorts a copy of the rows; DC's infinite period sorts as a large finite value. */
+        function sortedRows() {
+            const key = AppState.sortColumn;
+            const direction = AppState.sortAscending ? 1 : -1;
+            return [...AppState.rows].sort((a, b) => {
+                const valA = a[key] === Infinity ? Number.MAX_VALUE : a[key];
+                const valB = b[key] === Infinity ? Number.MAX_VALUE : b[key];
+                if (valA < valB) return -direction;
+                if (valA > valB) return direction;
                 return 0;
             });
+        }
 
-            const isPeaksEnabled = document.getElementById('enablePeaks').checked;
-            const isMagThreshEnabled = document.getElementById('enableMagThresh').checked;
-            const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
+        function cellsHtml(row, isPeak, isThreshold) {
+            const peakDot = isPeak
+                ? dot('bg-yellow-500', 'Included in Peak Detection')
+                : dot(DOT_OFF, 'Not in Peak Detection');
+            const threshDot = isThreshold
+                ? dot('bg-red-600', 'Included in Mag Threshold')
+                : dot(DOT_OFF, 'Not in Mag Threshold');
 
-            sortedRows.forEach(row => {
-                if (unitType === 'period' && row.freq === 0) return;
-
-                const isPeak = isPeaksEnabled && currentPeakIndices.has(row.bin);
-                const isThresh = isMagThreshEnabled && row.mag >= magThreshold;
-
-                const peakDot = isPeak
-                    ? `<span class="inline-block w-2.5 h-2.5 bg-yellow-500 rounded-full" title="Included in Peak Detection"></span>` 
-                    : `<span class="inline-block w-2.5 h-2.5 bg-gray-200 rounded-full" title="Not in Peak Detection"></span>`;
-
-                const threshDot = isThresh
-                    ? `<span class="inline-block w-2.5 h-2.5 bg-red-600 rounded-full" title="Included in Mag Threshold"></span>` 
-                    : `<span class="inline-block w-2.5 h-2.5 bg-gray-200 rounded-full" title="Not in Mag Threshold"></span>`;
-
-                const tr = document.createElement('tr');
-                tr.className = "hover:bg-gray-50 transition-colors";
-                tr.innerHTML = `
+            return `
                     <td class="py-2.5 px-4 text-center space-x-1">${peakDot}${threshDot}</td>
                     <td class="py-2.5 px-4 font-mono text-gray-500">${row.bin}</td>
                     <td class="py-2.5 px-4 font-semibold text-blue-600">${row.freq.toFixed(3)} Hz</td>
@@ -809,660 +1053,280 @@
                     <td class="py-2.5 px-4 font-mono text-gray-600">${row.phase.toFixed(4)}</td>
                     <td class="py-2.5 px-4 font-mono text-blue-600 font-semibold">${row.unwrappedPhase.toFixed(4)}</td>
                 `;
-                tableBody.appendChild(tr);
-            });
-
-            const visibleCount = unitType === 'period' ? sortedRows.filter(r => r.freq !== 0).length : sortedRows.length;
-            document.getElementById('tableMetaCount').textContent = `${visibleCount} components listed`;
         }
 
-        function exportSpectralCsv() {
-            if (!globalData) return;
-            if (!currentSpectralRows || currentSpectralRows.length === 0) return;
+        function render() {
+            const usePeriod = Settings.unit() === Settings.UNITS.PERIOD;
+            const peaksEnabled = Settings.peaksEnabled();
+            const threshEnabled = Settings.magThreshEnabled();
+            const threshold = Settings.magThreshold();
 
-            const csvRows = [];
-            csvRows.push(['Bin Index', 'Frequency (Hz)', 'Period (s)', 'Magnitude', 'Percentage Contribution (%)', 'Phase (rad)', 'Unwrapped Phase (rad)']);
+            updateSortIndicators();
 
-            currentSpectralRows.forEach(row => {
-                csvRows.push([
-                    row.bin,
-                    Number(row.freq.toFixed(4)),
-                    row.period === Infinity ? 'Infinity' : Number(row.period.toFixed(4)),
-                    Number(row.mag.toFixed(4)),
-                    Number(row.contrib.toFixed(2)),
-                    Number(row.phase.toFixed(4)),
-                    Number(row.unwrappedPhase.toFixed(4))
-                ]);
+            const rows = sortedRows().filter((row) => !(usePeriod && row.freq === 0));
+            const body = Dom.$('spectralTableBody');
+            body.innerHTML = '';
+
+            rows.forEach((row) => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-gray-50 transition-colors';
+                tr.innerHTML = cellsHtml(
+                    row,
+                    peaksEnabled && AppState.peakIndices.has(row.bin),
+                    threshEnabled && row.mag >= threshold
+                );
+                body.appendChild(tr);
             });
 
-            const csvString = Papa.unparse(csvRows);
-            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-
-            const baseName = globalData && globalData.fileName ? globalData.fileName.replace(/\.[^/.]+$/, "") : "spectral_analysis";
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', `${baseName}_spectral_results.csv`);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            Dom.text('tableMetaCount', `${rows.length} components listed`);
         }
 
-        function exportSubsetCsv(type) {
-            if (!globalData) return;
-            if (!currentSpectralRows || currentSpectralRows.length === 0) return;
+        return { render, sortBy };
+    })();
+    </script>
 
-            let subsetRows = [];
-            let suffix = "";
+    <!-- ==================================================================== -->
+    <!-- ChartsView - owns the five Chart.js instances and their configs.       -->
+    <!-- ==================================================================== -->
+    <script>
+    window.ChartsView = (function () {
+        'use strict';
 
-            if (type === 'peaks') {
-                if (!document.getElementById('enablePeaks').checked) return;
-                subsetRows = currentSpectralRows.filter(row => currentPeakIndices.has(row.bin));
-                suffix = "peak_components";
-            } else if (type === 'threshold') {
-                if (!document.getElementById('enableMagThresh').checked) return;
-                const magThreshold = parseFloat(document.getElementById('magThreshRange').value);
-                subsetRows = currentSpectralRows.filter(row => row.mag >= magThreshold);
-                suffix = "threshold_components";
+        const COLORS = {
+            original: 'rgb(34, 197, 94)',
+            spectrum: 'rgb(147, 51, 234)',
+            phase: 'rgb(37, 99, 235)',
+            peak: 'rgb(234, 179, 8)',
+            threshold: 'rgb(220, 38, 38)',
+            thresholdLine: 'rgba(220, 38, 38, 0.8)',
+            guide: 'rgba(209, 213, 219, 0.8)',
+            axisGrid: 'rgba(156, 163, 175, 0.6)',
+            grid: 'rgba(229, 231, 235, 0.5)'
+        };
+
+        /** Dataset labels the polar tooltip matches on, so they stay in sync. */
+        const LABEL_PEAKS = 'Detected Peaks';
+        const LABEL_INCLUDED = 'Included Components';
+
+        const CANVAS_IDS = {
+            time: 'timeChart',
+            fft: 'fftChart',
+            psd: 'psdChart',
+            phase: 'phaseChart',
+            polar: 'polarPhaseChart'
+        };
+
+        const charts = { time: null, fft: null, psd: null, phase: null, polar: null };
+
+        /** Shared zoom/pan behaviour; the limits stop the user zooming out past the data. */
+        const ZOOM = {
+            limits: {
+                x: { min: 'original', max: 'original' },
+                y: { min: 'original', max: 'original' }
+            },
+            zoom: {
+                wheel: { enabled: true },
+                pinch: { enabled: true },
+                mode: 'xy'
+            },
+            pan: {
+                enabled: true,
+                mode: 'xy'
             }
+        };
 
-            if (subsetRows.length === 0) {
-                alert('No components match the current export criteria.');
+        function resetZoom(chartKey) {
+            if (charts[chartKey]) charts[chartKey].resetZoom();
+        }
+
+        const create = (chartKey, config) =>
+            new Chart(Dom.$(CANVAS_IDS[chartKey]).getContext('2d'), config);
+
+        /**
+         * Updates a chart in place so the user's zoom, pan and legend toggles survive
+         * a re-render, falling back to a rebuild when the dataset count changes
+         * (which happens whenever a peak or threshold layer is switched on or off).
+         */
+        function upsert(chartKey, config) {
+            const chart = charts[chartKey];
+            if (!chart) {
+                charts[chartKey] = create(chartKey, config);
                 return;
             }
 
-            const csvRows = [];
-            csvRows.push(['Bin Index', 'Frequency (Hz)', 'Period (s)', 'Magnitude', 'Percentage Contribution (%)', 'Phase (rad)', 'Unwrapped Phase (rad)']);
+            const wasVisible = chart.data.datasets.map((ds, i) => chart.isDatasetVisible(i));
 
-            subsetRows.forEach(row => {
-                csvRows.push([
-                    row.bin,
-                    Number(row.freq.toFixed(4)),
-                    row.period === Infinity ? 'Infinity' : Number(row.period.toFixed(4)),
-                    Number(row.mag.toFixed(4)),
-                    Number(row.contrib.toFixed(2)),
-                    Number(row.phase.toFixed(4)),
-                    Number(row.unwrappedPhase.toFixed(4))
-                ]);
+            chart.data.labels = config.data.labels;
+            chart.data.datasets.forEach((ds, i) => {
+                const next = config.data.datasets[i];
+                if (!next) return;
+                ds.data = next.data;
+                if (next.label) ds.label = next.label;
             });
 
-            const csvString = Papa.unparse(csvRows);
-            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
+            if (chart.data.datasets.length !== config.data.datasets.length) {
+                chart.destroy();
+                charts[chartKey] = create(chartKey, config);
+                return;
+            }
 
-            const baseName = globalData && globalData.fileName ? globalData.fileName.replace(/\.[^/.]+$/, "") : "spectral_analysis";
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', `${baseName}_${suffix}.csv`);
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            chart.options = config.options;
+            chart.update('none');
+
+            wasVisible.forEach((visible, i) => {
+                if (i < chart.data.datasets.length && visible !== chart.isDatasetVisible(i)) {
+                    chart.setDatasetVisibility(i, visible);
+                }
+            });
+            chart.update('none');
         }
 
-        function processAndPlot(times, amplitudes, sampleRate, windowType, unitType, padStrategy, isPeaksEnabled, sensitivity, includeDcInPeaks, includeBin1InPeaks, isMagThreshEnabled, magThreshold) {
-            const originalLength = amplitudes.length;
+        // -- Dataset & option builders --------------------------------------
 
-            let rawFrequencies = [];
-            let rawPeriods = [];
-            let rawMagnitudes = [];
-            let rawPsdValues = [];
-            let rawUnwrappedPhases = [];
-            let rawPhasesList = [];
-            let processedAmps = [];
-            let processedTimes = [];
+        /** Scatter overlay used for the peak and threshold markers. */
+        const markerDataset = (label, data, color, pointRadius, order) => ({
+            label: label,
+            data: data,
+            borderColor: 'transparent',
+            backgroundColor: color,
+            pointRadius: pointRadius,
+            showLine: false,
+            order: order
+        });
 
-            let targetLength;
+        /** Marker on the polar plot, which is a scatter chart and needs no showLine. */
+        const polarMarkerDataset = (label, data, color, pointRadius, order) => ({
+            label: label,
+            data: data,
+            borderColor: 'transparent',
+            backgroundColor: color,
+            pointRadius: pointRadius,
+            pointHoverRadius: pointRadius + 2,
+            order: order
+        });
 
-            if (padStrategy === 'framing') {
-                targetLength = Math.max(2, Math.pow(2, Math.floor(Math.log2(originalLength))));
-                if (targetLength > originalLength) {
-                    targetLength = Math.max(2, Math.pow(2, Math.floor(Math.log2(originalLength))));
-                }
+        const spectralOptions = (xLabel, yScale) => ({
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: { type: 'linear', title: { display: true, text: xLabel } },
+                y: yScale
+            },
+            plugins: { zoom: ZOOM }
+        });
 
-                processedAmps = amplitudes;
-                processedTimes = times;
+        /** Renders log-axis ticks as 1e-3 style scientific notation. */
+        function scientificTick(value) {
+            if (value === 0) return '0';
+            const exponent = Math.floor(Math.log10(value));
+            const mantissa = value / Math.pow(10, exponent);
+            if (mantissa === 1) return `1e${exponent}`;
+            return `${mantissa.toFixed(1)}e${exponent}`;
+        }
 
-                const chunk1Amps = new Array(targetLength);
-                for (let i = 0; i < targetLength; i++) {
-                    chunk1Amps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
-                }
-
-                const startIdx2 = Math.max(0, originalLength - targetLength);
-                const chunk2Amps = new Array(targetLength);
-                for (let i = 0; i < targetLength; i++) {
-                    chunk2Amps[i] = amplitudes[startIdx2 + i] !== undefined ? amplitudes[startIdx2 + i] : 0;
-                }
-
-                const win1 = applyWindow(chunk1Amps, windowType);
-                const win2 = applyWindow(chunk2Amps, windowType);
-
-                const spec1 = fourierTransform(win1.windowedData);
-                const spec2 = fourierTransform(win2.windowedData);
-
-                const halfN = targetLength / 2;
-                const phase1 = [];
-                const phase2 = [];
-
-                for (let i = 0; i < halfN; i++) {
-                    phase1.push(Math.atan2(spec1[i * 2 + 1], spec1[i * 2]));
-                    phase2.push(Math.atan2(spec2[i * 2 + 1], spec2[i * 2]));
-                }
-
-                const unwrap1 = new Array(halfN);
-                const unwrap2 = new Array(halfN);
-                unwrap1[0] = phase1[0];
-                unwrap2[0] = phase2[0];
-                let c1 = 0, c2 = 0;
-                for (let i = 1; i < halfN; i++) {
-                    let d1 = phase1[i] - phase1[i - 1];
-                    if (d1 > Math.PI) c1 -= 2 * Math.PI; else if (d1 < -Math.PI) c1 += 2 * Math.PI;
-                    unwrap1[i] = phase1[i] + c1;
-
-                    let d2 = phase2[i] - phase2[i - 1];
-                    if (d2 > Math.PI) c2 -= 2 * Math.PI; else if (d2 < -Math.PI) c2 += 2 * Math.PI;
-                    unwrap2[i] = phase2[i] + c2;
-                }
-
-                let totalMagnitudeSum = 0;
-                const tempMagnitudes = [];
-                const tempPsd = [];
-                const tempUnwrapped = [];
-                const tempRawPhase = [];
-
-                for (let i = 0; i < halfN; i++) {
-                    const freq = (i * sampleRate) / targetLength;
-                    const period = freq > 0 ? (1.0 / freq) : Infinity;
-                    rawFrequencies.push(freq);
-                    rawPeriods.push(period);
-
-                    let m1 = Math.sqrt(spec1[i * 2] ** 2 + spec1[i * 2 + 1] ** 2) / targetLength;
-                    if (i > 0) m1 *= 2;
-                    if (win1.gain > 0) m1 /= win1.gain;
-
-                    let psd1 = (spec1[i * 2] ** 2 + spec1[i * 2 + 1] ** 2) / (sampleRate * win1.powerGain * targetLength);
-                    if (i > 0 && i < halfN - 1) psd1 *= 2;
-
-                    let m2 = Math.sqrt(spec2[i * 2] ** 2 + spec2[i * 2 + 1] ** 2) / targetLength;
-                    if (i > 0) m2 *= 2;
-                    if (win2.gain > 0) m2 /= win2.gain;
-
-                    let psd2 = (spec2[i * 2] ** 2 + spec2[i * 2 + 1] ** 2) / (sampleRate * win2.powerGain * targetLength);
-                    if (i > 0 && i < halfN - 1) psd2 *= 2;
-
-                    const avgMag = (m1 + m2) / 2.0;
-                    const avgPsd = (psd1 + psd2) / 2.0;
-                    const avgUnwrapped = (unwrap1[i] + unwrap2[i]) / 2.0;
-                    const avgRawPhase = (phase1[i] + phase2[i]) / 2.0;
-
-                    tempMagnitudes.push(avgMag);
-                    tempPsd.push(avgPsd > 0 ? avgPsd : 1e-12);
-                    tempUnwrapped.push(avgUnwrapped);
-                    tempRawPhase.push(avgRawPhase);
-                    totalMagnitudeSum += avgMag;
-                }
-
-                rawMagnitudes = tempMagnitudes;
-                rawPsdValues = tempPsd;
-                rawUnwrappedPhases = tempUnwrapped;
-                rawPhasesList = tempRawPhase;
-
-                var finalHalfN = halfN;
-            } else {
-                if (padStrategy === 'truncate') {
-                    targetLength = Math.pow(2, Math.floor(Math.log2(originalLength)));
-                    if (targetLength < 2) targetLength = 2;
-                } else {
-                    targetLength = Math.pow(2, Math.ceil(Math.log2(originalLength)));
-                }
-
-                processedAmps = new Array(targetLength).fill(0);
-                processedTimes = new Array(targetLength);
-
-                const dt = times.length > 1 ? times[1] - times[0] : 1.0;
-                for (let i = 0; i < targetLength; i++) {
-                    processedAmps[i] = amplitudes[i] !== undefined ? amplitudes[i] : 0;
-                    processedTimes[i] = times[i] !== undefined ? times[i] : (times[0] + i * dt);
-                }
-
-                const { windowedData, gain, powerGain } = applyWindow(processedAmps, windowType);
-                const spectrum = fourierTransform(windowedData);
-
-                const halfN = targetLength / 2;
-                const rawPhases = [];
-                for (let i = 0; i < halfN; i++) {
-                    const re = spectrum[i * 2];
-                    const im = spectrum[i * 2 + 1];
-                    rawPhases.push(Math.atan2(im, re));
-                }
-
-                const unwrappedPhases = new Array(halfN);
-                if (halfN > 0) {
-                    unwrappedPhases[0] = rawPhases[0];
-                    let cumulativeCorrection = 0;
-                    for (let i = 1; i < halfN; i++) {
-                        let diff = rawPhases[i] - rawPhases[i - 1];
-                        if (diff > Math.PI) {
-                            cumulativeCorrection -= 2 * Math.PI;
-                        } else if (diff < -Math.PI) {
-                            cumulativeCorrection += 2 * Math.PI;
-                        }
-                        unwrappedPhases[i] = rawPhases[i] + cumulativeCorrection;
-                    }
-                }
-
-                let totalMagnitudeSum = 0;
-                for (let i = 0; i < halfN; i++) {
-                    const freq = (i * sampleRate) / targetLength;
-                    const period = freq > 0 ? (1.0 / freq) : Infinity;
-                    rawFrequencies.push(freq);
-                    rawPeriods.push(period);
-
-                    const re = spectrum[i * 2];
-                    const im = spectrum[i * 2 + 1];
-
-                    let mag = Math.sqrt(re ** 2 + im ** 2) / targetLength;
-                    if (i > 0) mag *= 2;
-                    if (gain > 0) mag /= gain;
-                    rawMagnitudes.push(mag);
-                    totalMagnitudeSum += mag;
-
-                    let psd = (re ** 2 + im ** 2) / (sampleRate * powerGain * targetLength);
-                    if (i > 0 && i < halfN - 1) psd *= 2;
-                    rawPsdValues.push(psd > 0 ? psd : 1e-12);
-                    rawUnwrappedPhases.push(unwrappedPhases[i]);
-                    rawPhasesList.push(rawPhases[i]);
-                }
-                var finalHalfN = halfN;
-            }
-
-            const maxMag = Math.max(...rawMagnitudes);
-            const peakThreshold = maxMag * sensitivity;
-            currentPeakIndices.clear();
-
-            if (isPeaksEnabled) {
-                if (includeDcInPeaks && unitType !== 'period') {
-                    currentPeakIndices.add(0);
-                }
-                if (includeBin1InPeaks && finalHalfN > 1) {
-                    currentPeakIndices.add(1);
-                }
-                for (let i = 1; i < finalHalfN - 1; i++) {
-                    if (rawMagnitudes[i] > rawMagnitudes[i - 1] && rawMagnitudes[i] > rawMagnitudes[i + 1] && rawMagnitudes[i] >= peakThreshold) {
-                        currentPeakIndices.add(i);
-                    }
-                }
-            }
-
-            document.getElementById('peakCount').textContent = isPeaksEnabled ? currentPeakIndices.size : 0;
-
-            const activeIndices = [];
-            for (let i = 0; i < finalHalfN; i++) {
-                if (unitType === 'period' && rawFrequencies[i] === 0) continue;
-                activeIndices.push(i);
-            }
-
-            let totalMagSumForTable = rawMagnitudes.reduce((a, b) => a + b, 0);
-            currentSpectralRows = [];
-            for (let i = 0; i < finalHalfN; i++) {
-                const pctContribution = totalMagSumForTable > 0 ? (rawMagnitudes[i] / totalMagSumForTable) * 100 : 0;
-                currentSpectralRows.push({
-                    bin: i,
-                    freq: rawFrequencies[i],
-                    period: rawPeriods[i],
-                    mag: rawMagnitudes[i],
-                    contrib: pctContribution,
-                    phase: rawPhasesList[i],
-                    unwrappedPhase: rawUnwrappedPhases[i]
-                });
-            }
-            renderTable();
-
-            const detectedPeakObjects = [];
-            currentPeakIndices.forEach(i => {
-                detectedPeakObjects.push({
-                    freq: rawFrequencies[i],
-                    mag: rawMagnitudes[i],
-                    phase: rawUnwrappedPhases[i]
-                });
-            });
-
-            const magnitudePoints = activeIndices.map(i => ({
-                x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
-                y: rawMagnitudes[i]
-            }));
-
-            const psdPoints = activeIndices.map(i => ({
-                x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
-                y: rawPsdValues[i]
-            }));
-
-            const phasePoints = activeIndices.map(i => ({
-                x: unitType === 'period' ? rawPeriods[i] : rawFrequencies[i],
-                y: rawUnwrappedPhases[i]
-            }));
-
-            const fftPeakPoints = [];
-            const psdPeakPoints = [];
-            const phasePeakPoints = [];
-            const polarPeakPoints = [];
-
-            if (isPeaksEnabled) {
-                currentPeakIndices.forEach(i => {
-                    const f = rawFrequencies[i];
-                    const p = rawPeriods[i];
-                    const xVal = unitType === 'period' ? p : f;
-                    
-                    if (unitType !== 'period' || f > 0) {
-                        fftPeakPoints.push({ x: xVal, y: rawMagnitudes[i] });
-                        psdPeakPoints.push({ x: xVal, y: rawPsdValues[i] });
-                        phasePeakPoints.push({ x: xVal, y: rawUnwrappedPhases[i] });
-
-                        const phi = rawPhasesList[i];
-                        polarPeakPoints.push({
-                            x: Math.cos(phi),
-                            y: Math.sin(phi),
-                            freq: f,
-                            period: p,
-                            mag: rawMagnitudes[i],
-                            phase: phi
-                        });
-                    }
-                });
-            }
-
-            let includedCount = 0;
-            const magThreshSignal = processedTimes.map(t => {
-                if (!isMagThreshEnabled) return null;
-                let sum = 0;
-                for (let i = 0; i < finalHalfN; i++) {
-                    if (rawMagnitudes[i] >= magThreshold) {
-                        if (rawFrequencies[i] === 0) {
-                            sum += rawMagnitudes[i];
-                        } else {
-                            sum += rawMagnitudes[i] * Math.cos(2 * Math.PI * rawFrequencies[i] * t + rawUnwrappedPhases[i]);
-                        }
-                    }
-                }
-                return sum;
-            });
-
-            if (isMagThreshEnabled) {
-                for (let i = 0; i < rawMagnitudes.length; i++) {
-                    if (rawMagnitudes[i] >= magThreshold) includedCount++;
-                }
-            }
-            document.getElementById('magThreshCount').textContent = isMagThreshEnabled ? includedCount : 0;
-
-            const threshLinePoints = magnitudePoints.map(pt => ({
-                x: pt.x,
-                y: isMagThreshEnabled ? magThreshold : null
-            }));
-
-            const fftThreshPoints = [];
-            const psdThreshPoints = [];
-            const phaseThreshPoints = [];
-
-            activeIndices.forEach(i => {
-                if (isMagThreshEnabled && rawMagnitudes[i] >= magThreshold) {
-                    const xVal = unitType === 'period' ? rawPeriods[i] : rawFrequencies[i];
-                    fftThreshPoints.push({ x: xVal, y: rawMagnitudes[i] });
-                    psdThreshPoints.push({ x: xVal, y: rawPsdValues[i] });
-                    phaseThreshPoints.push({ x: xVal, y: rawUnwrappedPhases[i] });
-                }
-            });
-
-            const summedPeakSignal = processedTimes.map(t => {
-                if (!isPeaksEnabled) return null;
-                let sum = 0;
-                for (let peak of detectedPeakObjects) {
-                    if (peak.freq === 0) {
-                        sum += peak.mag;
-                    } else {
-                        sum += peak.mag * Math.cos(2 * Math.PI * peak.freq * t + peak.phase);
-                    }
-                }
-                return sum;
-            });
-
-            const unitCirclePoints = [];
+        function unitCirclePoints() {
+            const points = [];
             for (let a = 0; a <= Math.PI * 2; a += 0.05) {
-                unitCirclePoints.push({ x: Math.cos(a), y: Math.sin(a) });
+                points.push({ x: Math.cos(a), y: Math.sin(a) });
             }
+            return points;
+        }
 
-            const polarPhasePoints = activeIndices.map(i => {
-                const phi = rawPhasesList[i];
+        /** Axis that crosses at the origin, for the complex plane. */
+        const polarAxis = (label) => ({
+            type: 'linear',
+            position: 'center',
+            min: -1.2,
+            max: 1.2,
+            title: { display: true, text: label },
+            grid: { color: (ctx) => (ctx.tick.value === 0 ? COLORS.axisGrid : COLORS.grid) }
+        });
+
+        function polarTooltipLabel(context) {
+            if (context.datasetIndex === 0) return null;   // the unit-circle guide
+            const point = context.raw;
+            if (!point) return null;
+
+            let suffix = '';
+            if (context.dataset.label === LABEL_PEAKS) suffix = ' [Peak Match]';
+            if (context.dataset.label === LABEL_INCLUDED) suffix = ' [Threshold Match]';
+
+            const periodText = point.period === Infinity ? 'Infinite' : point.period.toFixed(3) + ' s';
+            const phase = point.phase.theta !== undefined ? point.phase.theta : point.phase;
+            return [
+                ` Freq: ${point.freq.toFixed(2)} Hz (Period: ${periodText})${suffix}`,
+                ` Magnitude: ${point.mag.toFixed(4)}`,
+                ` Phase: ${phase.toFixed(3)} rad`
+            ];
+        }
+
+        // -- Render ---------------------------------------------------------
+
+        /**
+         * @param {object} model
+         * @param {object} model.cfg             Settings snapshot for this pass.
+         * @param {object} model.spectrum        FFTLib.analyze result.
+         * @param {Set<number>} model.peakIndices
+         * @param {number[]} model.activeBins    Bins plottable on the current x-axis.
+         * @param {?number[]} model.peakSignal      Peak reconstruction, or null if off.
+         * @param {?number[]} model.thresholdSignal Threshold reconstruction, or null if off.
+         */
+        function render(model) {
+            const { cfg, spectrum, peakIndices, activeBins, peakSignal, thresholdSignal } = model;
+
+            const usePeriod = cfg.unit === Settings.UNITS.PERIOD;
+            const xOf = (i) => (usePeriod ? spectrum.periods[i] : spectrum.frequencies[i]);
+            const xLabel = usePeriod ? 'Period (s)' : 'Frequency (Hz)';
+
+            /** DC has an infinite period, so it drops off a period axis. */
+            const isPlottable = (i) => !usePeriod || spectrum.frequencies[i] > 0;
+            const isIncluded = (i) => cfg.magThreshEnabled && spectrum.magnitudes[i] >= cfg.magThreshold;
+
+            const pointsOf = (bins, values) => bins.map((i) => ({ x: xOf(i), y: values[i] }));
+            const polarPointOf = (i) => {
+                const phi = spectrum.phases[i];
                 return {
                     x: Math.cos(phi),
                     y: Math.sin(phi),
-                    freq: rawFrequencies[i],
-                    period: rawPeriods[i],
-                    mag: rawMagnitudes[i],
+                    freq: spectrum.frequencies[i],
+                    period: spectrum.periods[i],
+                    mag: spectrum.magnitudes[i],
                     phase: phi
                 };
-            });
-
-            const polarThreshPoints = activeIndices.map(i => {
-                if (isMagThreshEnabled && rawMagnitudes[i] >= magThreshold) {
-                    const phi = rawPhasesList[i];
-                    return {
-                        x: Math.cos(phi),
-                        y: Math.sin(phi),
-                        freq: rawFrequencies[i],
-                        period: rawPeriods[i],
-                        mag: rawMagnitudes[i],
-                        phase: phi
-                    };
-                }
-                return null;
-            }).filter(Boolean);
-
-            function updateOrCreateChart(chartInstance, canvasId, config) {
-                if (chartInstance) {
-                    const visibilityStates = chartInstance.data.datasets.map((ds, idx) => chartInstance.isDatasetVisible(idx));
-                    
-                    chartInstance.data.labels = config.data.labels;
-                    chartInstance.data.datasets.forEach((ds, idx) => {
-                        if (config.data.datasets[idx]) {
-                            ds.data = config.data.datasets[idx].data;
-                            if (config.data.datasets[idx].label) {
-                                ds.label = config.data.datasets[idx].label;
-                            }
-                        }
-                    });
-                    
-                    if (chartInstance.data.datasets.length !== config.data.datasets.length) {
-                        chartInstance.destroy();
-                        const ctx = document.getElementById(canvasId).getContext('2d');
-                        return new Chart(ctx, config);
-                    }
-
-                    chartInstance.options = config.options;
-                    chartInstance.update('none');
-                    
-                    visibilityStates.forEach((isVisible, idx) => {
-                        if (idx < chartInstance.data.datasets.length && isVisible !== chartInstance.isDatasetVisible(idx)) {
-                            chartInstance.setDatasetVisibility(idx, isVisible);
-                        }
-                    });
-                    chartInstance.update('none');
-                    return chartInstance;
-                } else {
-                    const ctx = document.getElementById(canvasId).getContext('2d');
-                    return new Chart(ctx, config);
-                }
-            }
-
-            const xAxisLabelText = unitType === 'period' ? 'Period (s)' : 'Frequency (Hz)';
-
-            // Common Zoom & Pan Plugin Configuration with hard boundary limits (preventing zoom out past original view)
-            const zoomPluginConfig = {
-                limits: {
-                    x: { min: 'original', max: 'original' },
-                    y: { min: 'original', max: 'original' }
-                },
-                zoom: {
-                    wheel: { enabled: true },
-                    pinch: { enabled: true },
-                    mode: 'xy',
-                },
-                pan: {
-                    enabled: true,
-                    mode: 'xy'
-                }
             };
 
-            // 1. Time Chart
-            timeChart = updateOrCreateChart(timeChart, 'timeChart', {
+            const peakBins = cfg.peaksEnabled ? [...peakIndices].filter(isPlottable) : [];
+            const includedBins = activeBins.filter(isIncluded);
+
+            const magnitudePoints = pointsOf(activeBins, spectrum.magnitudes);
+
+            // 1. Time domain: original series plus any active reconstruction.
+            upsert('time', {
                 type: 'line',
                 data: {
-                    labels: processedTimes.map(t => t.toFixed(2)),
-                    datasets: [
-                        { label: 'Original Data (Processed)', data: processedAmps, borderColor: 'rgb(34, 197, 94)', borderWidth: 1.5, pointRadius: 0, spanGaps: true },
-                        ...(isPeaksEnabled ? [{ label: 'Summed Peak Components', data: summedPeakSignal, borderColor: 'rgb(234, 179, 8)', borderWidth: 2, pointRadius: 0 }] : []),
-                        ...(isMagThreshEnabled ? [{ label: 'Mag Threshold Reconstruction', data: magThreshSignal, borderColor: 'rgb(220, 38, 38)', borderWidth: 2, pointRadius: 0 }] : [])
-                    ]
-                },
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    scales: { 
-                        x: { title: { display: true, text: 'Time (s)' } }, 
-                        y: { title: { display: true, text: 'Amplitude' } } 
-                    },
-                    plugins: {
-                        zoom: zoomPluginConfig
-                    }
-                }
-            });
-
-            // 2. FFT Magnitude Chart
-            fftChart = updateOrCreateChart(fftChart, 'fftChart', {
-                type: 'line',
-                data: {
-                    datasets: [
-                        { label: `Magnitude (${windowType.toUpperCase()})`, data: magnitudePoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 0, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: fftPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(234, 179, 8)', pointRadius: 5, showLine: false, order: 1 }] : []),
-                        ...(isMagThreshEnabled ? [
-                            { label: 'Threshold Cutoff', data: threshLinePoints, borderColor: 'rgba(220, 38, 38, 0.8)', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, order: 3 },
-                            { label: 'Included Components', data: fftThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(220, 38, 38)', pointRadius: 4, showLine: false, order: 0 }
-                        ] : [])
-                    ]
-                },
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    scales: { 
-                        x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
-                        y: { title: { display: true, text: 'Magnitude' } } 
-                    },
-                    plugins: {
-                        zoom: zoomPluginConfig
-                    }
-                }
-            });
-
-            // 3. PSD Chart with Scientific Notation Y-Axis
-            psdChart = updateOrCreateChart(psdChart, 'psdChart', {
-                type: 'line',
-                data: {
-                    datasets: [
-                        { label: 'PSD (V²/Hz)', data: psdPoints, borderColor: 'rgb(147, 51, 234)', borderWidth: 1.5, pointRadius: 1, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: psdPeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(234, 179, 8)', pointRadius: 5, showLine: false, order: 1 }] : []),
-                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: psdThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(220, 38, 38)', pointRadius: 4, showLine: false, order: 0 }] : [])
-                    ]
-                },
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    scales: { 
-                        x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
-                        y: { 
-                            type: 'logarithmic', 
-                            title: { display: true, text: 'PSD (V²/Hz) [Log]' },
-                            ticks: {
-                                callback: function(value) {
-                                    // Format tick values into standard scientific notation (e.g. 1e-3 -> 1e-3 or similar)
-                                    if (value === 0) return '0';
-                                    const exp = Math.floor(Math.log10(value));
-                                    const mantissa = value / Math.pow(10, exp);
-                                    if (mantissa === 1) {
-                                        return `1e${exp}`;
-                                    }
-                                    return `${mantissa.toFixed(1)}e${exp}`;
-                                }
-                            }
-                        } 
-                    },
-                    plugins: {
-                        zoom: zoomPluginConfig
-                    }
-                }
-            });
-
-            // 4. Phase Chart (Unwrapped)
-            phaseChart = updateOrCreateChart(phaseChart, 'phaseChart', {
-                type: 'line',
-                data: {
-                    datasets: [
-                        { label: 'Unwrapped Phase (rad)', data: phasePoints, borderColor: 'rgb(37, 99, 235)', borderWidth: 1.5, pointRadius: 1, order: 2 },
-                        ...(isPeaksEnabled ? [{ label: 'Detected Peaks', data: phasePeakPoints, borderColor: 'transparent', backgroundColor: 'rgb(234, 179, 8)', pointRadius: 5, showLine: false, order: 1 }] : []),
-                        ...(isMagThreshEnabled ? [{ label: 'Included Components', data: phaseThreshPoints, borderColor: 'transparent', backgroundColor: 'rgb(220, 38, 38)', pointRadius: 4, showLine: false, order: 0 }] : [])
-                    ]
-                },
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    scales: { 
-                        x: { type: 'linear', title: { display: true, text: xAxisLabelText } }, 
-                        y: { title: { display: true, text: 'Unwrapped Phase (rad)' } } 
-                    },
-                    plugins: {
-                        zoom: zoomPluginConfig
-                    }
-                }
-            });
-
-            // 5. Polar Phase Plot
-            polarPhaseChart = updateOrCreateChart(polarPhaseChart, 'polarPhaseChart', {
-                type: 'scatter',
-                data: {
+                    labels: spectrum.series.times.map((t) => t.toFixed(2)),
                     datasets: [
                         {
-                            label: 'Unit Circle (r = 1)',
-                            data: unitCirclePoints,
-                            borderColor: 'rgba(209, 213, 219, 0.8)',
+                            label: 'Original Data (Processed)',
+                            data: spectrum.series.amplitudes,
+                            borderColor: COLORS.original,
                             borderWidth: 1.5,
-                            borderDash: [4, 4],
-                            showLine: true,
                             pointRadius: 0,
-                            order: 4
+                            spanGaps: true
                         },
-                        {
-                            label: 'Phase Components',
-                            data: polarPhasePoints,
-                            borderColor: 'transparent',
-                            backgroundColor: 'rgb(37, 99, 235)',
-                            pointRadius: 4,
-                            pointHoverRadius: 6,
-                            order: 3
-                        },
-                        ...(isPeaksEnabled ? [{
-                            label: 'Detected Peaks',
-                            data: polarPeakPoints,
-                            borderColor: 'transparent',
-                            backgroundColor: 'rgb(234, 179, 8)',
-                            pointRadius: 6,
-                            pointHoverRadius: 8,
-                            order: 2
+                        ...(cfg.peaksEnabled ? [{
+                            label: 'Summed Peak Components',
+                            data: peakSignal,
+                            borderColor: COLORS.peak,
+                            borderWidth: 2,
+                            pointRadius: 0
                         }] : []),
-                        ...(isMagThreshEnabled ? [{
-                            label: 'Included Components',
-                            data: polarThreshPoints,
-                            borderColor: 'transparent',
-                            backgroundColor: 'rgb(220, 38, 38)',
-                            pointRadius: 6,
-                            pointHoverRadius: 8,
-                            order: 1
+                        ...(cfg.magThreshEnabled ? [{
+                            label: 'Mag Threshold Reconstruction',
+                            data: thresholdSignal,
+                            borderColor: COLORS.threshold,
+                            borderWidth: 2,
+                            pointRadius: 0
                         }] : [])
                     ]
                 },
@@ -1470,47 +1334,485 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        x: {
-                            type: 'linear',
-                            position: 'center',
-                            min: -1.2,
-                            max: 1.2,
-                            title: { display: true, text: 'Real (cos φ)' },
-                            grid: { color: context => context.tick.value === 0 ? 'rgba(156, 163, 175, 0.6)' : 'rgba(229, 231, 235, 0.5)' }
+                        x: { title: { display: true, text: 'Time (s)' } },
+                        y: { title: { display: true, text: 'Amplitude' } }
+                    },
+                    plugins: { zoom: ZOOM }
+                }
+            });
+
+            // 2. FFT magnitude, with the threshold drawn as a horizontal cutoff line.
+            upsert('fft', {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: `Magnitude (${cfg.windowType.toUpperCase()})`,
+                            data: magnitudePoints,
+                            borderColor: COLORS.spectrum,
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            order: 2
                         },
-                        y: {
-                            type: 'linear',
-                            position: 'center',
-                            min: -1.2,
-                            max: 1.2,
-                            title: { display: true, text: 'Imaginary (sin φ)' },
-                            grid: { color: context => context.tick.value === 0 ? 'rgba(156, 163, 175, 0.6)' : 'rgba(229, 231, 235, 0.5)' }
-                        }
+                        ...(cfg.peaksEnabled ? [
+                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.magnitudes), COLORS.peak, 5, 1)
+                        ] : []),
+                        ...(cfg.magThreshEnabled ? [
+                            {
+                                label: 'Threshold Cutoff',
+                                data: magnitudePoints.map((point) => ({ x: point.x, y: cfg.magThreshold })),
+                                borderColor: COLORS.thresholdLine,
+                                borderWidth: 1.5,
+                                borderDash: [5, 5],
+                                pointRadius: 0,
+                                order: 3
+                            },
+                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.magnitudes), COLORS.threshold, 4, 0)
+                        ] : [])
+                    ]
+                },
+                options: spectralOptions(xLabel, { title: { display: true, text: 'Magnitude' } })
+            });
+
+            // 3. Power spectral density on a log axis.
+            upsert('psd', {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'PSD (V²/Hz)',
+                            data: pointsOf(activeBins, spectrum.psd),
+                            borderColor: COLORS.spectrum,
+                            borderWidth: 1.5,
+                            pointRadius: 1,
+                            order: 2
+                        },
+                        ...(cfg.peaksEnabled ? [
+                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.psd), COLORS.peak, 5, 1)
+                        ] : []),
+                        ...(cfg.magThreshEnabled ? [
+                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.psd), COLORS.threshold, 4, 0)
+                        ] : [])
+                    ]
+                },
+                options: spectralOptions(xLabel, {
+                    type: 'logarithmic',
+                    title: { display: true, text: 'PSD (V²/Hz) [Log]' },
+                    ticks: { callback: scientificTick }
+                })
+            });
+
+            // 4. Unwrapped phase spectrum.
+            upsert('phase', {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Unwrapped Phase (rad)',
+                            data: pointsOf(activeBins, spectrum.unwrappedPhases),
+                            borderColor: COLORS.phase,
+                            borderWidth: 1.5,
+                            pointRadius: 1,
+                            order: 2
+                        },
+                        ...(cfg.peaksEnabled ? [
+                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.unwrappedPhases), COLORS.peak, 5, 1)
+                        ] : []),
+                        ...(cfg.magThreshEnabled ? [
+                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.unwrappedPhases), COLORS.threshold, 4, 0)
+                        ] : [])
+                    ]
+                },
+                options: spectralOptions(xLabel, { title: { display: true, text: 'Unwrapped Phase (rad)' } })
+            });
+
+            // 5. Polar phase plot: every component projected onto the unit circle.
+            upsert('polar', {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Unit Circle (r = 1)',
+                            data: unitCirclePoints(),
+                            borderColor: COLORS.guide,
+                            borderWidth: 1.5,
+                            borderDash: [4, 4],
+                            showLine: true,
+                            pointRadius: 0,
+                            order: 4
+                        },
+                        polarMarkerDataset('Phase Components', activeBins.map(polarPointOf), COLORS.phase, 4, 3),
+                        ...(cfg.peaksEnabled ? [
+                            polarMarkerDataset(LABEL_PEAKS, peakBins.map(polarPointOf), COLORS.peak, 6, 2)
+                        ] : []),
+                        ...(cfg.magThreshEnabled ? [
+                            polarMarkerDataset(LABEL_INCLUDED, includedBins.map(polarPointOf), COLORS.threshold, 6, 1)
+                        ] : [])
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: polarAxis('Real (cos φ)'),
+                        y: polarAxis('Imaginary (sin φ)')
                     },
                     plugins: {
-                        zoom: zoomPluginConfig,
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    if (context.datasetIndex === 0) return null;
-                                    const pt = context.raw;
-                                    if (!pt) return null;
-                                    let labelPrefix = '';
-                                    if (context.dataset.label === 'Detected Peaks') labelPrefix = ' [Peak Match]';
-                                    if (context.dataset.label === 'Included Components') labelPrefix = ' [Threshold Match]';
-                                    const pStr = pt.period === Infinity ? 'Infinite' : pt.period.toFixed(3) + ' s';
-                                    return [
-                                        ` Freq: ${pt.freq.toFixed(2)} Hz (Period: ${pStr})${labelPrefix}`,
-                                        ` Magnitude: ${pt.mag.toFixed(4)}`,
-                                        ` Phase: ${(pt.phase.theta !== undefined ? pt.phase.theta : pt.phase).toFixed(3)} rad`
-                                    ];
-                                }
-                            }
-                        }
+                        zoom: ZOOM,
+                        tooltip: { callbacks: { label: polarTooltipLabel } }
                     }
                 }
             });
         }
+
+        return { render, resetZoom };
+    })();
     </script>
+
+    <!-- ==================================================================== -->
+    <!-- CsvExport - spectral results as CSV, in full or filtered.             -->
+    <!-- ==================================================================== -->
+    <script>
+    window.CsvExport = (function () {
+        'use strict';
+
+        const HEADER = [
+            'Bin Index', 'Frequency (Hz)', 'Period (s)', 'Magnitude',
+            'Percentage Contribution (%)', 'Phase (rad)', 'Unwrapped Phase (rad)'
+        ];
+
+        const toCsvRow = (row) => [
+            row.bin,
+            Number(row.freq.toFixed(4)),
+            row.period === Infinity ? 'Infinity' : Number(row.period.toFixed(4)),
+            Number(row.mag.toFixed(4)),
+            Number(row.contrib.toFixed(2)),
+            Number(row.phase.toFixed(4)),
+            Number(row.unwrappedPhase.toFixed(4))
+        ];
+
+        /** Source file name without its extension, for naming the download. */
+        function baseName() {
+            const fileName = AppState.dataset && AppState.dataset.fileName;
+            return fileName ? fileName.replace(/\.[^/.]+$/, '') : 'spectral_analysis';
+        }
+
+        function save(rows, suffix) {
+            const csv = Papa.unparse([HEADER, ...rows.map(toCsvRow)]);
+            Dom.downloadFile(`${baseName()}_${suffix}.csv`, csv, 'text/csv;charset=utf-8;');
+        }
+
+        const hasResults = () => Boolean(AppState.dataset) && AppState.rows.length > 0;
+
+        function exportAll() {
+            if (!hasResults()) return;
+            save(AppState.rows, 'spectral_results');
+        }
+
+        /** @param {'peaks'|'threshold'} type */
+        function exportSubset(type) {
+            if (!hasResults()) return;
+
+            let rows;
+            let suffix;
+            if (type === 'peaks') {
+                if (!Settings.peaksEnabled()) return;
+                rows = AppState.rows.filter((row) => AppState.peakIndices.has(row.bin));
+                suffix = 'peak_components';
+            } else if (type === 'threshold') {
+                if (!Settings.magThreshEnabled()) return;
+                const threshold = Settings.magThreshold();
+                rows = AppState.rows.filter((row) => row.mag >= threshold);
+                suffix = 'threshold_components';
+            } else {
+                return;
+            }
+
+            if (rows.length === 0) {
+                alert('No components match the current export criteria.');
+                return;
+            }
+            save(rows, suffix);
+        }
+
+        return { exportAll, exportSubset };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- DataImport - CSV parsing and the column / start-row picker.           -->
+    <!-- ==================================================================== -->
+    <script>
+    window.DataImport = (function () {
+        'use strict';
+
+        const PREVIEW_ROW_LIMIT = 8;
+        const MIN_DATA_POINTS = 4;
+
+        function init() {
+            Dom.$('csvFile').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) parseFile(file);
+            });
+        }
+
+        function parseFile(file) {
+            AppState.fileName = file.name;
+            Papa.parse(file, {
+                header: false,
+                dynamicTyping: true,
+                skipEmptyLines: true,
+                complete: (results) => onParsed(results.data)
+            });
+        }
+
+        function onParsed(data) {
+            AppState.rawRows = data.filter((row) => Array.isArray(row) && row.length > 0);
+            if (AppState.rawRows.length === 0) {
+                alert('The uploaded file contains no valid rows.');
+                return;
+            }
+
+            const startRow = detectFirstNumericRow(AppState.rawRows);
+            const columnCount = AppState.rawRows[startRow].length;
+
+            if (columnCount > 2) {
+                openColumnModal(columnCount, startRow);   // ambiguous, so ask
+            } else if (columnCount === 2) {
+                loadDataset(0, 1, startRow);
+            } else {
+                alert('Error: Dataset must contain at least 2 columns.');
+            }
+        }
+
+        /** First row whose leading two cells both parsed as numbers; 0 if none did. */
+        function detectFirstNumericRow(rows) {
+            for (let i = 0; i < rows.length; i++) {
+                if (typeof rows[i][0] === 'number' && typeof rows[i][1] === 'number') return i;
+            }
+            return 0;
+        }
+
+        // -- Column picker modal --------------------------------------------
+
+        function openColumnModal(columnCount, defaultStartRow) {
+            populateColumnSelect('modalXCol', columnCount, 0);
+            populateColumnSelect('modalYCol', columnCount, 1);
+            Dom.$('modalStartRow').value = defaultStartRow;
+            renderPreviewTable(columnCount, defaultStartRow);
+            Dom.setHidden('columnModal', false);
+        }
+
+        const closeColumnModal = () => Dom.setHidden('columnModal', true);
+
+        function populateColumnSelect(id, columnCount, selectedIndex) {
+            const select = Dom.$(id);
+            select.innerHTML = '';
+            for (let c = 0; c < columnCount; c++) {
+                const option = document.createElement('option');
+                option.value = c;
+                option.textContent = `Column ${c + 1}`;
+                if (c === selectedIndex) option.selected = true;
+                select.appendChild(option);
+            }
+        }
+
+        function renderPreviewTable(columnCount, highlightRow) {
+            const head = Dom.$('modalPreviewHead');
+            const body = Dom.$('modalPreviewBody');
+            head.innerHTML = '';
+            body.innerHTML = '';
+
+            const headRow = document.createElement('tr');
+            headRow.appendChild(Dom.cell('th', 'Row',
+                'py-1.5 px-3 border-b border-gray-300 text-[10px] text-gray-500 uppercase'));
+            for (let c = 0; c < columnCount; c++) {
+                headRow.appendChild(Dom.cell('th', `Col ${c + 1}`,
+                    'py-1.5 px-3 border-b border-gray-300 text-[11px] font-semibold text-gray-700'));
+            }
+            head.appendChild(headRow);
+
+            const rowCount = Math.min(PREVIEW_ROW_LIMIT, AppState.rawRows.length);
+            for (let i = 0; i < rowCount; i++) {
+                const tr = document.createElement('tr');
+                tr.className = i === highlightRow ? 'bg-blue-50/60 font-semibold' : 'hover:bg-gray-100';
+                tr.appendChild(Dom.cell('td', i,
+                    'py-1 px-3 border-b border-gray-200 text-[10px] text-gray-400'));
+
+                const rowData = AppState.rawRows[i];
+                for (let c = 0; c < columnCount; c++) {
+                    tr.appendChild(Dom.cell('td', rowData[c] !== undefined ? rowData[c] : '',
+                        'py-1 px-3 border-b border-gray-200 text-xs'));
+                }
+                body.appendChild(tr);
+            }
+        }
+
+        function confirmColumnSelection() {
+            const xCol = parseInt(Dom.$('modalXCol').value);
+            const yCol = parseInt(Dom.$('modalYCol').value);
+            const startRow = parseInt(Dom.$('modalStartRow').value) || 0;
+
+            if (xCol === yCol) {
+                alert('X-axis and Y-axis columns must be different.');
+                return;
+            }
+
+            closeColumnModal();
+            loadDataset(xCol, yCol, startRow);
+        }
+
+        // -- Dataset construction -------------------------------------------
+
+        /** Rows from `startRow` down where both chosen columns hold real numbers. */
+        function extractNumericPoints(rows, xCol, yCol, startRow) {
+            const points = [];
+            for (let i = startRow; i < rows.length; i++) {
+                const row = rows[i];
+                if (row[xCol] === undefined || row[yCol] === undefined) continue;
+                const x = Number(row[xCol]);
+                const y = Number(row[yCol]);
+                if (!isNaN(x) && !isNaN(y)) points.push([x, y]);
+            }
+            return points;
+        }
+
+        function loadDataset(xCol, yCol, startRow) {
+            const points = extractNumericPoints(AppState.rawRows, xCol, yCol, startRow);
+            if (points.length < MIN_DATA_POINTS) {
+                alert('Not enough valid numeric data points found starting from the selected row.');
+                return;
+            }
+
+            AppState.dataset = {
+                fileName: AppState.fileName,
+                times: points.map((point) => point[0]),
+                amplitudes: points.map((point) => point[1])
+            };
+
+            const sampleRate = Analysis.sampleRateOf(AppState.dataset.times);
+            Analysis.calibrateMagnitudeThreshold();
+            Dom.text('statusText',
+                `Loaded: ${AppState.fileName} (${points.length} points, fs = ${sampleRate.toFixed(2)}Hz)`);
+            Controls.updateExportButtonState();
+            Analysis.run();
+        }
+
+        return { init, closeColumnModal, confirmColumnSelection };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- Controls - sidebar wiring, tab switching and the export menu.         -->
+    <!-- ==================================================================== -->
+    <script>
+    window.Controls = (function () {
+        'use strict';
+
+        const TAB_ACTIVE = 'px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer';
+        const TAB_INACTIVE = 'px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer';
+
+        /** @param {'charts'|'table'} tabName */
+        function switchTab(tabName) {
+            const showCharts = tabName === 'charts';
+            Dom.$('tabChartsBtn').className = showCharts ? TAB_ACTIVE : TAB_INACTIVE;
+            Dom.$('tabTableBtn').className = showCharts ? TAB_INACTIVE : TAB_ACTIVE;
+            Dom.setHidden('viewCharts', !showCharts);
+            Dom.$('viewCharts').classList.toggle('grid', showCharts);
+            Dom.setHidden('viewTable', showCharts);
+        }
+
+        const toggleExportDropdown = () => Dom.$('exportDropdownMenu').classList.toggle('hidden');
+        const hideExportDropdown = () => Dom.setHidden('exportDropdownMenu', true);
+
+        function setExportOption(id, enabled, disabledTitle) {
+            Dom.setDimmed(id, !enabled);
+            const option = Dom.$(id);
+            if (enabled) {
+                option.removeAttribute('title');
+            } else {
+                option.setAttribute('title', disabledTitle);
+            }
+        }
+
+        /** Enables the export menu once data is loaded, and its options per feature. */
+        function updateExportButtonState() {
+            const button = Dom.$('exportDropdownBtn');
+            if (!AppState.dataset) {
+                button.setAttribute('disabled', 'true');
+                return;
+            }
+            button.removeAttribute('disabled');
+            setExportOption('exportPeaksOption', Settings.peaksEnabled(),
+                'Peak detection is currently disabled');
+            setExportOption('exportThreshOption', Settings.magThreshEnabled(),
+                'Magnitude threshold reconstruction is currently disabled');
+        }
+
+        function init() {
+            Dom.$('enablePeaks').addEventListener('change', (e) => {
+                Dom.setDimmed('peakControlsContainer', !e.target.checked);
+                updateExportButtonState();
+                Analysis.run();
+            });
+
+            Dom.$('sensRange').addEventListener('input', (e) => {
+                Dom.text('sensVal', e.target.value + '%');
+                Analysis.run();
+            });
+
+            Dom.$('enableMagThresh').addEventListener('change', (e) => {
+                Dom.setDimmed('magThreshContainer', !e.target.checked);
+                updateExportButtonState();
+                Analysis.run();
+            });
+
+            Dom.$('magThreshRange').addEventListener('input', (e) => {
+                Dom.text('magThreshVal', parseFloat(e.target.value).toFixed(2));
+                Analysis.run();
+            });
+
+            ['includeDcPeaks', 'includeBin1Peaks', 'padStrategy', 'windowType'].forEach((id) => {
+                Dom.$(id).addEventListener('change', Analysis.run);
+            });
+
+            // The table's x-axis unit decides which rows are listed at all.
+            Dom.$('freqDomainUnit').addEventListener('change', () => {
+                TableView.render();
+                Analysis.run();
+            });
+
+            // Dismiss the export menu on any click outside it.
+            window.addEventListener('click', (e) => {
+                const button = Dom.$('exportDropdownBtn');
+                const menu = Dom.$('exportDropdownMenu');
+                if (button && menu && !button.contains(e.target) && !menu.contains(e.target)) {
+                    menu.classList.add('hidden');
+                }
+            });
+        }
+
+        return { init, switchTab, toggleExportDropdown, hideExportDropdown, updateExportButtonState };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- Bootstrap: globals for the inline onclick handlers, then wire up.     -->
+    <!-- ==================================================================== -->
+    <script>
+    function resetChartZoom(chartKey) { ChartsView.resetZoom(chartKey); }
+    function toggleExportDropdown() { Controls.toggleExportDropdown(); }
+    function hideExportDropdown() { Controls.hideExportDropdown(); }
+    function switchTab(tabName) { Controls.switchTab(tabName); }
+    function sortTable(columnKey) { TableView.sortBy(columnKey); }
+    function exportSpectralCsv() { CsvExport.exportAll(); }
+    function exportSubsetCsv(type) { CsvExport.exportSubset(type); }
+    function closeColumnModal() { DataImport.closeColumnModal(); }
+    function confirmColumnSelection() { DataImport.confirmColumnSelection(); }
+
+    DataImport.init();
+    Controls.init();
+    </script>
+
 </body>
 </html>
