@@ -241,7 +241,7 @@
                 <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Spectral Components Analysis Matrix</h3>
                 <span id="tableMetaCount" class="text-xs text-gray-500 font-medium">0 components listed</span>
             </div>
-            <div class="overflow-y-auto flex-1 max-h-[720px]">
+            <div id="spectralTableScroll" class="overflow-y-auto flex-1 max-h-[720px]">
                 <table class="w-full text-left border-collapse text-xs">
                     <thead class="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider sticky top-0 border-b border-gray-200 select-none">
                         <tr>
@@ -1037,16 +1037,6 @@
             return dt > 0 ? 1.0 / dt : DEFAULT_SAMPLE_RATE;
         }
 
-        /** Bins to plot: a period axis cannot show DC, whose period is infinite. */
-        function activeBinsFor(spectrum, unit) {
-            const bins = [];
-            for (let i = 0; i < spectrum.binCount; i++) {
-                if (unit === Settings.UNITS.PERIOD && spectrum.frequencies[i] === 0) continue;
-                bins.push(i);
-            }
-            return bins;
-        }
-
         function buildRows(spectrum) {
             const contributions = FFTLib.magnitudeContributions(spectrum.magnitudes);
             return spectrum.magnitudes.map((magnitude, i) => ({
@@ -1183,7 +1173,6 @@
                 cfg: cfg,
                 spectrum: spectrum,
                 peakIndices: AppState.peakIndices,
-                activeBins: activeBinsFor(spectrum, cfg.unit),
                 peakSignal: cfg.peaksEnabled ? rebuildSignal(spectrum, AppState.peakIndices) : null,
                 thresholdSignal: cfg.magThreshEnabled ? rebuildSignal(spectrum, thresholdBins) : null
             });
@@ -1203,8 +1192,37 @@
         const SORT_KEYS = ['bin', 'freq', 'period', 'mag', 'contrib', 'phase', 'unwrappedPhase'];
         const DOT_OFF = 'bg-gray-200';
 
+        /** Rows drawn beyond the viewport on each side, to cover fast scrolling. */
+        const OVERSCAN_ROWS = 8;
+        /** Row height assumed until a rendered row can be measured. */
+        const FALLBACK_ROW_HEIGHT = 33;
+
+        const PLACEHOLDER_HTML =
+            '<tr><td colspan="8" class="py-6 text-center text-gray-400">' +
+            'No data loaded yet. Upload a CSV dataset to populate table.</td></tr>';
+
         const dot = (colorClass, title) =>
             `<span class="inline-block w-2.5 h-2.5 ${colorClass} rounded-full" title="${title}"></span>`;
+
+        /**
+         * Sorted, unit-filtered rows. Depends only on the row set, the sort column and
+         * direction, and the x-axis unit - never on the peak or threshold controls - so
+         * a slider drag reuses the last result instead of re-sorting every bin.
+         */
+        let sortCache = null;
+
+        /** Measured height of one row, which sizes the virtual scroll extent. */
+        let rowHeight = FALLBACK_ROW_HEIGHT;
+        /** Window currently in the DOM, so scrolling can skip redundant redraws. */
+        let drawnFirst = -1;
+        let drawnCount = 0;
+        /** Row set the current scroll offset belongs to. */
+        let scrolledSource = null;
+        /** Coalesces scroll and resize redraws onto one animation frame. */
+        let drawQueued = false;
+        let queuedForce = false;
+
+        const isVisible = () => !Dom.$('viewTable').classList.contains('hidden');
 
         /** Sorts by `columnKey`, or flips direction if it is already the sort column. */
         function sortBy(columnKey) {
@@ -1214,6 +1232,8 @@
                 AppState.sortColumn = columnKey;
                 AppState.sortAscending = true;
             }
+            // A new order is read from its top.
+            Dom.$('spectralTableScroll').scrollTop = 0;
             render();
         }
 
@@ -1227,17 +1247,42 @@
             });
         }
 
-        /** Sorts a copy of the rows; DC's infinite period sorts as a large finite value. */
+        /**
+         * The rows to list, in order. A period axis cannot show DC, and DC's infinite
+         * period sorts as a large finite value rather than dropping out.
+         */
         function sortedRows() {
+            const usePeriod = Settings.unit() === Settings.UNITS.PERIOD;
+
+            if (sortCache &&
+                sortCache.source === AppState.rows &&
+                sortCache.sortColumn === AppState.sortColumn &&
+                sortCache.sortAscending === AppState.sortAscending &&
+                sortCache.usePeriod === usePeriod) {
+                return sortCache.rows;
+            }
+
             const key = AppState.sortColumn;
             const direction = AppState.sortAscending ? 1 : -1;
-            return [...AppState.rows].sort((a, b) => {
-                const valA = a[key] === Infinity ? Number.MAX_VALUE : a[key];
-                const valB = b[key] === Infinity ? Number.MAX_VALUE : b[key];
-                if (valA < valB) return -direction;
-                if (valA > valB) return direction;
-                return 0;
-            });
+            // filter() copies, so sort() never reorders the shared AppState.rows.
+            const rows = AppState.rows
+                .filter((row) => !(usePeriod && row.freq === 0))
+                .sort((a, b) => {
+                    const valA = a[key] === Infinity ? Number.MAX_VALUE : a[key];
+                    const valB = b[key] === Infinity ? Number.MAX_VALUE : b[key];
+                    if (valA < valB) return -direction;
+                    if (valA > valB) return direction;
+                    return 0;
+                });
+
+            sortCache = {
+                source: AppState.rows,
+                sortColumn: key,
+                sortAscending: AppState.sortAscending,
+                usePeriod: usePeriod,
+                rows: rows
+            };
+            return rows;
         }
 
         function cellsHtml(row, isPeak, isThreshold) {
@@ -1260,33 +1305,147 @@
                 `;
         }
 
-        function render() {
-            const usePeriod = Settings.unit() === Settings.UNITS.PERIOD;
+        /**
+         * Keeps the scrollbar the size of the whole dataset without rendering it. Borders
+         * and padding are zeroed inline, which beats the tbody's divide-y utility, so the
+         * spacers leave no stray hairline at either end of the window.
+         */
+        const spacerHtml = (height) =>
+            `<tr aria-hidden="true" style="height:${height}px;border:0">` +
+            `<td colspan="8" style="height:${height}px;padding:0;border:0;line-height:0;font-size:0"></td></tr>`;
+
+        function rowHtml(row, peaksEnabled, threshEnabled, threshold) {
+            const cells = cellsHtml(
+                row,
+                peaksEnabled && AppState.peakIndices.has(row.bin),
+                threshEnabled && row.mag >= threshold
+            );
+            return `<tr class="hover:bg-gray-50 transition-colors">${cells}</tr>`;
+        }
+
+        /**
+         * Measures the row pitch, not a single row's box: with collapsed borders the two
+         * differ by up to a pixel, and it is the pitch the spacer heights have to match
+         * or the scroll extent drifts a few percent over tens of thousands of rows.
+         *
+         * @returns {boolean} whether this changed the assumed row height.
+         */
+        function measureRowHeight(body) {
+            const first = body.children[1];   // children[0] is the leading spacer
+            if (!first) return false;
+
+            const next = body.children[2];
+            const measured = (next && next !== body.lastElementChild)
+                ? next.getBoundingClientRect().top - first.getBoundingClientRect().top
+                : first.getBoundingClientRect().height;
+
+            if (measured > 0 && Math.abs(measured - rowHeight) > 0.5) {
+                rowHeight = measured;
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Renders only the slice of `rows` around the current scroll offset, padded above
+         * and below by spacer rows so the scrollbar still spans the whole dataset. Cost is
+         * the size of the viewport, not the size of the spectrum.
+         *
+         * @param {object[]} rows
+         * @param {boolean} force Redraw even if the same window is already up, which the
+         *   peak and threshold dots need since they change without the window moving.
+         * @param {boolean} [remeasured] Internal, to bound the re-layout to one extra pass.
+         */
+        function drawWindow(rows, force, remeasured) {
+            const scroller = Dom.$('spectralTableScroll');
+            const body = Dom.$('spectralTableBody');
+
+            if (rows.length === 0) {
+                body.innerHTML = PLACEHOLDER_HTML;
+                drawnFirst = -1;
+                drawnCount = 0;
+                return;
+            }
+
+            const span = Math.ceil(scroller.clientHeight / rowHeight) + OVERSCAN_ROWS * 2;
+            let first = Math.max(0, Math.floor(scroller.scrollTop / rowHeight) - OVERSCAN_ROWS);
+            // A shorter dataset can leave the offset past the end until the browser
+            // clamps it, which would otherwise draw an empty window.
+            first = Math.min(first, Math.max(0, rows.length - 1));
+            const count = Math.min(rows.length - first, span);
+
+            if (!force && first === drawnFirst && count === drawnCount) return;
+
             const peaksEnabled = Settings.peaksEnabled();
             const threshEnabled = Settings.magThreshEnabled();
             const threshold = Settings.magThreshold();
 
-            updateSortIndicators();
+            const html = [spacerHtml(first * rowHeight)];
+            for (let i = first; i < first + count; i++) {
+                html.push(rowHtml(rows[i], peaksEnabled, threshEnabled, threshold));
+            }
+            html.push(spacerHtml((rows.length - first - count) * rowHeight));
 
-            const rows = sortedRows().filter((row) => !(usePeriod && row.freq === 0));
-            const body = Dom.$('spectralTableBody');
-            body.innerHTML = '';
+            body.innerHTML = html.join('');
+            drawnFirst = first;
+            drawnCount = count;
 
-            rows.forEach((row) => {
-                const tr = document.createElement('tr');
-                tr.className = 'hover:bg-gray-50 transition-colors';
-                tr.innerHTML = cellsHtml(
-                    row,
-                    peaksEnabled && AppState.peakIndices.has(row.bin),
-                    threshEnabled && row.mag >= threshold
-                );
-                body.appendChild(tr);
-            });
-
-            Dom.text('tableMetaCount', `${rows.length} components listed`);
+            // The first draw sizes itself from a guess; once a real row exists, measure it
+            // and lay out again so the scroll extent matches the data.
+            if (!remeasured && measureRowHeight(body)) {
+                drawWindow(rows, true, true);
+            }
         }
 
-        return { render, sortBy };
+        /**
+         * Redraws for the current rows and control values.
+         *
+         * Skips the draw entirely while the Table tab is hidden. Rebuilding rows nobody
+         * can see is the most expensive thing a slider drag could do, and `activate`
+         * picks the work up when the tab comes forward.
+         */
+        function render() {
+            updateSortIndicators();
+
+            const rows = sortedRows();
+            Dom.text('tableMetaCount', `${rows.length} components listed`);
+
+            if (AppState.rows !== scrolledSource) {
+                scrolledSource = AppState.rows;
+                Dom.$('spectralTableScroll').scrollTop = 0;
+            }
+
+            if (isVisible()) drawWindow(rows, true);
+        }
+
+        /**
+         * Called when the Table tab comes to the front. The container has no height while
+         * hidden, so the window it needs can only be worked out now.
+         */
+        function activate() {
+            render();
+        }
+
+        /** Defers a redraw to the next frame, so a burst of events costs one draw. */
+        function queueDraw(force) {
+            if (force) queuedForce = true;
+            if (drawQueued) return;
+            drawQueued = true;
+            requestAnimationFrame(() => {
+                drawQueued = false;
+                const forced = queuedForce;
+                queuedForce = false;
+                if (isVisible()) drawWindow(sortedRows(), forced);
+            });
+        }
+
+        function init() {
+            Dom.$('spectralTableScroll').addEventListener('scroll', () => queueDraw(false));
+            // A resize changes how many rows the viewport holds, so the window must grow.
+            window.addEventListener('resize', () => queueDraw(true));
+        }
+
+        return { init, render, activate, sortBy };
     })();
     </script>
 
@@ -1465,6 +1624,62 @@
             ];
         }
 
+        // -- Base series cache ----------------------------------------------
+
+        const pointsOf = (bins, values, xOf) => bins.map((i) => ({ x: xOf(i), y: values[i] }));
+
+        /** A component projected onto the unit circle, carrying its label data along. */
+        function polarPointOf(spectrum, i) {
+            const phi = spectrum.phases[i];
+            return {
+                x: Math.cos(phi),
+                y: Math.sin(phi),
+                freq: spectrum.frequencies[i],
+                period: spectrum.periods[i],
+                mag: spectrum.magnitudes[i],
+                phase: phi
+            };
+        }
+
+        /**
+         * The series that depend only on the spectrum and the x-axis unit, cached so
+         * that a threshold or peak change does not reallocate one point object per bin,
+         * four series over, for data that has not changed.
+         *
+         * Analysis caches the spectrum object itself, so identity comparison suffices.
+         */
+        let baseCache = null;
+
+        function baseSeriesFor(spectrum, unit) {
+            if (baseCache && baseCache.spectrum === spectrum && baseCache.unit === unit) {
+                return baseCache;
+            }
+
+            const usePeriod = unit === Settings.UNITS.PERIOD;
+            const xOf = (i) => (usePeriod ? spectrum.periods[i] : spectrum.frequencies[i]);
+
+            // DC has an infinite period, so it drops off a period axis.
+            const activeBins = [];
+            for (let i = 0; i < spectrum.binCount; i++) {
+                if (usePeriod && spectrum.frequencies[i] === 0) continue;
+                activeBins.push(i);
+            }
+
+            baseCache = {
+                spectrum: spectrum,
+                unit: unit,
+                usePeriod: usePeriod,
+                xOf: xOf,
+                activeBins: activeBins,
+                xLabel: usePeriod ? 'Period (s)' : 'Frequency (Hz)',
+                magnitudePoints: pointsOf(activeBins, spectrum.magnitudes, xOf),
+                psdPoints: pointsOf(activeBins, spectrum.psd, xOf),
+                phasePoints: pointsOf(activeBins, spectrum.unwrappedPhases, xOf),
+                polarPoints: activeBins.map((i) => polarPointOf(spectrum, i))
+            };
+            return baseCache;
+        }
+
         // -- Render ---------------------------------------------------------
 
         /**
@@ -1472,38 +1687,27 @@
          * @param {object} model.cfg             Settings snapshot for this pass.
          * @param {object} model.spectrum        FFTLib.analyze result.
          * @param {Set<number>} model.peakIndices
-         * @param {number[]} model.activeBins    Bins plottable on the current x-axis.
          * @param {?number[]} model.peakSignal      Peak reconstruction, or null if off.
          * @param {?number[]} model.thresholdSignal Threshold reconstruction, or null if off.
          */
         function render(model) {
-            const { cfg, spectrum, peakIndices, activeBins, peakSignal, thresholdSignal } = model;
+            const { cfg, spectrum, peakIndices, peakSignal, thresholdSignal } = model;
 
-            const usePeriod = cfg.unit === Settings.UNITS.PERIOD;
-            const xOf = (i) => (usePeriod ? spectrum.periods[i] : spectrum.frequencies[i]);
-            const xLabel = usePeriod ? 'Period (s)' : 'Frequency (Hz)';
+            const base = baseSeriesFor(spectrum, cfg.unit);
+            const { activeBins, xOf, xLabel, magnitudePoints } = base;
 
-            /** DC has an infinite period, so it drops off a period axis. */
-            const isPlottable = (i) => !usePeriod || spectrum.frequencies[i] > 0;
-            const isIncluded = (i) => cfg.magThreshEnabled && spectrum.magnitudes[i] >= cfg.magThreshold;
-
-            const pointsOf = (bins, values) => bins.map((i) => ({ x: xOf(i), y: values[i] }));
-            const polarPointOf = (i) => {
-                const phi = spectrum.phases[i];
-                return {
-                    x: Math.cos(phi),
-                    y: Math.sin(phi),
-                    freq: spectrum.frequencies[i],
-                    period: spectrum.periods[i],
-                    mag: spectrum.magnitudes[i],
-                    phase: phi
-                };
-            };
+            const isPlottable = (i) => !base.usePeriod || spectrum.frequencies[i] > 0;
+            const isIncluded = (i) => spectrum.magnitudes[i] >= cfg.magThreshold;
 
             const peakBins = cfg.peaksEnabled ? [...peakIndices].filter(isPlottable) : [];
-            const includedBins = activeBins.filter(isIncluded);
+            const includedBins = cfg.magThreshEnabled ? activeBins.filter(isIncluded) : [];
 
-            const magnitudePoints = pointsOf(activeBins, spectrum.magnitudes);
+            // A flat line needs only its endpoints. Matching the magnitude series point
+            // for point would allocate one object per bin on every drag.
+            const thresholdLine = magnitudePoints.length === 0 ? [] : [
+                { x: magnitudePoints[0].x, y: cfg.magThreshold },
+                { x: magnitudePoints[magnitudePoints.length - 1].x, y: cfg.magThreshold }
+            ];
 
             // 1. Time domain: original series plus any active reconstruction.
             upsert('time', {
@@ -1560,19 +1764,19 @@
                             order: 2
                         },
                         ...(cfg.peaksEnabled ? [
-                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.magnitudes), COLORS.peak, 5, 1)
+                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.magnitudes, xOf), COLORS.peak, 5, 1)
                         ] : []),
                         ...(cfg.magThreshEnabled ? [
                             {
                                 label: 'Threshold Cutoff',
-                                data: magnitudePoints.map((point) => ({ x: point.x, y: cfg.magThreshold })),
+                                data: thresholdLine,
                                 borderColor: COLORS.thresholdLine,
                                 borderWidth: 1.5,
                                 borderDash: [5, 5],
                                 pointRadius: 0,
                                 order: 3
                             },
-                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.magnitudes), COLORS.threshold, 4, 0)
+                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.magnitudes, xOf), COLORS.threshold, 4, 0)
                         ] : [])
                     ]
                 },
@@ -1586,17 +1790,17 @@
                     datasets: [
                         {
                             label: 'PSD (V²/Hz)',
-                            data: pointsOf(activeBins, spectrum.psd),
+                            data: base.psdPoints,
                             borderColor: COLORS.spectrum,
                             borderWidth: 1.5,
                             pointRadius: 1,
                             order: 2
                         },
                         ...(cfg.peaksEnabled ? [
-                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.psd), COLORS.peak, 5, 1)
+                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.psd, xOf), COLORS.peak, 5, 1)
                         ] : []),
                         ...(cfg.magThreshEnabled ? [
-                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.psd), COLORS.threshold, 4, 0)
+                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.psd, xOf), COLORS.threshold, 4, 0)
                         ] : [])
                     ]
                 },
@@ -1614,17 +1818,17 @@
                     datasets: [
                         {
                             label: 'Unwrapped Phase (rad)',
-                            data: pointsOf(activeBins, spectrum.unwrappedPhases),
+                            data: base.phasePoints,
                             borderColor: COLORS.phase,
                             borderWidth: 1.5,
                             pointRadius: 1,
                             order: 2
                         },
                         ...(cfg.peaksEnabled ? [
-                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.unwrappedPhases), COLORS.peak, 5, 1)
+                            markerDataset(LABEL_PEAKS, pointsOf(peakBins, spectrum.unwrappedPhases, xOf), COLORS.peak, 5, 1)
                         ] : []),
                         ...(cfg.magThreshEnabled ? [
-                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.unwrappedPhases), COLORS.threshold, 4, 0)
+                            markerDataset(LABEL_INCLUDED, pointsOf(includedBins, spectrum.unwrappedPhases, xOf), COLORS.threshold, 4, 0)
                         ] : [])
                     ]
                 },
@@ -1646,12 +1850,12 @@
                             pointRadius: 0,
                             order: 4
                         },
-                        polarMarkerDataset('Phase Components', activeBins.map(polarPointOf), COLORS.phase, 4, 3),
+                        polarMarkerDataset('Phase Components', base.polarPoints, COLORS.phase, 4, 3),
                         ...(cfg.peaksEnabled ? [
-                            polarMarkerDataset(LABEL_PEAKS, peakBins.map(polarPointOf), COLORS.peak, 6, 2)
+                            polarMarkerDataset(LABEL_PEAKS, peakBins.map((i) => polarPointOf(spectrum, i)), COLORS.peak, 6, 2)
                         ] : []),
                         ...(cfg.magThreshEnabled ? [
-                            polarMarkerDataset(LABEL_INCLUDED, includedBins.map(polarPointOf), COLORS.threshold, 6, 1)
+                            polarMarkerDataset(LABEL_INCLUDED, includedBins.map((i) => polarPointOf(spectrum, i)), COLORS.threshold, 6, 1)
                         ] : [])
                     ]
                 },
@@ -1924,6 +2128,8 @@
             Dom.setHidden('viewCharts', !showCharts);
             Dom.$('viewCharts').classList.toggle('grid', showCharts);
             Dom.setHidden('viewTable', showCharts);
+            // The table holds off while hidden, so draw it now it has a size to fill.
+            if (!showCharts) TableView.activate();
         }
 
         const toggleExportDropdown = () => Dom.$('exportDropdownMenu').classList.toggle('hidden');
@@ -2019,6 +2225,7 @@
     function confirmColumnSelection() { DataImport.confirmColumnSelection(); }
 
     DataImport.init();
+    TableView.init();
     Controls.init();
     </script>
 
