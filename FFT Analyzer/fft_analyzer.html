@@ -823,6 +823,73 @@
             return components;
         }
 
+        /** Exact angle of `component` at time stamp `t`, measured from `origin`. */
+        const angleAt = (component, t, origin) =>
+            2 * Math.PI * component.freq * (t - origin) + component.phase;
+
+        /**
+         * Whether time stamps advance by a constant step. Reconstruction takes a much
+         * faster path when they do.
+         *
+         * @param {ArrayLike<number>} times
+         * @param {number} [tolerance=1e-6] Allowed wobble, as a fraction of the step.
+         */
+        function isUniformlySpaced(times, tolerance) {
+            const n = times.length;
+            if (n < 3) return true;
+
+            const step = times[1] - times[0];
+            if (!(step > 0)) return false;
+
+            const relative = tolerance !== undefined ? tolerance : 1e-6;
+            for (let i = 2; i < n; i++) {
+                // The slack covers a small relative wobble in the step and, for large
+                // time stamps, the representation error of the stamps themselves.
+                const slack = Math.max(step * relative, Math.abs(times[i]) * Number.EPSILON * 4);
+                if (Math.abs((times[i] - times[i - 1]) - step) > slack) return false;
+            }
+            return true;
+        }
+
+        /**
+         * How many samples a rotated phasor runs before being reseeded from an exact
+         * angle. Bounds rotation drift at a negligible cost - two trig calls per
+         * thousand-odd samples instead of one per sample.
+         */
+        const PHASOR_RESEED_INTERVAL = 1024;
+
+        /**
+         * Accumulates one sinusoid into `out` across a uniform time grid, advancing its
+         * phasor by a fixed rotation per sample rather than calling `Math.cos` for every
+         * one. Same values as the direct evaluation to within rounding.
+         */
+        function addRotatedComponent(out, times, component, origin) {
+            const n = out.length;
+            const dt = n > 1 ? times[1] - times[0] : 0;
+            const delta = 2 * Math.PI * component.freq * dt;
+            const stepCos = Math.cos(delta);
+            const stepSin = Math.sin(delta);
+
+            let cos = 0;
+            let sin = 0;
+            let untilReseed = 0;
+
+            for (let i = 0; i < n; i++) {
+                if (untilReseed === 0) {
+                    const angle = angleAt(component, times[i], origin);
+                    cos = Math.cos(angle);
+                    sin = Math.sin(angle);
+                    untilReseed = PHASOR_RESEED_INTERVAL;
+                } else {
+                    const rotatedCos = cos * stepCos - sin * stepSin;
+                    sin = cos * stepSin + sin * stepCos;
+                    cos = rotatedCos;
+                }
+                untilReseed--;
+                out[i] += component.mag * cos;
+            }
+        }
+
         /**
          * Sums the given components back into the time domain.
          * DC contributes its magnitude directly rather than as a cosine.
@@ -832,6 +899,10 @@
          * stamps do not start at zero, or the whole reconstruction comes out phase
          * shifted by 2*pi*f*timeOrigin.
          *
+         * On a uniform time grid each component is swept with a rotating phasor, which
+         * costs a few multiplies per sample instead of a trig call; a non-uniform grid
+         * falls back to evaluating the cosine directly.
+         *
          * @param {ArrayLike<number>} times
          * @param {Array<{freq: number, mag: number, phase: number}>} components
          * @param {number} [timeOrigin=0] Time stamp the components' phase refers to.
@@ -839,19 +910,28 @@
          */
         function reconstruct(times, components, timeOrigin) {
             const origin = timeOrigin !== undefined ? timeOrigin : 0;
-            return Array.prototype.map.call(times, (t) => {
-                const elapsed = t - origin;
-                let sum = 0;
-                for (let k = 0; k < components.length; k++) {
-                    const component = components[k];
-                    if (component.freq === 0) {
-                        sum += component.mag;
-                    } else {
-                        sum += component.mag * Math.cos(2 * Math.PI * component.freq * elapsed + component.phase);
+            const n = times.length;
+            const out = new Array(n).fill(0);
+            if (components.length === 0) return out;
+
+            const uniform = isUniformlySpaced(times);
+
+            // Component-outer so each sinusoid can be swept incrementally. Every output
+            // element still accumulates its components in the original order.
+            for (let k = 0; k < components.length; k++) {
+                const component = components[k];
+
+                if (component.freq === 0) {
+                    for (let i = 0; i < n; i++) out[i] += component.mag;
+                } else if (uniform) {
+                    addRotatedComponent(out, times, component, origin);
+                } else {
+                    for (let i = 0; i < n; i++) {
+                        out[i] += component.mag * Math.cos(angleAt(component, times[i], origin));
                     }
                 }
-                return sum;
-            });
+            }
+            return out;
         }
 
         return {
@@ -860,7 +940,7 @@
             fft, applyWindow, unwrapPhase,
             sliceFrame, buildFrames, buildSeries,
             frameSpectrum, analyze,
-            maxOf, magnitudeContributions,
+            maxOf, magnitudeContributions, isUniformlySpaced,
             findPeaks, binsAboveMagnitude, componentsAt, reconstruct
         };
     })();
