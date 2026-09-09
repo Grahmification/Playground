@@ -18,6 +18,17 @@
            their bottom rule as an inset shadow instead. The tables keep
            border-collapse, which the row dividers depend on. */
         thead.sticky th { box-shadow: inset 0 -1px 0 #e5e7eb; }
+
+        /* The panel slides in whenever it is shown. Keyed off :not(.hidden) rather than
+           a transition, because it moves between display:none and a flex item. */
+        @keyframes panel-in {
+            from { transform: translateX(100%); opacity: 0; }
+            to   { transform: translateX(0);    opacity: 1; }
+        }
+        #sidePanel:not(.hidden) { animation: panel-in 200ms ease-out; }
+        @media (prefers-reduced-motion: reduce) {
+            #sidePanel:not(.hidden) { animation: none; }
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col font-sans m-0 p-0 overflow-x-hidden">
@@ -76,6 +87,15 @@
                     </button>
                 </div>
             </div>
+
+            <!-- Compact Table Panel Expander -->
+            <button type="button" id="panelToggleBtn" onclick="toggleSidePanel()" aria-expanded="false" aria-controls="sidePanel" title="Show the spectral table beside the plots" class="flex items-center justify-center w-7 h-7 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-all cursor-pointer">
+                <svg class="w-4 h-4" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+                    <path d="M14 5v14"></path>
+                </svg>
+                <span class="sr-only">Spectral table panel</span>
+            </button>
 
             <!-- Tab Switcher -->
             <div role="tablist" aria-label="Analysis view" class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
@@ -207,7 +227,10 @@
 
     <!-- Main Content Area. `isolate` keeps Plotly's modebar, which carries a z-index
          of 1001 of its own, from riding over the top bar as the page scrolls. -->
-    <main class="flex-1 min-w-0 p-3 md:p-4 flex flex-col gap-4 w-full isolate">
+    <!-- No overflow clipping here: it would make main a scroll container and strand
+         the side panel's sticky positioning. The body clips the slide-in horizontally. -->
+    <main class="flex-1 min-w-0 p-3 md:p-4 flex gap-4 w-full isolate">
+    <div class="flex-1 min-w-0 flex flex-col gap-4">
         <!-- Tab 1: Charts View -->
         <div id="viewCharts" role="tabpanel" aria-labelledby="tabChartsBtn" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
@@ -285,6 +308,47 @@
                 </table>
             </div>
         </div>
+    </div><!-- /content column -->
+
+        <!-- Compact spectral table. On a wide screen it takes the rightmost chart
+             column and the plots stack into one; below that there is no second column
+             to take over, so it slides in over them as a drawer instead.
+
+             Its height is pinned to the viewport rather than left to its content. The
+             windowed table is as tall as the whole spectrum - tens of thousands of
+             pixels - and as a flex item that height would set main's, which the charts
+             grid then stretches its rows to fill. Sticky, so it stays put while the
+             column of plots beside it scrolls. -->
+        <aside id="sidePanel" class="hidden fixed z-30 top-14 right-3 bottom-3 w-[calc(100%-1.5rem)] max-w-sm xl:sticky xl:top-16 xl:right-auto xl:bottom-auto xl:w-1/2 xl:max-w-none xl:shrink-0 xl:self-start xl:h-[calc(100vh-5rem)] bg-white rounded-lg border border-gray-200 shadow-xl xl:shadow-sm flex flex-col overflow-hidden">
+            <div class="px-3 py-2 border-b border-gray-200 bg-gray-50 flex justify-between items-center gap-2 shrink-0">
+                <h3 class="text-xs font-bold text-gray-600">Spectral Components</h3>
+                <div class="flex items-center gap-2">
+                    <span id="panelMetaCount" class="text-[10px] text-gray-500 whitespace-nowrap">0 components</span>
+                    <button type="button" onclick="toggleSidePanel()" title="Hide panel" class="flex items-center justify-center w-5 h-5 rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 transition-all cursor-pointer">
+                        <svg class="w-3.5 h-3.5" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                        <span class="sr-only">Hide spectral table panel</span>
+                    </button>
+                </div>
+            </div>
+            <div id="panelTableScroll" class="overflow-auto flex-1 min-h-0">
+                <table class="w-full text-left border-collapse text-[10px]">
+                    <thead class="bg-gray-100 text-gray-600 text-[10px] font-semibold sticky top-0 select-none">
+                        <tr>
+                            <th scope="col" class="py-1 px-2 text-center">In</th>
+                            <th scope="col" class="p-0"><button type="button" data-sort="bin" class="w-full text-right py-1 px-2 hover:bg-gray-200 transition-colors cursor-pointer">Bin<span id="panelSort-bin" aria-hidden="true" class="text-gray-400"></span></button></th>
+                            <th scope="col" class="p-0"><button type="button" data-sort="freq" class="w-full text-right py-1 px-2 hover:bg-gray-200 transition-colors cursor-pointer">Freq (Hz)<span id="panelSort-freq" aria-hidden="true" class="text-gray-400"></span></button></th>
+                            <th scope="col" class="p-0"><button type="button" data-sort="period" class="w-full text-right py-1 px-2 hover:bg-gray-200 transition-colors cursor-pointer">Period (s)<span id="panelSort-period" aria-hidden="true" class="text-gray-400"></span></button></th>
+                            <th scope="col" class="p-0"><button type="button" data-sort="mag" class="w-full text-right py-1 px-2 hover:bg-gray-200 transition-colors cursor-pointer">Mag<span id="panelSort-mag" aria-hidden="true" class="text-gray-400"></span></button></th>
+                            <th scope="col" class="p-0"><button type="button" data-sort="contrib" class="w-full text-right py-1 px-2 hover:bg-gray-200 transition-colors cursor-pointer">%<span id="panelSort-contrib" aria-hidden="true" class="text-gray-400"></span></button></th>
+                            <th scope="col" class="p-0"><button type="button" data-sort="phase" class="w-full text-right py-1 px-2 hover:bg-gray-200 transition-colors cursor-pointer">Phase<span id="panelSort-phase" aria-hidden="true" class="text-gray-400"></span></button></th>
+                        </tr>
+                    </thead>
+                    <tbody id="panelTableBody" class="divide-y divide-gray-100 text-gray-700"></tbody>
+                </table>
+            </div>
+        </aside>
     </main>
 
     </div><!-- /sidebar + content row -->
@@ -1294,6 +1358,7 @@
 
             StatsView.render(spectrum, dataset);
             TableView.render();
+            PanelView.render();
             ChartsView.render({
                 cfg: cfg,
                 spectrum: spectrum,
@@ -1308,6 +1373,150 @@
     </script>
 
     <!-- ==================================================================== -->
+    <!-- VirtualTable - a windowed tbody, shared by the two spectral tables.   -->
+    <!-- ==================================================================== -->
+    <script>
+    window.VirtualTable = (function () {
+        'use strict';
+
+        /** Rows drawn beyond the viewport on each side, to cover fast scrolling. */
+        const OVERSCAN_ROWS = 8;
+
+        /**
+         * Puts only the rows around the current scroll offset in the DOM, padded above
+         * and below by spacer rows so the scrollbar still spans the whole dataset. Cost
+         * is the size of the viewport, not the size of the spectrum.
+         *
+         * @param {object} spec
+         * @param {string} spec.scrollId  Scrolling container.
+         * @param {string} spec.bodyId    The tbody to fill.
+         * @param {number} spec.columns   Column count, for the spacers' colspan.
+         * @param {number} spec.rowHeight Height assumed until a real row can be measured.
+         * @param {function(): object[]} spec.rows     The rows to list, in order.
+         * @param {function(): *} [spec.context]       Read once per draw and handed to
+         *   every `rowHtml` call, so control values are not re-read row by row.
+         * @param {function(object, *): string} spec.rowHtml One row's markup.
+         * @param {function(): boolean} spec.isVisible False while nothing is on screen.
+         * @param {string} spec.placeholderHtml Shown in place of an empty dataset.
+         */
+        function create(spec) {
+            /** Measured height of one row, which sizes the virtual scroll extent. */
+            let rowHeight = spec.rowHeight;
+            /** Window currently in the DOM, so scrolling can skip redundant redraws. */
+            let drawnFirst = -1;
+            let drawnCount = 0;
+            /** Coalesces scroll and resize redraws onto one animation frame. */
+            let drawQueued = false;
+            let queuedForce = false;
+
+            /**
+             * Keeps the scrollbar the size of the whole dataset without rendering it.
+             * Borders and padding are zeroed inline, which beats the tbody's divide-y
+             * utility, so the spacers leave no stray hairline at either end.
+             */
+            const spacerHtml = (height) =>
+                `<tr aria-hidden="true" style="height:${height}px;border:0">` +
+                `<td colspan="${spec.columns}" style="height:${height}px;padding:0;border:0;line-height:0;font-size:0"></td></tr>`;
+
+            /**
+             * Measures the row pitch, not a single row's box: with collapsed borders the
+             * two differ by up to a pixel, and it is the pitch the spacer heights have to
+             * match or the scroll extent drifts a few percent over tens of thousands of
+             * rows.
+             *
+             * @returns {boolean} whether this changed the assumed row height.
+             */
+            function measureRowHeight(body) {
+                const first = body.children[1];   // children[0] is the leading spacer
+                if (!first) return false;
+
+                const next = body.children[2];
+                const measured = (next && next !== body.lastElementChild)
+                    ? next.getBoundingClientRect().top - first.getBoundingClientRect().top
+                    : first.getBoundingClientRect().height;
+
+                if (measured > 0 && Math.abs(measured - rowHeight) > 0.5) {
+                    rowHeight = measured;
+                    return true;
+                }
+                return false;
+            }
+
+            /**
+             * @param {boolean} force Redraw even if the same window is already up, which
+             *   the peak and threshold dots need since they change without it moving.
+             * @param {boolean} [remeasured] Internal, to bound the re-layout to one pass.
+             */
+            function draw(force, remeasured) {
+                if (!spec.isVisible()) return;
+
+                const scroller = Dom.$(spec.scrollId);
+                const body = Dom.$(spec.bodyId);
+                const rows = spec.rows();
+
+                if (rows.length === 0) {
+                    body.innerHTML = spec.placeholderHtml;
+                    drawnFirst = -1;
+                    drawnCount = 0;
+                    return;
+                }
+
+                const span = Math.ceil(scroller.clientHeight / rowHeight) + OVERSCAN_ROWS * 2;
+                let first = Math.max(0, Math.floor(scroller.scrollTop / rowHeight) - OVERSCAN_ROWS);
+                // A shorter dataset can leave the offset past the end until the browser
+                // clamps it, which would otherwise draw an empty window.
+                first = Math.min(first, Math.max(0, rows.length - 1));
+                const count = Math.min(rows.length - first, span);
+
+                if (!force && first === drawnFirst && count === drawnCount) return;
+
+                const context = spec.context ? spec.context() : undefined;
+                const html = [spacerHtml(first * rowHeight)];
+                for (let i = first; i < first + count; i++) {
+                    html.push(spec.rowHtml(rows[i], context));
+                }
+                html.push(spacerHtml((rows.length - first - count) * rowHeight));
+
+                body.innerHTML = html.join('');
+                drawnFirst = first;
+                drawnCount = count;
+
+                // The first draw sizes itself from a guess; once a real row exists,
+                // measure it and lay out again so the scroll extent matches the data.
+                if (!remeasured && measureRowHeight(body)) {
+                    draw(true, true);
+                }
+            }
+
+            /** Defers a redraw to the next frame, so a burst of events costs one draw. */
+            function queueDraw(force) {
+                if (force) queuedForce = true;
+                if (drawQueued) return;
+                drawQueued = true;
+                requestAnimationFrame(() => {
+                    drawQueued = false;
+                    const forced = queuedForce;
+                    queuedForce = false;
+                    draw(forced);
+                });
+            }
+
+            const resetScroll = () => { Dom.$(spec.scrollId).scrollTop = 0; };
+
+            function init() {
+                Dom.$(spec.scrollId).addEventListener('scroll', () => queueDraw(false));
+                // A resize changes how many rows fit, so the window has to grow with it.
+                window.addEventListener('resize', () => queueDraw(true));
+            }
+
+            return { init, draw, queueDraw, resetScroll };
+        }
+
+        return { create };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
     <!-- TableView - the sortable spectral components table.                   -->
     <!-- ==================================================================== -->
     <script>
@@ -1317,8 +1526,6 @@
         const SORT_KEYS = ['bin', 'freq', 'period', 'mag', 'contrib', 'phase', 'unwrappedPhase'];
         const DOT_OFF = 'bg-gray-200';
 
-        /** Rows drawn beyond the viewport on each side, to cover fast scrolling. */
-        const OVERSCAN_ROWS = 8;
         /** Row height assumed until a rendered row can be measured. */
         const FALLBACK_ROW_HEIGHT = 33;
 
@@ -1336,16 +1543,8 @@
          */
         let sortCache = null;
 
-        /** Measured height of one row, which sizes the virtual scroll extent. */
-        let rowHeight = FALLBACK_ROW_HEIGHT;
-        /** Window currently in the DOM, so scrolling can skip redundant redraws. */
-        let drawnFirst = -1;
-        let drawnCount = 0;
         /** Row set the current scroll offset belongs to. */
         let scrolledSource = null;
-        /** Coalesces scroll and resize redraws onto one animation frame. */
-        let drawQueued = false;
-        let queuedForce = false;
 
         const isVisible = () => !Dom.$('viewTable').classList.contains('hidden');
 
@@ -1441,97 +1640,33 @@
                 `;
         }
 
-        /**
-         * Keeps the scrollbar the size of the whole dataset without rendering it. Borders
-         * and padding are zeroed inline, which beats the tbody's divide-y utility, so the
-         * spacers leave no stray hairline at either end of the window.
-         */
-        const spacerHtml = (height) =>
-            `<tr aria-hidden="true" style="height:${height}px;border:0">` +
-            `<td colspan="8" style="height:${height}px;padding:0;border:0;line-height:0;font-size:0"></td></tr>`;
+        /** The control values every row in one draw is marked against. */
+        const drawContext = () => ({
+            peaksEnabled: Settings.peaksEnabled(),
+            threshEnabled: Settings.magThreshEnabled(),
+            threshold: Settings.magThreshold()
+        });
 
-        function rowHtml(row, peaksEnabled, threshEnabled, threshold) {
+        function rowHtml(row, ctx) {
             const cells = cellsHtml(
                 row,
-                peaksEnabled && AppState.peakIndices.has(row.bin),
-                threshEnabled && row.mag >= threshold
+                ctx.peaksEnabled && AppState.peakIndices.has(row.bin),
+                ctx.threshEnabled && row.mag >= ctx.threshold
             );
             return `<tr class="hover:bg-gray-50 transition-colors">${cells}</tr>`;
         }
 
-        /**
-         * Measures the row pitch, not a single row's box: with collapsed borders the two
-         * differ by up to a pixel, and it is the pitch the spacer heights have to match
-         * or the scroll extent drifts a few percent over tens of thousands of rows.
-         *
-         * @returns {boolean} whether this changed the assumed row height.
-         */
-        function measureRowHeight(body) {
-            const first = body.children[1];   // children[0] is the leading spacer
-            if (!first) return false;
-
-            const next = body.children[2];
-            const measured = (next && next !== body.lastElementChild)
-                ? next.getBoundingClientRect().top - first.getBoundingClientRect().top
-                : first.getBoundingClientRect().height;
-
-            if (measured > 0 && Math.abs(measured - rowHeight) > 0.5) {
-                rowHeight = measured;
-                return true;
-            }
-            return false;
-        }
-
-        /**
-         * Renders only the slice of `rows` around the current scroll offset, padded above
-         * and below by spacer rows so the scrollbar still spans the whole dataset. Cost is
-         * the size of the viewport, not the size of the spectrum.
-         *
-         * @param {object[]} rows
-         * @param {boolean} force Redraw even if the same window is already up, which the
-         *   peak and threshold dots need since they change without the window moving.
-         * @param {boolean} [remeasured] Internal, to bound the re-layout to one extra pass.
-         */
-        function drawWindow(rows, force, remeasured) {
-            const scroller = Dom.$('spectralTableScroll');
-            const body = Dom.$('spectralTableBody');
-
-            if (rows.length === 0) {
-                body.innerHTML = PLACEHOLDER_HTML;
-                drawnFirst = -1;
-                drawnCount = 0;
-                return;
-            }
-
-            const span = Math.ceil(scroller.clientHeight / rowHeight) + OVERSCAN_ROWS * 2;
-            let first = Math.max(0, Math.floor(scroller.scrollTop / rowHeight) - OVERSCAN_ROWS);
-            // A shorter dataset can leave the offset past the end until the browser
-            // clamps it, which would otherwise draw an empty window.
-            first = Math.min(first, Math.max(0, rows.length - 1));
-            const count = Math.min(rows.length - first, span);
-
-            if (!force && first === drawnFirst && count === drawnCount) return;
-
-            const peaksEnabled = Settings.peaksEnabled();
-            const threshEnabled = Settings.magThreshEnabled();
-            const threshold = Settings.magThreshold();
-
-            const html = [spacerHtml(first * rowHeight)];
-            for (let i = first; i < first + count; i++) {
-                html.push(rowHtml(rows[i], peaksEnabled, threshEnabled, threshold));
-            }
-            html.push(spacerHtml((rows.length - first - count) * rowHeight));
-
-            body.innerHTML = html.join('');
-            drawnFirst = first;
-            drawnCount = count;
-
-            // The first draw sizes itself from a guess; once a real row exists, measure it
-            // and lay out again so the scroll extent matches the data.
-            if (!remeasured && measureRowHeight(body)) {
-                drawWindow(rows, true, true);
-            }
-        }
+        const list = VirtualTable.create({
+            scrollId: 'spectralTableScroll',
+            bodyId: 'spectralTableBody',
+            columns: 8,
+            rowHeight: FALLBACK_ROW_HEIGHT,
+            rows: sortedRows,
+            context: drawContext,
+            rowHtml: rowHtml,
+            isVisible: isVisible,
+            placeholderHtml: PLACEHOLDER_HTML
+        });
 
         /**
          * Redraws for the current rows and control values.
@@ -1548,10 +1683,10 @@
 
             if (AppState.rows !== scrolledSource) {
                 scrolledSource = AppState.rows;
-                Dom.$('spectralTableScroll').scrollTop = 0;
+                list.resetScroll();
             }
 
-            if (isVisible()) drawWindow(rows, true);
+            list.draw(true);
         }
 
         /**
@@ -1562,26 +1697,124 @@
             render();
         }
 
-        /** Defers a redraw to the next frame, so a burst of events costs one draw. */
-        function queueDraw(force) {
-            if (force) queuedForce = true;
-            if (drawQueued) return;
-            drawQueued = true;
-            requestAnimationFrame(() => {
-                drawQueued = false;
-                const forced = queuedForce;
-                queuedForce = false;
-                if (isVisible()) drawWindow(sortedRows(), forced);
+        return { init: list.init, render, activate, sortBy, sortedRows };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
+    <!-- PanelView - the compact spectral table that sits beside the plots.    -->
+    <!-- ==================================================================== -->
+    <script>
+    window.PanelView = (function () {
+        'use strict';
+
+        /** Row height assumed until a rendered row can be measured. */
+        const FALLBACK_ROW_HEIGHT = 21;
+
+        const PLACEHOLDER_HTML =
+            '<tr><td colspan="7" class="py-6 text-center text-gray-400">No data loaded yet.</td></tr>';
+
+        const dot = (colorClass, title) =>
+            `<span class="inline-block w-2 h-2 ${colorClass} rounded-full" title="${title}"></span>`;
+
+        const isOpen = () => !Dom.$('sidePanel').classList.contains('hidden');
+
+        /** The columns that carry a sort, in the order they are laid out. */
+        const SORT_KEYS = ['bin', 'freq', 'period', 'mag', 'contrib', 'phase'];
+
+        /** The control values every row in one draw is read against. */
+        const drawContext = () => ({
+            peaksEnabled: Settings.peaksEnabled(),
+            threshEnabled: Settings.magThreshEnabled(),
+            threshold: Settings.magThreshold()
+        });
+
+        function rowHtml(row, ctx) {
+            const peakDot = ctx.peaksEnabled && AppState.peakIndices.has(row.bin)
+                ? dot('bg-yellow-500', 'Included in Peak Detection')
+                : dot('bg-gray-200', 'Not in Peak Detection');
+            const threshDot = ctx.threshEnabled && row.mag >= ctx.threshold
+                ? dot('bg-red-600', 'Included in Mag Threshold')
+                : dot('bg-gray-200', 'Not in Mag Threshold');
+
+            // DC survives on a frequency axis, and its period is infinite.
+            const period = row.period === Infinity ? '∞' : row.period.toFixed(4);
+
+            return `<tr class="hover:bg-gray-50 transition-colors">
+                    <td class="py-1 px-2 text-center space-x-0.5 whitespace-nowrap">${peakDot}${threshDot}</td>
+                    <td class="py-1 px-2 font-mono text-gray-500 text-right">${row.bin}</td>
+                    <td class="py-1 px-2 font-mono text-blue-600 font-semibold text-right">${row.freq.toFixed(3)}</td>
+                    <td class="py-1 px-2 font-mono text-right">${period}</td>
+                    <td class="py-1 px-2 font-mono font-bold text-right">${row.mag.toFixed(4)}</td>
+                    <td class="py-1 px-2 font-mono text-emerald-600 text-right">${row.contrib.toFixed(2)}</td>
+                    <td class="py-1 px-2 font-mono text-gray-600 text-right">${row.phase.toFixed(3)}</td>
+                </tr>`;
+        }
+
+        // The same rows the full table lists, in the same order - it owns the sort.
+        const list = VirtualTable.create({
+            scrollId: 'panelTableScroll',
+            bodyId: 'panelTableBody',
+            columns: 7,
+            rowHeight: FALLBACK_ROW_HEIGHT,
+            rows: () => TableView.sortedRows(),
+            context: drawContext,
+            rowHtml: rowHtml,
+            isVisible: isOpen,
+            placeholderHtml: PLACEHOLDER_HTML
+        });
+
+        /** The sort arrow, on whichever column carries the order. */
+        function updateHeaders() {
+            SORT_KEYS.forEach((key) => {
+                const active = AppState.sortColumn === key;
+                Dom.text(`panelSort-${key}`,
+                    !active ? '' : (AppState.sortAscending ? ' ▲' : ' ▼'));
             });
         }
 
-        function init() {
-            Dom.$('spectralTableScroll').addEventListener('scroll', () => queueDraw(false));
-            // A resize changes how many rows the viewport holds, so the window must grow.
-            window.addEventListener('resize', () => queueDraw(true));
+        /** Skipped while closed, so a slider drag costs nothing for a hidden panel. */
+        function render() {
+            if (!isOpen()) return;
+            updateHeaders();
+            Dom.text('panelMetaCount', `${TableView.sortedRows().length} components`);
+            list.draw(true);
         }
 
-        return { init, render, activate, sortBy };
+        /** Picks up an order set elsewhere - by these headers or by the full table. */
+        function refresh() {
+            if (!isOpen()) return;
+            list.resetScroll();
+            render();
+        }
+
+        function toggle() {
+            const open = !isOpen();
+            Dom.setHidden('sidePanel', !open);
+            Dom.$('panelToggleBtn').setAttribute('aria-expanded', String(open));
+            Dom.setClass('panelToggleBtn', 'bg-blue-50', open);
+            Dom.setClass('panelToggleBtn', 'text-blue-600', open);
+
+            // On a wide screen the plots give up a column to the panel, so both the grid
+            // and Plotly have to be told. Narrower than that the panel floats over them
+            // and nothing moves, but the resize is harmless either way.
+            Dom.$('viewCharts').classList.toggle('xl:grid-cols-2', !open);
+            ChartsView.resize();
+
+            render();
+        }
+
+        function init() {
+            list.init();
+            document.querySelectorAll('#sidePanel [data-sort]').forEach((button) => {
+                button.addEventListener('click', () => {
+                    TableView.sortBy(button.dataset.sort);
+                    refresh();
+                });
+            });
+        }
+
+        return { init, render, refresh, toggle };
     })();
     </script>
 
@@ -2121,15 +2354,22 @@
          * container, which has no dimensions while hidden, so both the deferred draw and
          * a resize have to happen here.
          */
+        /**
+         * Refits every plot to its container. Plotly follows the window on its own, but
+         * not a container that changed width under it - which is what opening the side
+         * panel does.
+         */
+        const resize = () => Object.keys(charts).forEach((key) => Plotly.Plots.resize(charts[key]));
+
         function activate() {
             if (pendingModel) {
                 draw(pendingModel);
                 pendingModel = null;
             }
-            Object.keys(charts).forEach((key) => Plotly.Plots.resize(charts[key]));
+            resize();
         }
 
-        return { render, activate };
+        return { render, activate, resize };
     })();
     </script>
 
@@ -2676,7 +2916,9 @@
     function toggleExportDropdown() { Controls.toggleExportDropdown(); }
     function hideExportDropdown() { Controls.hideExportDropdown(); }
     function switchTab(tabName) { Controls.switchTab(tabName); }
-    function sortTable(columnKey) { TableView.sortBy(columnKey); }
+    function toggleSidePanel() { PanelView.toggle(); }
+    // The panel lists the full table's rows, so it follows the order set over there.
+    function sortTable(columnKey) { TableView.sortBy(columnKey); PanelView.refresh(); }
     function exportSpectralCsv() { CsvExport.exportAll(); }
     function exportSubsetCsv(type) { CsvExport.exportSubset(type); }
     function closeColumnModal() { DataImport.closeColumnModal(); }
@@ -2684,6 +2926,7 @@
 
     DataImport.init();
     TableView.init();
+    PanelView.init();
     StatsView.init();
     Controls.init();
     </script>
