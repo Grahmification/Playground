@@ -323,6 +323,7 @@
             <div class="px-3 py-2 border-b border-gray-200 bg-gray-50 flex justify-between items-center gap-2 shrink-0">
                 <h3 class="text-xs font-bold text-gray-600">Spectral Components</h3>
                 <div class="flex items-center gap-2">
+                    <button type="button" id="panelClearSelection" onclick="clearRowSelection()" class="hidden text-[10px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded px-1.5 py-0.5 whitespace-nowrap transition-all cursor-pointer">Clear <span id="panelSelectedCount">0</span></button>
                     <span id="panelMetaCount" class="text-[10px] text-gray-500 whitespace-nowrap">0 components</span>
                     <button type="button" onclick="toggleSidePanel()" title="Hide panel" class="flex items-center justify-center w-5 h-5 rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700 transition-all cursor-pointer">
                         <svg class="w-3.5 h-3.5" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -1158,6 +1159,11 @@
         rows: [],
         /** Bin indices currently counted as peaks. */
         peakIndices: new Set(),
+        /**
+         * Bin indices picked out by hand in the compact table, highlighted on the plots.
+         * Held by bin rather than by row, so the choice survives a re-sort.
+         */
+        selectedBins: new Set(),
         sortColumn: 'bin',
         sortAscending: true
     };
@@ -1364,7 +1370,11 @@
                 spectrum: spectrum,
                 peakIndices: AppState.peakIndices,
                 peakSignal: cfg.peaksEnabled ? rebuildSignal(spectrum, AppState.peakIndices) : null,
-                thresholdSignal: cfg.magThreshEnabled ? rebuildSignal(spectrum, thresholdBins) : null
+                thresholdSignal: cfg.magThreshEnabled ? rebuildSignal(spectrum, thresholdBins) : null,
+                selectedBins: AppState.selectedBins,
+                selectedSignal: AppState.selectedBins.size > 0
+                    ? rebuildSignal(spectrum, AppState.selectedBins)
+                    : null
             });
         }
 
@@ -1395,7 +1405,8 @@
          * @param {function(): object[]} spec.rows     The rows to list, in order.
          * @param {function(): *} [spec.context]       Read once per draw and handed to
          *   every `rowHtml` call, so control values are not re-read row by row.
-         * @param {function(object, *): string} spec.rowHtml One row's markup.
+         * @param {function(object, *, number): string} spec.rowHtml One row's markup,
+         *   given the row, that context, and the row's index in the full ordering.
          * @param {function(): boolean} spec.isVisible False while nothing is on screen.
          * @param {string} spec.placeholderHtml Shown in place of an empty dataset.
          */
@@ -1473,7 +1484,7 @@
                 const context = spec.context ? spec.context() : undefined;
                 const html = [spacerHtml(first * rowHeight)];
                 for (let i = first; i < first + count; i++) {
-                    html.push(spec.rowHtml(rows[i], context));
+                    html.push(spec.rowHtml(rows[i], context, i));
                 }
                 html.push(spacerHtml((rows.length - first - count) * rowHeight));
 
@@ -1729,7 +1740,7 @@
             threshold: Settings.magThreshold()
         });
 
-        function rowHtml(row, ctx) {
+        function rowHtml(row, ctx, index) {
             const peakDot = ctx.peaksEnabled && AppState.peakIndices.has(row.bin)
                 ? dot('bg-yellow-500', 'Included in Peak Detection')
                 : dot('bg-gray-200', 'Not in Peak Detection');
@@ -1740,7 +1751,14 @@
             // DC survives on a frequency axis, and its period is infinite.
             const period = row.period === Infinity ? '∞' : row.period.toFixed(4);
 
-            return `<tr class="hover:bg-gray-50 transition-colors">
+            // The index rides along so a shift-click can take the range between two
+            // rows as they are currently ordered.
+            const selected = AppState.selectedBins.has(row.bin);
+            const rowClass = selected
+                ? 'bg-slate-200 hover:bg-slate-200'
+                : 'hover:bg-gray-50';
+
+            return `<tr data-bin="${row.bin}" data-index="${index}" aria-selected="${selected}" class="cursor-pointer transition-colors ${rowClass}">
                     <td class="py-1 px-2 text-center space-x-0.5 whitespace-nowrap">${peakDot}${threshDot}</td>
                     <td class="py-1 px-2 font-mono text-gray-500 text-right">${row.bin}</td>
                     <td class="py-1 px-2 font-mono text-blue-600 font-semibold text-right">${row.freq.toFixed(3)}</td>
@@ -1778,14 +1796,63 @@
             if (!isOpen()) return;
             updateHeaders();
             Dom.text('panelMetaCount', `${TableView.sortedRows().length} components`);
+
+            const selectedCount = AppState.selectedBins.size;
+            Dom.setHidden('panelClearSelection', selectedCount === 0);
+            Dom.text('panelSelectedCount', selectedCount);
+
             list.draw(true);
         }
 
         /** Picks up an order set elsewhere - by these headers or by the full table. */
         function refresh() {
             if (!isOpen()) return;
+            // Row positions have moved, so the range a shift-click would take is no
+            // longer the one the user last saw.
+            anchorIndex = null;
             list.resetScroll();
             render();
+        }
+
+        // -- Selection ------------------------------------------------------
+
+        /** Row a shift-click measures its range from, as an index into the sort. */
+        let anchorIndex = null;
+
+        /**
+         * Applies one click to the selection, in the usual list conventions: ctrl or cmd
+         * adds and removes single rows, shift takes the run between the anchor and here,
+         * and a plain click drops back to this row alone - or clears, if it was already
+         * the only one.
+         */
+        function selectRow(bin, index, event) {
+            const selected = AppState.selectedBins;
+
+            if (event.shiftKey && anchorIndex !== null) {
+                const rows = TableView.sortedRows();
+                const from = Math.min(anchorIndex, index);
+                const to = Math.max(anchorIndex, index);
+                selected.clear();
+                for (let i = from; i <= to && i < rows.length; i++) selected.add(rows[i].bin);
+            } else if (event.ctrlKey || event.metaKey) {
+                if (selected.has(bin)) selected.delete(bin); else selected.add(bin);
+                anchorIndex = index;
+            } else {
+                const onlyThis = selected.size === 1 && selected.has(bin);
+                selected.clear();
+                if (!onlyThis) selected.add(bin);
+                anchorIndex = onlyThis ? null : index;
+            }
+
+            // Through Analysis so the plots pick the selection up with everything else.
+            Analysis.run();
+        }
+
+        function clearSelection() {
+            if (AppState.selectedBins.size === 0) return;
+            AppState.selectedBins.clear();
+            anchorIndex = null;
+            Analysis.run();
         }
 
         function toggle() {
@@ -1812,9 +1879,16 @@
                     refresh();
                 });
             });
+
+            // Delegated: the rows themselves are replaced on every scroll.
+            Dom.$('panelTableBody').addEventListener('click', (event) => {
+                const row = event.target.closest('tr[data-bin]');
+                if (!row) return;
+                selectRow(Number(row.dataset.bin), Number(row.dataset.index), event);
+            });
         }
 
-        return { init, render, refresh, toggle };
+        return { init, render, refresh, toggle, clearSelection };
     })();
     </script>
 
@@ -1831,6 +1905,9 @@
             phase: 'rgb(37, 99, 235)',
             peak: 'rgb(234, 179, 8)',
             threshold: 'rgb(220, 38, 38)',
+            // Near-black, so a ring reads as picked out by hand wherever it lands -
+            // over the purple spectrum, the yellow peaks or the red threshold markers.
+            selected: 'rgb(15, 23, 42)',
             thresholdLine: 'rgba(220, 38, 38, 0.8)',
             guide: 'rgba(209, 213, 219, 0.8)',
             axisGrid: 'rgba(156, 163, 175, 0.6)',
@@ -1843,6 +1920,7 @@
         /** Dataset labels the polar tooltip matches on, so they stay in sync. */
         const LABEL_PEAKS = 'Detected Peaks';
         const LABEL_INCLUDED = 'Included Components';
+        const LABEL_SELECTED = 'Selected';
 
         const PLOT_IDS = {
             time: 'timeChart',
@@ -1908,6 +1986,23 @@
          * is the trace-name badge, which is what now distinguishes a peak or threshold
          * match - the old tooltip appended that by hand.
          */
+        /**
+         * Hollow ring, drawn last so it sits over whatever layer the bin already has -
+         * a peak marker, a threshold marker or the bare spectrum.
+         */
+        const ringTrace = (x, y, size, extra) => Object.assign({
+            type: 'scattergl',
+            mode: 'markers',
+            name: LABEL_SELECTED,
+            x: x,
+            y: y,
+            marker: {
+                color: 'rgba(0,0,0,0)',
+                size: size,
+                line: { color: COLORS.selected, width: 2 }
+            }
+        }, extra);
+
         /** 'hann' -> 'Hann', for the window name shown in the magnitude legend. */
         const titleCase = (word) => word.charAt(0).toUpperCase() + word.slice(1);
 
@@ -2212,7 +2307,7 @@
          * @param {?number[]} model.thresholdSignal Threshold reconstruction, or null if off.
          */
         function draw(model) {
-            const { cfg, spectrum, peakIndices, peakSignal, thresholdSignal } = model;
+            const { cfg, spectrum, peakIndices, peakSignal, thresholdSignal, selectedSignal } = model;
 
             const base = baseSeriesFor(spectrum, cfg.unit);
             const xLabel = base.xLabel;
@@ -2223,8 +2318,14 @@
             const peakBins = cfg.peaksEnabled ? [...peakIndices].filter(isPlottable) : [];
             const includedBins = cfg.magThreshEnabled ? base.activeBins.filter(isIncluded) : [];
 
+            // A selection outlives the analysis it was made against - changing the length
+            // strategy re-bins the spectrum - so bins past the end are dropped here.
+            const selectedBins = [...(model.selectedBins || [])]
+                .filter((i) => i < spectrum.binCount && isPlottable(i));
+
             const peakX = peakBins.map(base.xOf);
             const includedX = includedBins.map(base.xOf);
+            const selectedX = selectedBins.map(base.xOf);
             const yOf = (bins, values) => bins.map((i) => values[i]);
 
             // -- 1. Time domain: original series plus any active reconstruction.
@@ -2242,6 +2343,11 @@
             if (cfg.magThreshEnabled) {
                 timeTraces.push(lineTrace('Mag Threshold Reconstruction', spectrum.series.times,
                     thresholdSignal, COLORS.threshold, 2, { hovertemplate: timeHover }));
+            }
+            if (selectedSignal) {
+                // What the picked components alone contribute, against the whole signal.
+                timeTraces.push(lineTrace('Selected Components', spectrum.series.times,
+                    selectedSignal, COLORS.selected, 1.5, { hovertemplate: timeHover }));
             }
             drawChart('time', timeTraces, cartesianLayout('Time (s)', 'Amplitude'));
 
@@ -2268,6 +2374,10 @@
                     yOf(includedBins, spectrum.magnitudes), COLORS.threshold, 8,
                     { hovertemplate: magHover }));
             }
+            if (selectedBins.length > 0) {
+                magTraces.push(ringTrace(selectedX, yOf(selectedBins, spectrum.magnitudes),
+                    14, { hovertemplate: magHover }));
+            }
             drawChart('fft', magTraces, cartesianLayout(xLabel, 'Magnitude'));
 
             // -- 3. Power spectral density on a log axis.
@@ -2283,6 +2393,10 @@
             if (cfg.magThreshEnabled) {
                 psdTraces.push(markerTrace(LABEL_INCLUDED, includedX, yOf(includedBins, spectrum.psd),
                     COLORS.threshold, 8, { hovertemplate: psdHover }));
+            }
+            if (selectedBins.length > 0) {
+                psdTraces.push(ringTrace(selectedX, yOf(selectedBins, spectrum.psd),
+                    14, { hovertemplate: psdHover }));
             }
             drawChart('psd', psdTraces, cartesianLayout(xLabel, 'PSD (V²/Hz) [Log]', {
                 type: 'log',
@@ -2308,6 +2422,10 @@
                     yOf(includedBins, phasePerBin), COLORS.threshold, 8,
                     { hovertemplate: phaseHover }));
             }
+            if (selectedBins.length > 0) {
+                phaseTraces.push(ringTrace(selectedX, yOf(selectedBins, phasePerBin),
+                    14, { hovertemplate: phaseHover }));
+            }
             drawChart('phase', phaseTraces, cartesianLayout(xLabel, phaseLabel));
 
             // -- 5. Every component's phase projected onto the unit circle.
@@ -2331,6 +2449,10 @@
             if (cfg.magThreshEnabled) {
                 polarTraces.push(markerTrace(LABEL_INCLUDED, cosOf(includedBins), sinOf(includedBins),
                     COLORS.threshold, 12, { customdata: metaOf(includedBins), hovertemplate: POLAR_HOVER }));
+            }
+            if (selectedBins.length > 0) {
+                polarTraces.push(ringTrace(cosOf(selectedBins), sinOf(selectedBins), 16,
+                    { customdata: metaOf(selectedBins), hovertemplate: POLAR_HOVER }));
             }
             drawChart('polar', polarTraces, polarLayout());
         }
@@ -2729,6 +2851,9 @@
                 sampling: sampling
             };
 
+            // Bins picked out of the old spectrum mean nothing in the new one.
+            AppState.selectedBins.clear();
+
             Controls.updateExportButtonState();
             Controls.showDatasetStatus(sampling, points.length);
             Analysis.run({ rescaleThreshold: 'reset' });
@@ -2917,6 +3042,7 @@
     function hideExportDropdown() { Controls.hideExportDropdown(); }
     function switchTab(tabName) { Controls.switchTab(tabName); }
     function toggleSidePanel() { PanelView.toggle(); }
+    function clearRowSelection() { PanelView.clearSelection(); }
     // The panel lists the full table's rows, so it follows the order set over there.
     function sortTable(columnKey) { TableView.sortBy(columnKey); PanelView.refresh(); }
     function exportSpectralCsv() { CsvExport.exportAll(); }
