@@ -127,6 +127,20 @@
 
             <hr class="my-4 border-gray-200">
 
+            <!-- Spectrum Statistics. A native disclosure, so collapsing it costs no
+                 script and keeps its keyboard behaviour for free. -->
+            <details class="group mb-4" open>
+                <summary class="flex items-center justify-between cursor-pointer list-none [&::-webkit-details-marker]:hidden text-[11px] font-semibold text-gray-500 hover:text-gray-700">
+                    <span>Spectrum Statistics</span>
+                    <svg class="w-3.5 h-3.5 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </summary>
+                <dl id="statsList" class="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 mt-2 text-xs"></dl>
+            </details>
+
+            <hr class="my-4 border-gray-200">
+
             <!-- Peak Detection Controls -->
             <div class="flex items-center justify-between mb-3">
                 <h2 id="peakDetectionHeading" class="text-[11px] font-semibold text-gray-500">Peak Detection</h2>
@@ -1278,6 +1292,7 @@
             Dom.text('peakCount', AppState.peakIndices.size);
             Dom.text('magThreshCount', thresholdBins.length);
 
+            StatsView.render(spectrum, dataset);
             TableView.render();
             ChartsView.render({
                 cfg: cfg,
@@ -2119,6 +2134,83 @@
     </script>
 
     <!-- ==================================================================== -->
+    <!-- StatsView - the sidebar read-out of what the analysis is made of.     -->
+    <!-- ==================================================================== -->
+    <script>
+    window.StatsView = (function () {
+        'use strict';
+
+        const LABELS = [
+            'Sample rate', 'Samples', 'Duration', 'FFT length', 'Bins',
+            'Resolution (Δf)', 'Min frequency', 'Max frequency',
+            'Min period', 'Max period'
+        ];
+
+        /**
+         * Four significant figures with trailing zeros dropped, or exponential once a
+         * value is too large or small to read plainly.
+         */
+        function num(value) {
+            if (!Number.isFinite(value)) return '—';
+            const abs = Math.abs(value);
+            if (abs !== 0 && (abs >= 1e5 || abs < 1e-3)) return value.toExponential(2);
+            return String(parseFloat(value.toPrecision(4)));
+        }
+
+        const hz = (value) => `${num(value)} Hz`;
+        const secs = (value) => `${num(value)} s`;
+
+        /**
+         * Label/value pairs for `spectrum`, or the same labels against dashes before a
+         * dataset is loaded.
+         *
+         * These describe the analysis rather than the file: the length strategy pads or
+         * truncates the sample count to a power of two, and the bins are spaced across
+         * that frame, not across the original series.
+         */
+        function statsFor(spectrum, dataset) {
+            if (!spectrum) return LABELS.map((label) => [label, '—']);
+
+            const last = spectrum.binCount - 1;
+            const times = dataset.times;
+            const duration = times.length > 1 ? times[times.length - 1] - times[0] : 0;
+
+            const rows = [
+                ['Sample rate', hz(spectrum.sampleRate)],
+                ['Samples', String(times.length)],
+                ['Duration', secs(duration)],
+                ['FFT length', String(spectrum.frameLength)],
+                ['Bins', String(spectrum.binCount)],
+                ['Resolution (Δf)', hz(spectrum.sampleRate / spectrum.frameLength)],
+                ['Min frequency', hz(spectrum.frequencies[0])],
+                ['Max frequency', hz(spectrum.frequencies[last])],
+                ['Min period', secs(spectrum.periods[last])],
+                // DC's period is infinite, so the longest one any bin stands for is
+                // bin 1's - which is the span of the frame itself.
+                ['Max period', secs(spectrum.periods[1])]
+            ];
+            // Only the framing strategy analyses more than one frame.
+            if (spectrum.frameCount > 1) rows.splice(4, 0, ['Frames', String(spectrum.frameCount)]);
+            return rows;
+        }
+
+        function render(spectrum, dataset) {
+            const list = Dom.$('statsList');
+            list.innerHTML = '';
+            statsFor(spectrum, dataset).forEach(([label, value]) => {
+                list.appendChild(Dom.cell('dt', label, 'text-gray-500'));
+                list.appendChild(Dom.cell('dd', value, 'text-gray-800 font-mono text-right'));
+            });
+        }
+
+        /** Draws the panel's empty state, so it reads as pending rather than broken. */
+        const init = () => render(null, null);
+
+        return { init, render };
+    })();
+    </script>
+
+    <!-- ==================================================================== -->
     <!-- CsvExport - spectral results as CSV, in full or filtered.             -->
     <!-- ==================================================================== -->
     <script>
@@ -2592,6 +2684,7 @@
 
     DataImport.init();
     TableView.init();
+    StatsView.init();
     Controls.init();
     </script>
 
