@@ -1691,6 +1691,16 @@
             layout.xaxis = axis('Real (cos φ)', bounds);
             layout.yaxis = axis('Imaginary (sin φ)',
                 Object.assign({ scaleanchor: 'x', scaleratio: 1 }, bounds));
+
+            // Only the shorter side can be bounded: the longer one has to show more
+            // than POLAR_EXTENT to fill the card at 1:1, and bounding an axis Plotly
+            // must stretch leaves the two rules fighting. The aspect ratio ties the
+            // free axis to the bounded one, so the zoom is pinned either way. (The
+            // margins total 82px each way, hence comparing the card's own box.)
+            const card = Dom.$(PLOT_IDS.polar);
+            const frame = card.clientWidth >= card.clientHeight ? layout.yaxis : layout.xaxis;
+            frame.minallowed = -POLAR_EXTENT;
+            frame.maxallowed = POLAR_EXTENT;
             return layout;
         }
 
@@ -1724,12 +1734,22 @@
             zoomState[chartKey] = zoomed ? ranges : null;
         }
 
+        /** Holds a remembered range inside the bounds an axis now carries. */
+        function clampToLimits(range, spec) {
+            if (!spec || spec.minallowed === undefined) return range;
+            return range.map((value) =>
+                Math.min(Math.max(value, spec.minallowed), spec.maxallowed));
+        }
+
         function applyZoom(chartKey, layout) {
             const ranges = zoomState[chartKey];
             if (!ranges) return layout;
             Object.keys(ranges).forEach((name) => {
-                layout[name] = Object.assign({}, layout[name], {
-                    range: ranges[name],
+                const spec = layout[name];
+                // A zoom outlives the dataset it was set on, and the next one may not
+                // reach nearly as far - restoring one blindly lands off in the blank.
+                layout[name] = Object.assign({}, spec, {
+                    range: clampToLimits(ranges[name], spec),
                     autorange: false
                 });
             });
@@ -1755,10 +1775,75 @@
             return traces;
         }
 
+        // -- View limits ----------------------------------------------------
+
+        /**
+         * Breathing room around the data, as a fraction of its span. Plotly's own
+         * autorange padding is at least this wide, so a chart opens already up against
+         * its bounds: the first view of a dataset is as far out as it goes.
+         */
+        const LIMIT_PAD = 0.05;
+
+        /**
+         * Extent of `key` across every trace, or null if nothing plottable is there.
+         * A log axis states its range in decades, so its extent is measured that way
+         * too. Legend-hidden traces still count: their data is one click away, and
+         * bounds that moved on a legend toggle would strand the view outside them.
+         */
+        function extentOf(traces, key, isLog) {
+            let min = Infinity;
+            let max = -Infinity;
+
+            traces.forEach((trace) => {
+                const values = trace[key];
+                if (!values) return;
+                for (let i = 0; i < values.length; i++) {
+                    const raw = values[i];
+                    if (!Number.isFinite(raw)) continue;   // DC's period is infinite
+                    if (isLog && raw <= 0) continue;        // unplottable on a log axis
+                    const value = isLog ? Math.log10(raw) : raw;
+                    if (value < min) min = value;
+                    if (value > max) max = value;
+                }
+            });
+            return min <= max ? { min: min, max: max } : null;
+        }
+
+        /**
+         * Bounds one axis to the data drawn on it. Plotly holds drag zoom, pan and
+         * autorange alike inside minallowed/maxallowed.
+         */
+        function limitAxis(layout, name, traces, key) {
+            const spec = layout[name];
+            if (!spec) return;
+
+            const extent = extentOf(traces, key, spec.type === 'log');
+            if (!extent) return;
+
+            // A flat series has no span to take a fraction of, so its own value stands
+            // in - or one unit, at the origin, where that is zero too.
+            const span = extent.max - extent.min;
+            const pad = LIMIT_PAD * (span > 0 ? span : (Math.abs(extent.max) || 1));
+            spec.minallowed = extent.min - pad;
+            spec.maxallowed = extent.max + pad;
+        }
+
+        function applyLimits(traces, layout) {
+            // The complex plane frames itself, leaving one axis free on purpose (see
+            // polarLayout) - fitting that one to the data here would undo it.
+            const framed = AXES.some((name) => layout[name].minallowed !== undefined);
+            if (framed) return layout;
+
+            limitAxis(layout, 'xaxis', traces, 'x');
+            limitAxis(layout, 'yaxis', traces, 'y');
+            return layout;
+        }
+
         /** Creates the plot on first use, then updates it in place. */
         function drawChart(chartKey, traces, layout) {
             const target = Dom.$(PLOT_IDS[chartKey]);
             applyVisibility(chartKey, traces);
+            applyLimits(traces, layout);
             applyZoom(chartKey, layout);
 
             if (!charts[chartKey]) {
