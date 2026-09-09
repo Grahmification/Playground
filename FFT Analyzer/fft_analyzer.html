@@ -98,7 +98,7 @@
 
             <!-- Non-Power-of-2 Handling Strategy -->
             <div class="mb-4">
-                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="padStrategy">Data Framing / Length Strategy</label>
+                <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="padStrategy">Data Framing / Length Strategy</label>
                 <select id="padStrategy" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
                     <option value="pad" selected>Pad with Zeros (Next Pow 2)</option>
                     <option value="truncate">Drop / Truncate (Prev Pow 2)</option>
@@ -108,7 +108,7 @@
 
             <!-- Global Frequency Domain Unit Selector -->
             <div class="mb-4">
-                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="freqDomainUnit">Frequency X-Axis Unit</label>
+                <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="freqDomainUnit">Frequency X-Axis Unit</label>
                 <select id="freqDomainUnit" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
                     <option value="frequency" selected>Frequency (Hz)</option>
                     <option value="period">Period (Seconds)</option>
@@ -117,7 +117,7 @@
 
             <!-- Window Function Control -->
             <div class="mb-4">
-                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="windowType">Window Function</label>
+                <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="windowType">Window Function</label>
                 <select id="windowType" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
                     <option value="none">None (Rectangular)</option>
                     <option value="hann" selected>Hann</option>
@@ -129,7 +129,7 @@
 
             <!-- Peak Detection Controls -->
             <div class="flex items-center justify-between mb-3">
-                <h2 id="peakDetectionHeading" class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Peak Detection</h2>
+                <h2 id="peakDetectionHeading" class="text-[11px] font-semibold text-gray-500">Peak Detection</h2>
                 <label class="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" id="enablePeaks" class="sr-only peer" aria-labelledby="peakDetectionHeading" checked>
                     <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-yellow-500"></div>
@@ -166,7 +166,7 @@
 
             <!-- Magnitude Threshold Reconstruction Controls -->
             <div class="flex items-center justify-between mb-3">
-                <h2 id="magThreshHeading" class="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Mag Threshold Reconstruction</h2>
+                <h2 id="magThreshHeading" class="text-[11px] font-semibold text-gray-500">Mag Threshold Reconstruction</h2>
                 <label class="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" id="enableMagThresh" class="sr-only peer" aria-labelledby="magThreshHeading">
                     <div class="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-red-600"></div>
@@ -198,7 +198,7 @@
         <div id="viewCharts" role="tabpanel" aria-labelledby="tabChartsBtn" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-1">Time Domain (Original & Reconstructions)</h3>
+                <h3 class="text-xs font-bold text-gray-600 mb-1">Time Domain</h3>
                 <div class="relative w-full h-[380px]">
                     <div id="timeChart" class="w-full h-full" role="figure" aria-label="Time domain chart: the processed input signal with any active reconstructions overlaid. The same values are listed in the Spectral Table tab."></div>
                 </div>
@@ -206,7 +206,7 @@
 
             <!-- Frequency Domain Chart Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-1">Frequency Domain (FFT Magnitude & Threshold)</h3>
+                <h3 class="text-xs font-bold text-gray-600 mb-1">FFT Magnitude</h3>
                 <div class="relative w-full h-[380px]">
                     <div id="fftChart" class="w-full h-full" role="figure" aria-label="FFT magnitude spectrum, with detected peaks and the magnitude threshold cutoff. Per-bin values are listed in the Spectral Table tab."></div>
                 </div>
@@ -214,7 +214,7 @@
 
             <!-- Power Spectral Density (PSD) Chart Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-1">Power Spectral Density (PSD - Log Scale)</h3>
+                <h3 class="text-xs font-bold text-gray-600 mb-1">Power Spectral Density</h3>
                 <div class="relative w-full h-[380px]">
                     <div id="psdChart" class="w-full h-full" role="figure" aria-label="Power spectral density on a logarithmic scale, with detected peaks marked."></div>
                 </div>
@@ -222,7 +222,7 @@
 
             <!-- Phase Information Chart Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-1">Unwrapped Phase Spectrum (Radians)</h3>
+                <h3 class="text-xs font-bold text-gray-600 mb-1">Unwrapped Phase</h3>
                 <div class="relative w-full h-[380px]">
                     <div id="phaseChart" class="w-full h-full" role="figure" aria-label="Unwrapped phase spectrum in radians. Per-bin phase is listed in the Spectral Table tab."></div>
                 </div>
@@ -230,7 +230,7 @@
 
             <!-- Polar Phase Plot Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col col-span-full">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600 mb-1">Polar Phase Spectrum (Unit Circle, r = 1)</h3>
+                <h3 class="text-xs font-bold text-gray-600 mb-1">Polar Phase</h3>
                 <div class="relative w-full h-[420px]">
                     <div id="polarPhaseChart" class="w-full h-full" role="figure" aria-label="Each spectral component's phase projected onto the unit circle in the complex plane."></div>
                 </div>
@@ -240,12 +240,12 @@
         <!-- Tab 2: Spectral Data Table View -->
         <div id="viewTable" role="tabpanel" aria-labelledby="tabTableBtn" class="hidden bg-white rounded-lg shadow-sm border border-gray-200 flex-1 flex flex-col overflow-hidden">
             <div class="px-4 py-3 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-gray-600">Spectral Components Analysis Matrix</h3>
+                <h3 class="text-xs font-bold text-gray-600">Spectral Components</h3>
                 <span id="tableMetaCount" class="text-xs text-gray-500 font-medium">0 components listed</span>
             </div>
             <div id="spectralTableScroll" class="overflow-auto flex-1 max-h-[720px]">
                 <table class="w-full text-left border-collapse text-xs">
-                    <thead class="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider sticky top-0 select-none">
+                    <thead class="bg-gray-100 text-gray-600 text-[11px] font-semibold sticky top-0 select-none">
                         <tr>
                             <th scope="col" class="py-2.5 px-4 text-center">Included</th>
                             <th scope="col" class="p-0"><button type="button" onclick="sortTable('bin')" class="w-full text-left py-2.5 px-4 hover:bg-gray-200 transition-colors cursor-pointer">Bin Index <span id="sort-bin" aria-hidden="true" class="text-gray-400"></span></button></th>
@@ -279,7 +279,7 @@
 
             <!-- File Data Preview Table Container -->
             <div>
-                <span class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500">File Data Preview (First Few Rows)</span>
+                <span class="block mb-1 text-[11px] font-semibold text-gray-500">File Data Preview (First Few Rows)</span>
                 <div class="border border-gray-200 rounded-md overflow-auto max-h-40 bg-gray-50">
                     <table class="w-full text-left border-collapse text-xs font-mono">
                         <thead id="modalPreviewHead" class="bg-gray-200 text-gray-700 sticky top-0"></thead>
@@ -290,15 +290,15 @@
 
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                    <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="modalXCol">X-Axis Column (Time)</label>
+                    <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="modalXCol">X-Axis Column (Time)</label>
                     <select id="modalXCol" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none"></select>
                 </div>
                 <div>
-                    <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="modalYCol">Y-Axis Column (Amplitude)</label>
+                    <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="modalYCol">Y-Axis Column (Amplitude)</label>
                     <select id="modalYCol" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none"></select>
                 </div>
                 <div>
-                    <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="modalStartRow">Data Start Row Index</label>
+                    <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="modalStartRow">Data Start Row Index</label>
                     <input type="number" id="modalStartRow" min="0" value="0" class="block w-full text-xs text-gray-900 border border-gray-300 rounded bg-gray-50 p-2 focus:outline-none">
                 </div>
             </div>
@@ -1652,6 +1652,9 @@
          * is the trace-name badge, which is what now distinguishes a peak or threshold
          * match - the old tooltip appended that by hand.
          */
+        /** 'hann' -> 'Hann', for the window name shown in the magnitude legend. */
+        const titleCase = (word) => word.charAt(0).toUpperCase() + word.slice(1);
+
         const hoverFor = (xLabel, yLabel) =>
             `${xLabel}: %{x:.4g}<br>${yLabel}: %{y:.4g}<extra>%{fullData.name}</extra>`;
 
@@ -1987,7 +1990,7 @@
             // -- 2. FFT magnitude, with the threshold as a horizontal cutoff line.
             const magHover = hoverFor(xLabel, 'Magnitude');
             const magTraces = [
-                lineTrace(`Magnitude (${cfg.windowType.toUpperCase()})`, base.x, base.magnitude,
+                lineTrace(`Magnitude (${titleCase(cfg.windowType)})`, base.x, base.magnitude,
                     COLORS.spectrum, 1.5, { hovertemplate: magHover })
             ];
             if (cfg.peaksEnabled) {
@@ -2299,7 +2302,7 @@
 
             const headRow = document.createElement('tr');
             headRow.appendChild(Dom.cell('th', 'Row',
-                'py-1.5 px-3 border-b border-gray-300 text-[10px] text-gray-500 uppercase'));
+                'py-1.5 px-3 border-b border-gray-300 text-[11px] text-gray-500'));
             for (let c = 0; c < columnCount; c++) {
                 headRow.appendChild(Dom.cell('th', `Col ${c + 1}`,
                     'py-1.5 px-3 border-b border-gray-300 text-[11px] font-semibold text-gray-700'));
