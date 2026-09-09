@@ -222,9 +222,15 @@
 
             <!-- Phase Information Chart Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold text-gray-600 mb-1">Unwrapped Phase</h3>
+                <div class="flex justify-between items-center mb-1">
+                    <h3 class="text-xs font-bold text-gray-600">Phase</h3>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                        <input type="checkbox" id="unwrapPhase" class="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-400 cursor-pointer" checked>
+                        Unwrap
+                    </label>
+                </div>
                 <div class="relative w-full h-[380px]">
-                    <div id="phaseChart" class="w-full h-full" role="figure" aria-label="Unwrapped phase spectrum in radians. Per-bin phase is listed in the Spectral Table tab."></div>
+                    <div id="phaseChart" class="w-full h-full" role="figure" aria-label="Phase spectrum in radians, unwrapped or wrapped to ±π as selected. Both are listed per bin in the Spectral Table tab."></div>
                 </div>
             </div>
 
@@ -1098,6 +1104,7 @@
         const includeBin1 = () => Dom.$('includeBin1Peaks').checked;
         const magThreshEnabled = () => Dom.$('enableMagThresh').checked;
         const magThreshold = () => parseFloat(Dom.$('magThreshRange').value);
+        const unwrapPhase = () => Dom.$('unwrapPhase').checked;
 
         /**
          * Formats a magnitude threshold for the readout beside its slider. Two decimals
@@ -1117,12 +1124,13 @@
             includeDc: includeDc(),
             includeBin1: includeBin1(),
             magThreshEnabled: magThreshEnabled(),
-            magThreshold: magThreshold()
+            magThreshold: magThreshold(),
+            unwrapPhase: unwrapPhase()
         });
 
         return {
             UNITS, strategy, unit, windowType, peaksEnabled, sensitivity,
-            includeDc, includeBin1, magThreshEnabled, magThreshold,
+            includeDc, includeBin1, magThreshEnabled, magThreshold, unwrapPhase,
             formatMagThreshold, snapshot
         };
     })();
@@ -1935,7 +1943,9 @@
                 x: activeBins.map(xOf),
                 magnitude: activeBins.map((i) => spectrum.magnitudes[i]),
                 psd: activeBins.map((i) => spectrum.psd[i]),
-                phase: activeBins.map((i) => spectrum.unwrappedPhases[i]),
+                // Both, so the unwrap checkbox is a redraw rather than a rebuild.
+                unwrappedPhase: activeBins.map((i) => spectrum.unwrappedPhases[i]),
+                wrappedPhase: activeBins.map((i) => spectrum.phases[i]),
                 polarX: polarX,
                 polarY: polarY,
                 polarMeta: polarMeta
@@ -2031,23 +2041,26 @@
                 exponentformat: 'e'
             }));
 
-            // -- 4. Unwrapped phase spectrum.
+            // -- 4. Phase spectrum, unwrapped or wrapped to ±π as the card's box says.
             const phaseHover = hoverFor(xLabel, 'Phase (rad)');
+            const phaseLabel = cfg.unwrapPhase ? 'Unwrapped Phase (rad)' : 'Phase (rad)';
+            const phaseSeries = cfg.unwrapPhase ? base.unwrappedPhase : base.wrappedPhase;
+            const phasePerBin = cfg.unwrapPhase ? spectrum.unwrappedPhases : spectrum.phases;
             const phaseTraces = [
-                lineTrace('Unwrapped Phase (rad)', base.x, base.phase, COLORS.phase, 1.5,
+                lineTrace(phaseLabel, base.x, phaseSeries, COLORS.phase, 1.5,
                     { hovertemplate: phaseHover })
             ];
             if (cfg.peaksEnabled) {
                 phaseTraces.push(markerTrace(LABEL_PEAKS, peakX,
-                    yOf(peakBins, spectrum.unwrappedPhases), COLORS.peak, 10,
+                    yOf(peakBins, phasePerBin), COLORS.peak, 10,
                     { hovertemplate: phaseHover }));
             }
             if (cfg.magThreshEnabled) {
                 phaseTraces.push(markerTrace(LABEL_INCLUDED, includedX,
-                    yOf(includedBins, spectrum.unwrappedPhases), COLORS.threshold, 8,
+                    yOf(includedBins, phasePerBin), COLORS.threshold, 8,
                     { hovertemplate: phaseHover }));
             }
-            drawChart('phase', phaseTraces, cartesianLayout(xLabel, 'Unwrapped Phase (rad)'));
+            drawChart('phase', phaseTraces, cartesianLayout(xLabel, phaseLabel));
 
             // -- 5. Every component's phase projected onto the unit circle.
             const cosOf = (bins) => bins.map((i) => Math.cos(spectrum.phases[i]));
@@ -2533,6 +2546,9 @@
 
             // The x-axis unit decides which bins are plottable and which rows are listed.
             Dom.$('freqDomainUnit').addEventListener('change', () => Analysis.run());
+
+            // Picks which phase series the phase chart draws; both are already computed.
+            Dom.$('unwrapPhase').addEventListener('change', () => Analysis.run());
 
             // Dismiss the export menu on any click outside it.
             window.addEventListener('click', (e) => {
