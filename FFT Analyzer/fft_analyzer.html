@@ -30,6 +30,17 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
             </svg>
             <h1 class="text-sm font-bold text-gray-800 whitespace-nowrap">Spectral Dashboard</h1>
+
+            <!-- File Upload Control. The input carries the picker but shows nothing;
+                 the label beside it is the button, and `peer` is what lets the ring
+                 appear on it when the input behind it takes keyboard focus. -->
+            <input id="csvFile" type="file" accept=".csv,.txt,.tsv,text/csv" class="sr-only peer">
+            <label for="csvFile" title="Open CSV dataset" class="ml-1 flex items-center justify-center w-7 h-7 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-all cursor-pointer peer-focus:ring-2 peer-focus:ring-blue-400">
+                <svg class="w-4 h-4" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                </svg>
+                <span class="sr-only">Open CSV dataset</span>
+            </label>
         </div>
 
         <!-- Cut off rather than wrapped, to hold the bar to one line. Controls hangs
@@ -84,12 +95,6 @@
             <p class="text-xs text-gray-600 mb-4">
                 Upload time-series data to view standardized spectral charts and data tables.
             </p>
-
-            <!-- File Upload Control -->
-            <div class="mb-4">
-                <label class="block mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500" for="csvFile">CSV Dataset</label>
-                <input class="block w-full text-xs text-gray-900 border border-gray-300 rounded cursor-pointer bg-gray-50 p-1.5 focus:outline-none" id="csvFile" type="file" accept=".csv,.txt,.tsv,text/csv">
-            </div>
 
             <!-- Non-Power-of-2 Handling Strategy -->
             <div class="mb-4">
