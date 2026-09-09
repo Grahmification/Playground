@@ -20,18 +20,67 @@
         thead.sticky th { box-shadow: inset 0 -1px 0 #e5e7eb; }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col md:flex-row font-sans m-0 p-0 overflow-x-hidden">
+<body class="bg-gray-100 min-h-screen flex flex-col font-sans m-0 p-0 overflow-x-hidden">
+
+    <!-- Top Bar: title, live status and the view controls, spanning the window and
+         pinned to the top of it. One line tall, so the charts get the rest. -->
+    <header class="sticky top-0 z-40 flex flex-wrap items-center gap-x-3 gap-y-2 bg-white border-b border-gray-200 shadow-sm px-3 py-1.5">
+        <div class="flex items-center gap-2 shrink-0">
+            <svg class="w-5 h-5 text-blue-600" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+            </svg>
+            <h1 class="text-sm font-bold text-gray-800 whitespace-nowrap">Spectral Dashboard</h1>
+        </div>
+
+        <!-- Cut off rather than wrapped, to hold the bar to one line. Controls hangs
+             the full text off the title attribute, where the warnings stay readable. -->
+        <p id="statusText" role="status" aria-live="polite" class="text-xs text-gray-500 flex-1 min-w-0 truncate border-l border-gray-200 pl-3">Awaiting dataset upload...</p>
+
+        <div class="flex items-center gap-3 shrink-0">
+            <!-- Export CSV Dropdown Container -->
+            <div class="relative">
+                <button type="button" id="exportDropdownBtn" onclick="toggleExportDropdown()" aria-haspopup="true" aria-expanded="false" aria-controls="exportDropdownMenu" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                    <svg class="w-3.5 h-3.5" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    Export CSV
+                    <svg class="w-3 h-3 ml-0.5" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </button>
+
+                <!-- Dropdown Menu -->
+                <div id="exportDropdownMenu" class="hidden absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-md shadow-lg z-50 py-1 text-xs">
+                    <button type="button" onclick="exportSpectralCsv(); hideExportDropdown();" class="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 flex items-center gap-2 cursor-pointer">
+                        <span class="w-2 h-2 rounded-full bg-emerald-600" aria-hidden="true"></span>
+                        Export All Components
+                    </button>
+                    <button type="button" id="exportPeaksOption" onclick="exportSubsetCsv('peaks'); hideExportDropdown();" class="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 flex items-center gap-2 cursor-pointer">
+                        <span class="w-2 h-2 rounded-full bg-yellow-500" aria-hidden="true"></span>
+                        Export Peak Components
+                    </button>
+                    <button type="button" id="exportThreshOption" onclick="exportSubsetCsv('threshold'); hideExportDropdown();" class="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 flex items-center gap-2 cursor-pointer">
+                        <span class="w-2 h-2 rounded-full bg-red-600" aria-hidden="true"></span>
+                        Export Magnitude Threshold Components
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tab Switcher -->
+            <div role="tablist" aria-label="Analysis view" class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                <button type="button" id="tabChartsBtn" onclick="switchTab('charts')" role="tab" aria-selected="true" aria-controls="viewCharts" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer">Charts View</button>
+                <button type="button" id="tabTableBtn" onclick="switchTab('table')" role="tab" aria-selected="false" aria-controls="viewTable" class="px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer">Spectral Table</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Sidebar and content sit side by side beneath the bar. They are wrapped rather
+         than laid out on the body, so the bar has a tall containing block to stick in. -->
+    <div class="flex flex-1 flex-col md:flex-row">
 
     <!-- Sidebar Controls -->
     <aside class="w-full md:w-72 bg-white border-r border-gray-200 p-4 flex flex-col justify-between shadow-sm shrink-0">
         <div>
-            <div class="flex items-center space-x-2 mb-4">
-                <svg class="w-6 h-6 text-blue-600" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-                </svg>
-                <h1 class="text-lg font-bold text-gray-800">Spectral Dashboard</h1>
-            </div>
-
             <p class="text-xs text-gray-600 mb-4">
                 Upload time-series data to view standardized spectral charts and data tables.
             </p>
@@ -137,53 +186,9 @@
         </div>
     </aside>
 
-    <!-- Main Content Area -->
-    <main class="flex-1 p-3 md:p-4 flex flex-col gap-4 w-full">
-        <!-- Top Navigation Bar & Status -->
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white px-4 py-2.5 rounded-lg shadow-sm border border-gray-200 gap-3">
-            <div>
-                <h2 class="text-sm font-bold text-gray-800">Analysis Output</h2>
-                <p id="statusText" role="status" aria-live="polite" class="text-xs text-gray-500">Awaiting dataset upload...</p>
-            </div>
-
-            <div class="flex items-center gap-3">
-                <!-- Export CSV Dropdown Container -->
-                <div class="relative">
-                    <button type="button" id="exportDropdownBtn" onclick="toggleExportDropdown()" aria-haspopup="true" aria-expanded="false" aria-controls="exportDropdownMenu" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
-                        <svg class="w-3.5 h-3.5" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                        </svg>
-                        Export CSV
-                        <svg class="w-3 h-3 ml-0.5" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path>
-                        </svg>
-                    </button>
-
-                    <!-- Dropdown Menu -->
-                    <div id="exportDropdownMenu" class="hidden absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-md shadow-lg z-50 py-1 text-xs">
-                        <button type="button" onclick="exportSpectralCsv(); hideExportDropdown();" class="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 flex items-center gap-2 cursor-pointer">
-                            <span class="w-2 h-2 rounded-full bg-emerald-600" aria-hidden="true"></span>
-                            Export All Components
-                        </button>
-                        <button type="button" id="exportPeaksOption" onclick="exportSubsetCsv('peaks'); hideExportDropdown();" class="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 flex items-center gap-2 cursor-pointer">
-                            <span class="w-2 h-2 rounded-full bg-yellow-500" aria-hidden="true"></span>
-                            Export Peak Components
-                        </button>
-                        <button type="button" id="exportThreshOption" onclick="exportSubsetCsv('threshold'); hideExportDropdown();" class="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 flex items-center gap-2 cursor-pointer">
-                            <span class="w-2 h-2 rounded-full bg-red-600" aria-hidden="true"></span>
-                            Export Magnitude Threshold Components
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Tab Switcher -->
-                <div role="tablist" aria-label="Analysis view" class="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                    <button type="button" id="tabChartsBtn" onclick="switchTab('charts')" role="tab" aria-selected="true" aria-controls="viewCharts" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-blue-600 shadow-sm transition-all cursor-pointer">Charts View</button>
-                    <button type="button" id="tabTableBtn" onclick="switchTab('table')" role="tab" aria-selected="false" aria-controls="viewTable" class="px-3 py-1.5 text-xs font-semibold rounded-md text-gray-600 hover:text-gray-800 transition-all cursor-pointer">Spectral Table</button>
-                </div>
-            </div>
-        </div>
-
+    <!-- Main Content Area. `isolate` keeps Plotly's modebar, which carries a z-index
+         of 1001 of its own, from riding over the top bar as the page scrolls. -->
+    <main class="flex-1 min-w-0 p-3 md:p-4 flex flex-col gap-4 w-full isolate">
         <!-- Tab 1: Charts View -->
         <div id="viewCharts" role="tabpanel" aria-labelledby="tabChartsBtn" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
             <!-- Time Domain Chart Card -->
@@ -256,6 +261,8 @@
             </div>
         </div>
     </main>
+
+    </div><!-- /sidebar + content row -->
 
     <!-- Column & Row Selection Modal / Popup -->
     <div id="columnModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -2416,7 +2423,11 @@
             const summary = `Loaded: ${AppState.fileName} ` +
                 `(${sampleCount} points, fs = ${sampling.sampleRate.toFixed(2)}Hz)`;
 
-            Dom.text('statusText', notes.length === 0 ? summary : `${summary} — ${notes.join(', ')}`);
+            const message = notes.length === 0 ? summary : `${summary} — ${notes.join(', ')}`;
+            Dom.text('statusText', message);
+            // The top bar is one line tall and cuts the message off, so the whole of it
+            // - the notes above all - has to stay reachable on hover.
+            Dom.$('statusText').title = message;
             Dom.setClass('statusText', 'text-amber-600', notes.length > 0);
             Dom.setClass('statusText', 'text-gray-500', notes.length === 0);
         }
