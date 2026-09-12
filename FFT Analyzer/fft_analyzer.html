@@ -2153,11 +2153,11 @@
 
         /**
          * Extent of `key` across every trace, or null if nothing plottable is there.
-         * A log axis states its range in decades, so its extent is measured that way
-         * too. Legend-hidden traces still count: their data is one click away, and
+         * Only linear axes are bounded (see `limitAxis`), so this measures the data as
+         * it stands. Legend-hidden traces still count: their data is one click away, and
          * bounds that moved on a legend toggle would strand the view outside them.
          */
-        function extentOf(traces, key, isLog) {
+        function extentOf(traces, key) {
             let min = Infinity;
             let max = -Infinity;
 
@@ -2165,10 +2165,8 @@
                 const values = trace[key];
                 if (!values) return;
                 for (let i = 0; i < values.length; i++) {
-                    const raw = values[i];
-                    if (!Number.isFinite(raw)) continue;   // DC's period is infinite
-                    if (isLog && raw <= 0) continue;        // unplottable on a log axis
-                    const value = isLog ? Math.log10(raw) : raw;
+                    const value = values[i];
+                    if (!Number.isFinite(value)) continue;   // DC's period is infinite
                     if (value < min) min = value;
                     if (value > max) max = value;
                 }
@@ -2184,7 +2182,14 @@
             const spec = layout[name];
             if (!spec) return;
 
-            const extent = extentOf(traces, key, spec.type === 'log');
+            // A log axis keeps Plotly's own autorange. Bounding one means stating the
+            // bounds in decades, and a spectrum's decades are negative - PSD runs from
+            // about 1e-12 to 1e-3 - which Plotly resolved into a reversed axis: the PSD
+            // plot ran 1e-3 along the bottom up to 1e-11 at the top. Autorange on a log
+            // axis already sits tight to the data, so there is little to bound anyway.
+            if (spec.type === 'log') return;
+
+            const extent = extentOf(traces, key);
             if (!extent) return;
 
             // A flat series has no span to take a fraction of, so its own value stands
