@@ -241,19 +241,18 @@
                 </div>
             </div>
 
-            <!-- Frequency Domain Chart Card -->
+            <!-- Frequency Domain Chart Card. Two views of the one spectrum share a
+                 single plot: magnitude by default, PSD behind the checkbox. -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold text-gray-600 mb-1">FFT Magnitude</h3>
+                <div class="flex justify-between items-center mb-1">
+                    <h3 id="fftChartTitle" class="text-xs font-bold text-gray-600">FFT Magnitude</h3>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                        <input type="checkbox" id="showPsd" class="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-400 cursor-pointer">
+                        Show PSD
+                    </label>
+                </div>
                 <div class="relative w-full h-[380px]">
                     <div id="fftChart" class="w-full h-full" role="figure" aria-label="FFT magnitude spectrum, with detected peaks and the magnitude threshold cutoff. Per-bin values are listed in the Spectral Table tab."></div>
-                </div>
-            </div>
-
-            <!-- Power Spectral Density (PSD) Chart Card -->
-            <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
-                <h3 class="text-xs font-bold text-gray-600 mb-1">Power Spectral Density</h3>
-                <div class="relative w-full h-[380px]">
-                    <div id="psdChart" class="w-full h-full" role="figure" aria-label="Power spectral density on a logarithmic scale, with detected peaks marked."></div>
                 </div>
             </div>
 
@@ -271,10 +270,11 @@
                 </div>
             </div>
 
-            <!-- Polar Phase Plot Card -->
-            <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col col-span-full">
+            <!-- Polar Phase Plot Card. Sits beside the phase spectrum, the same height
+                 as it, so the pair reads as two views of the one set of angles. -->
+            <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
                 <h3 class="text-xs font-bold text-gray-600 mb-1">Polar Phase</h3>
-                <div class="relative w-full h-[420px]">
+                <div class="relative w-full h-[380px]">
                     <div id="polarPhaseChart" class="w-full h-full" role="figure" aria-label="Each spectral component's phase projected onto the unit circle in the complex plane."></div>
                 </div>
             </div>
@@ -1189,6 +1189,7 @@
         const magThreshEnabled = () => Dom.$('enableMagThresh').checked;
         const magThreshold = () => parseFloat(Dom.$('magThreshRange').value);
         const unwrapPhase = () => Dom.$('unwrapPhase').checked;
+        const showPsd = () => Dom.$('showPsd').checked;
 
         /**
          * Formats a magnitude threshold for the readout beside its slider. Two decimals
@@ -1209,12 +1210,13 @@
             includeBin1: includeBin1(),
             magThreshEnabled: magThreshEnabled(),
             magThreshold: magThreshold(),
-            unwrapPhase: unwrapPhase()
+            unwrapPhase: unwrapPhase(),
+            showPsd: showPsd()
         });
 
         return {
             UNITS, strategy, unit, windowType, peaksEnabled, sensitivity,
-            includeDc, includeBin1, magThreshEnabled, magThreshold, unwrapPhase,
+            includeDc, includeBin1, magThreshEnabled, magThreshold, unwrapPhase, showPsd,
             formatMagThreshold, snapshot
         };
     })();
@@ -1893,7 +1895,7 @@
     </script>
 
     <!-- ==================================================================== -->
-    <!-- ChartsView - owns the five Plotly graphs, their traces and layouts.    -->
+    <!-- ChartsView - owns the four Plotly graphs, their traces and layouts.    -->
     <!-- ==================================================================== -->
     <script>
     window.ChartsView = (function () {
@@ -1925,9 +1927,19 @@
         const PLOT_IDS = {
             time: 'timeChart',
             fft: 'fftChart',
-            psd: 'psdChart',
             phase: 'phaseChart',
             polar: 'polarPhaseChart'
+        };
+
+        /**
+         * What the frequency card describes to a screen reader, per view. Its heading
+         * and axis say which one is up, neither of which the figure itself announces.
+         */
+        const FREQ_LABELS = {
+            magnitude: 'FFT magnitude spectrum, with detected peaks and the magnitude '
+                + 'threshold cutoff. Per-bin values are listed in the Spectral Table tab.',
+            psd: 'Power spectral density on a logarithmic scale, with detected peaks '
+                + 'marked. Per-bin values are listed in the Spectral Table tab.'
         };
 
         /** Half-width of the complex plane the phase plot shows. */
@@ -1945,8 +1957,11 @@
          */
         const zoomState = {};
 
+        /** Which view the frequency card last drew, so a switch can drop its zoom. */
+        let freqShowsPsd = null;
+
         /**
-         * Drag zooms a box and the wheel is left to the page: with five charts on a
+         * Drag zooms a box and the wheel is left to the page: with four charts on a
          * scrolling dashboard, wheel zoom steals the scroll you actually wanted. Pan,
          * autoscale and PNG export stay one click away on the modebar.
          */
@@ -2356,59 +2371,59 @@
             }
             drawChart('time', timeTraces, cartesianLayout('Time (s)', 'Amplitude'));
 
-            // -- 2. FFT magnitude, with the threshold as a horizontal cutoff line.
-            const magHover = hoverFor(xLabel, 'Magnitude');
-            const magTraces = [
-                lineTrace(`Magnitude (${titleCase(cfg.windowType)})`, base.x, base.magnitude,
-                    COLORS.spectrum, 1.5, { hovertemplate: magHover })
+            // -- 2. Frequency domain: magnitude, or PSD when the card's box is ticked.
+            // The peak, threshold and selection layers cover the same bins either way -
+            // only the series they read from and the axis beneath them change.
+            const showPsd = cfg.showPsd;
+            const freqPerBin = showPsd ? spectrum.psd : spectrum.magnitudes;
+            const freqHover = hoverFor(xLabel, showPsd ? 'PSD' : 'Magnitude');
+
+            // Switching views swaps a linear axis for a log one, so a zoom remembered
+            // from the other view is not even in the same units - it starts fresh.
+            if (freqShowsPsd !== showPsd) {
+                zoomState.fft = null;
+                freqShowsPsd = showPsd;
+            }
+            Dom.text('fftChartTitle', showPsd ? 'Power Spectral Density' : 'FFT Magnitude');
+            Dom.$(PLOT_IDS.fft).setAttribute('aria-label',
+                showPsd ? FREQ_LABELS.psd : FREQ_LABELS.magnitude);
+
+            const freqTraces = [
+                lineTrace(
+                    showPsd ? 'PSD (V²/Hz)' : `Magnitude (${titleCase(cfg.windowType)})`,
+                    base.x, showPsd ? base.psd : base.magnitude,
+                    COLORS.spectrum, 1.5, { hovertemplate: freqHover })
             ];
             if (cfg.peaksEnabled) {
-                magTraces.push(markerTrace(LABEL_PEAKS, peakX, yOf(peakBins, spectrum.magnitudes),
-                    COLORS.peak, 10, { hovertemplate: magHover }));
+                freqTraces.push(markerTrace(LABEL_PEAKS, peakX, yOf(peakBins, freqPerBin),
+                    COLORS.peak, 10, { hovertemplate: freqHover }));
             }
             if (cfg.magThreshEnabled) {
-                // A flat line needs only its endpoints, and carries no information to
-                // hover over that the sidebar readout does not already show.
-                const edges = base.x.length === 0 ? [] : [base.x[0], base.x[base.x.length - 1]];
-                magTraces.push(lineTrace('Threshold Cutoff', edges,
-                    edges.map(() => cfg.magThreshold), COLORS.thresholdLine, 1.5, {
-                        line: { color: COLORS.thresholdLine, width: 1.5, dash: 'dash' },
-                        hoverinfo: 'skip'
-                    }));
-                magTraces.push(markerTrace(LABEL_INCLUDED, includedX,
-                    yOf(includedBins, spectrum.magnitudes), COLORS.threshold, 8,
-                    { hovertemplate: magHover }));
+                // The cutoff is a magnitude, so the line itself only belongs on the
+                // magnitude view; the bins it admits are marked on both.
+                if (!showPsd) {
+                    // A flat line needs only its endpoints, and carries no information to
+                    // hover over that the sidebar readout does not already show.
+                    const edges = base.x.length === 0 ? [] : [base.x[0], base.x[base.x.length - 1]];
+                    freqTraces.push(lineTrace('Threshold Cutoff', edges,
+                        edges.map(() => cfg.magThreshold), COLORS.thresholdLine, 1.5, {
+                            line: { color: COLORS.thresholdLine, width: 1.5, dash: 'dash' },
+                            hoverinfo: 'skip'
+                        }));
+                }
+                freqTraces.push(markerTrace(LABEL_INCLUDED, includedX,
+                    yOf(includedBins, freqPerBin), COLORS.threshold, 8,
+                    { hovertemplate: freqHover }));
             }
             if (selectedBins.length > 0) {
-                magTraces.push(ringTrace(selectedX, yOf(selectedBins, spectrum.magnitudes),
-                    14, { hovertemplate: magHover }));
+                freqTraces.push(ringTrace(selectedX, yOf(selectedBins, freqPerBin),
+                    14, { hovertemplate: freqHover }));
             }
-            drawChart('fft', magTraces, cartesianLayout(xLabel, 'Magnitude'));
+            drawChart('fft', freqTraces, cartesianLayout(xLabel,
+                showPsd ? 'PSD (V²/Hz) [Log]' : 'Magnitude',
+                showPsd ? { type: 'log', exponentformat: 'e' } : undefined));
 
-            // -- 3. Power spectral density on a log axis.
-            const psdHover = hoverFor(xLabel, 'PSD');
-            const psdTraces = [
-                lineTrace('PSD (V²/Hz)', base.x, base.psd, COLORS.spectrum, 1.5,
-                    { hovertemplate: psdHover })
-            ];
-            if (cfg.peaksEnabled) {
-                psdTraces.push(markerTrace(LABEL_PEAKS, peakX, yOf(peakBins, spectrum.psd),
-                    COLORS.peak, 10, { hovertemplate: psdHover }));
-            }
-            if (cfg.magThreshEnabled) {
-                psdTraces.push(markerTrace(LABEL_INCLUDED, includedX, yOf(includedBins, spectrum.psd),
-                    COLORS.threshold, 8, { hovertemplate: psdHover }));
-            }
-            if (selectedBins.length > 0) {
-                psdTraces.push(ringTrace(selectedX, yOf(selectedBins, spectrum.psd),
-                    14, { hovertemplate: psdHover }));
-            }
-            drawChart('psd', psdTraces, cartesianLayout(xLabel, 'PSD (V²/Hz) [Log]', {
-                type: 'log',
-                exponentformat: 'e'
-            }));
-
-            // -- 4. Phase spectrum, unwrapped or wrapped to ±π as the card's box says.
+            // -- 3. Phase spectrum, unwrapped or wrapped to ±π as the card's box says.
             const phaseHover = hoverFor(xLabel, 'Phase (rad)');
             const phaseLabel = cfg.unwrapPhase ? 'Unwrapped Phase (rad)' : 'Phase (rad)';
             const phaseSeries = cfg.unwrapPhase ? base.unwrappedPhase : base.wrappedPhase;
@@ -2433,7 +2448,7 @@
             }
             drawChart('phase', phaseTraces, cartesianLayout(xLabel, phaseLabel));
 
-            // -- 5. Every component's phase projected onto the unit circle.
+            // -- 4. Every component's phase projected onto the unit circle.
             const cosOf = (bins) => bins.map((i) => Math.cos(spectrum.phases[i]));
             const sinOf = (bins) => bins.map((i) => Math.sin(spectrum.phases[i]));
             const metaOf = (bins) => bins.map((i) => polarMetaFor(spectrum, i));
@@ -3011,6 +3026,10 @@
 
             // Picks which phase series the phase chart draws; both are already computed.
             Dom.$('unwrapPhase').addEventListener('change', () => Analysis.run());
+
+            // Swaps the frequency card between magnitude and PSD - again a redraw of
+            // figures the spectrum already carries, not a re-analysis.
+            Dom.$('showPsd').addEventListener('change', () => Analysis.run());
 
             // Dismiss the export menu on any click outside it.
             window.addEventListener('click', (e) => {
