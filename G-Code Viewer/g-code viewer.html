@@ -340,6 +340,32 @@
             overflow-wrap: anywhere;
         }
 
+        /* The per-tool depths under the file stats. Repeats the panel's own column so the
+           rows keep the panel's spacing once nested, and spells out the hidden case -- a
+           display rule outranks the browser's [hidden]. */
+        #tool-min-z {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #tool-min-z[hidden] {
+            display: none;
+        }
+
+        /* A subheading rather than a row: what follows is a list, not one more file stat. */
+        .stats-subhead {
+            color: #cccccc;
+            border-top: 1px solid #2a2a2a;
+            padding-top: 8px;
+        }
+
+        /* A long tool description wraps rather than pushing its depth off the row. */
+        .tool-min-z-row > span:first-child {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+
         .legend {
             display: flex;
             flex-direction: column;
@@ -1291,6 +1317,12 @@
             <div class="stats-row"><span>X Size:</span> <span id="dim-x" class="stats-value">0.00 mm</span></div>
             <div class="stats-row"><span>Y Size:</span> <span id="dim-y" class="stats-value">0.00 mm</span></div>
             <div class="stats-row"><span>Z Size:</span> <span id="dim-z" class="stats-value">0.00 mm</span></div>
+            <div class="stats-row"><span>X Range:</span> <span id="range-x" class="stats-value">0.00 &hellip; 0.00 mm</span></div>
+            <div class="stats-row"><span>Y Range:</span> <span id="range-y" class="stats-value">0.00 &hellip; 0.00 mm</span></div>
+            <!-- One row per tool, written by FileInfo.showToolMinZ(). Stays hidden until a
+                 file with cutting moves is open, so an empty viewer shows no heading with
+                 nothing under it. -->
+            <div id="tool-min-z" hidden></div>
         </div>
     </div>
 
@@ -1799,6 +1831,7 @@
                     operations: [],
                     fileTools: new Map(),
                     toolColorIndex: new Map(),
+                    toolMinZ: new Map(),
                     moveRanges: [],
                     moveSources: [],
                     maxMoveSegments: 0,
@@ -2289,6 +2322,22 @@
                     });
                 });
 
+                // How far down each tool reaches. Cutting moves only -- the same test
+                // cutFootprint uses, and for the same reason: a plunge to the retract plane
+                // is not a depth the tool ever cut at. A tool that only ever rapids gets no
+                // entry, which is the honest answer to how deep it went.
+                //
+                // Keyed in order of first cut, so the panel reads in machining order the way
+                // the legend does. A tool number of null -- a file that cuts before naming a
+                // tool -- gets its own entry rather than being dropped.
+                const toolMinZ = new Map();
+                segments.forEach(seg => {
+                    if (seg.motion === 'G0') return;
+                    const low = Math.min(seg.start[2], seg.end[2]);
+                    const seen = toolMinZ.get(seg.toolNum);
+                    if (seen === undefined || low < seen) toolMinZ.set(seg.toolNum, low);
+                });
+
                 // Palette slots go to tools in the order they first cut, so the legend reads
                 // in machining order and a tool that never removes material never claims a
                 // colour that appears nowhere on the model.
@@ -2298,7 +2347,7 @@
                 });
 
                 return {
-                    lines, segments, operations, fileTools, toolColorIndex,
+                    lines, segments, operations, fileTools, toolColorIndex, toolMinZ,
                     moveRanges, moveSources, maxMoveSegments,
                     totalPathLength, minFeed, maxFeed, bounds, cutFootprint
                 };
@@ -2372,6 +2421,9 @@
                 // ToolTable to ask the file directly.
                 get fileTools() { return data.fileTools; },
                 get toolColorIndex() { return data.toolColorIndex; },
+                // T number -> the lowest Z that tool cuts at, in order of first cut. See the
+                // parser's post-pass for what is and is not counted.
+                get toolMinZ() { return data.toolMinZ; },
                 get bounds() { return data.bounds; },
                 get cutFootprint() { return data.cutFootprint; },
                 get minFeed() { return data.minFeed; },
@@ -5266,7 +5318,11 @@
         // --- FileInfo ----------------------------------------------------------------
         // The read-only side of the sidebar, plus the loading badge over the 3D view.
         const FileInfo = (() => {
-            const { el } = Util;
+            const { el, escapeHtml } = Util;
+
+            function range(lo, hi) {
+                return `${lo.toFixed(2)} &hellip; ${hi.toFixed(2)} mm`;
+            }
 
             return {
                 setFile(name) {
@@ -5285,10 +5341,41 @@
                         ? '0 mm/min' : `${Program.maxFeed} mm/min`;
                 },
 
+                // The ranges are the same bounds the sizes are taken from, so Max minus Min
+                // is always the size stated on the row above -- travel included, since that
+                // is what the toolpath on screen spans.
                 showDimensions(bounds) {
                     el('dim-x').innerText = `${(bounds.maxX - bounds.minX).toFixed(2)} mm`;
                     el('dim-y').innerText = `${(bounds.maxY - bounds.minY).toFixed(2)} mm`;
                     el('dim-z').innerText = `${(bounds.maxZ - bounds.minZ).toFixed(2)} mm`;
+                    el('range-x').innerHTML = range(bounds.minX, bounds.maxX);
+                    el('range-y').innerHTML = range(bounds.minY, bounds.maxY);
+                },
+
+                // How deep each tool cuts. Named out of the tool table rather than the file
+                // header, exactly as the legends are, so a tool renamed in the dialog is
+                // renamed here too -- which is why App calls this from the tool change
+                // handler as well as from load.
+                //
+                // The names are the legend's, including its fallbacks: a row set to None has
+                // no geometry for describe() to describe, so a plain T number stands in.
+                showToolMinZ() {
+                    const host = el('tool-min-z');
+                    const entries = [...Program.toolMinZ];
+
+                    host.hidden = entries.length === 0;
+                    host.innerHTML = entries.length === 0 ? '' :
+                        `<div class="stats-subhead">Min Z By Tool</div>` +
+                        entries.map(([num, minZ]) => {
+                            const tool = num === null ? null : ToolTable.toolFor(num);
+                            const name = tool ? ToolGeometry.describe(tool)
+                                : (num === null ? 'No tool specified' : `T${num}`);
+                            return `
+                <div class="stats-row tool-min-z-row">
+                    <span>${escapeHtml(name)}</span>
+                    <span class="stats-value">${minZ.toFixed(2)} mm</span>
+                </div>`;
+                        }).join('');
                 }
             };
         })();
@@ -5859,6 +5946,8 @@
                 updateStockHint();
                 Legends.updateToolpath();
                 Legends.updateStock();
+                // Same reason: the depth list names its rows out of the tool table too.
+                FileInfo.showToolMinZ();
 
                 // The cut depends on the tool, so re-cut the stock from scratch. The grid
                 // itself is sized from the cutting extent and the margin alone, neither of
@@ -5890,6 +5979,10 @@
                     // runs against the wrong geometry and pays a full re-cut to correct itself.
                     Sidebar.setFileToolCount(Program.fileTools.size);
                     ToolTable.rebuild();
+
+                    // After the rebuild, not with the rest of the file stats above it: the
+                    // rows are named out of the table, which does not exist until here.
+                    FileInfo.showToolMinZ();
 
                     // Before anything can place the highlight: the longest command in this
                     // file decides how many instances it has to be able to draw.

@@ -53,6 +53,7 @@ becomes a hole, so centre holes, date windows and subdials are cut around automa
 | Clous de Paris | The square grid of tiny pyramids |
 | Basket Weave | A checkerboard of hatched blocks |
 | Barleycorn Arcs | Rings of overlapping arcs — grain d'orge |
+| Hour Markers | The hour indices — a ring of batons, dots, triangles or ticks, hatched or outlined |
 | Trace Outline | Follows the dial outline itself, at an offset |
 
 Every layer also has a **centre**, **rotation** and a **radius band**, so several can share
@@ -60,6 +61,11 @@ the dial — a sunburst in the middle, a rosette outside it, a traced border at 
 
 *Trace Outline* is the exception: it follows the outline itself and ignores both placement
 and the edge margin, since at no offset it *is* the edge.
+
+*Hour Markers* counts from twelve o'clock and runs clockwise; the layer's rotation turns the
+whole ring. Its markers are aligned on their outer ends, so lengthening one grows it towards
+the centre. Left at an outer radius of 0 they sit just inside the largest circle the dial
+holds, which is a sensible chapter ring whatever size the dial is.
 
 ## Containment
 
@@ -70,6 +76,13 @@ One thing to know: the margin clips the path the cutter *follows* — its centre
 itself is as wide as the tool makes it, so its edges stand half a width outside that. If the
 margin is narrower than the widest cut on the dial, a hint appears telling you what to raise
 it to.
+
+**Marker Clearance**, below it, is the same kind of rule against a different set of curves.
+An hour marker is a plate of engraved metal, and a guilloché that runs straight through it
+turns two clean shapes into one muddle — so every other layer is cut back this far from the
+outline of every marker. Marker layers are exempt from it, including each other's, and at 0
+the rule is off and the pattern runs on under the indices. It clips centrelines just as the
+edge margin does, so allow half a cut width on each side.
 
 ## Simulating the cut
 

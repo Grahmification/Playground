@@ -1315,6 +1315,23 @@
                 <input type="number" id="edge-margin" value="0.3" min="0" step="0.05">
                 <div id="margin-hint" class="hint" hidden></div>
             </div>
+            <!-- Beside the edge margin because it is the same kind of rule: a distance
+                 every pattern is held off something it must not run into. The one above is
+                 about where the metal ends, this one about where something has already
+                 been cut. -->
+            <div class="control-group">
+                <div class="label-row">
+                    <label for="marker-clearance">Marker Clearance (mm)</label>
+                    <span class="help" tabindex="0">?<span class="help-bubble">How far every other
+                        layer stops short of an hour marker, so the pattern behind the indices does
+                        not run through them. Only a layer that draws markers claims this space;
+                        marker layers themselves are never cut back by it. Like the edge margin it
+                        holds off the path the cutter follows, so allow for half a cut width on
+                        each side. 0 turns the rule off and lets the pattern run on under the
+                        markers.</span></span>
+                </div>
+                <input type="number" id="marker-clearance" value="0.3" min="0" step="0.05">
+            </div>
         </div>
 
         <!-- Pattern layers -->
@@ -2654,6 +2671,145 @@
             return { create, signedArea };
         })();
 
+        // --- Keepout -----------------------------------------------------------------
+        // The other thing a pattern is not allowed to run into.
+        //
+        // The dial's edge is a rule about where the metal ends. This is a rule about where
+        // something has already been cut: an hour marker is a plate of engraved metal, and
+        // a guilloché that runs straight through it turns two clean shapes into one muddle.
+        // So a layer that draws such shapes hands its outlines over here, and every other
+        // layer is clipped to stay a set distance off them -- the same erode-by-a-disc the
+        // edge margin does, against a different set of curves.
+        //
+        // Built fresh on every regeneration, from geometry that has already been placed in
+        // world coordinates but not yet clipped. Not yet clipped matters: a marker whose
+        // tip the dial's own margin trimmed should still hold the full plate's worth of
+        // clearance, or the background would creep in under the part that was cut away.
+        const Keepout = (() => {
+            // `shapes` are { pts, closed } in world coordinates -- a closed one blocks its
+            // whole interior, an open one only the band along it. Returns null when there
+            // is nothing to keep out of, which callers read as "no rule to apply".
+            function create(shapes, clearance) {
+                const pad = Math.max(clearance, 0);
+                if (!shapes.length) return null;
+
+                // Edges flattened across every shape, with each shape owning a run of them.
+                // One pass over a run answers both questions asked of that shape -- how far
+                // off it the point is, and whether the point is inside it -- so the two are
+                // never two walks over the same edges.
+                const ex1 = [], ey1 = [], ex2 = [], ey2 = [];
+                const plates = [];
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+                for (const shape of shapes) {
+                    const n = shape.pts.length / 2;
+                    if (n < 2) continue;
+                    const start = ex1.length;
+                    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+                    const last = shape.closed ? n : n - 1;
+                    for (let i = 0; i < last; i++) {
+                        const j = (i + 1) % n;
+                        ex1.push(shape.pts[i * 2]); ey1.push(shape.pts[i * 2 + 1]);
+                        ex2.push(shape.pts[j * 2]); ey2.push(shape.pts[j * 2 + 1]);
+                    }
+                    for (let i = 0; i < n; i++) {
+                        const x = shape.pts[i * 2];
+                        const y = shape.pts[i * 2 + 1];
+                        if (x < x0) x0 = x;
+                        if (x > x1) x1 = x;
+                        if (y < y0) y0 = y;
+                        if (y > y1) y1 = y;
+                    }
+                    if (ex1.length === start) continue;
+                    plates.push({
+                        start, end: ex1.length, closed: shape.closed,
+                        x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad
+                    });
+                    if (x0 - pad < minX) minX = x0 - pad;
+                    if (y0 - pad < minY) minY = y0 - pad;
+                    if (x1 + pad > maxX) maxX = x1 + pad;
+                    if (y1 + pad > maxY) maxY = y1 + pad;
+                }
+                if (!plates.length) return null;
+
+                // A grid over the plates rather than over their edges. There are a dozen or
+                // two of them and each is a couple of millimetres across, so what a query
+                // needs is to be told which handful of plates could possibly be in reach;
+                // once it has that, walking one plate's forty edges is nothing. Indexing
+                // the edges themselves would be a far bigger structure saying the same.
+                const width = Math.max(maxX - minX, 1e-6);
+                const height = Math.max(maxY - minY, 1e-6);
+                const cell = Util.clamp(Math.hypot(width, height) / 48, 1e-4, Infinity);
+                const gridW = Math.max(1, Math.ceil(width / cell) + 1);
+                const gridH = Math.max(1, Math.ceil(height / cell) + 1);
+                const grid = new Map();
+                const cellKey = (gx, gy) => gy * gridW + gx;
+                const colOf = x => Util.clamp(Math.floor((x - minX) / cell), 0, gridW - 1);
+                const rowOf = y => Util.clamp(Math.floor((y - minY) / cell), 0, gridH - 1);
+
+                for (let p = 0; p < plates.length; p++) {
+                    const plate = plates[p];
+                    for (let gx = colOf(plate.x0); gx <= colOf(plate.x1); gx++) {
+                        for (let gy = rowOf(plate.y0); gy <= rowOf(plate.y1); gy++) {
+                            const k = cellKey(gx, gy);
+                            let bucket = grid.get(k);
+                            if (!bucket) { bucket = []; grid.set(k, bucket); }
+                            bucket.push(p);
+                        }
+                    }
+                }
+
+                const pad2 = pad * pad;
+
+                function distanceSq(px, py, i) {
+                    const vx = ex2[i] - ex1[i];
+                    const vy = ey2[i] - ey1[i];
+                    const len2 = vx * vx + vy * vy;
+                    let t = len2 < 1e-18 ? 0 : ((px - ex1[i]) * vx + (py - ey1[i]) * vy) / len2;
+                    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+                    const dx = px - (ex1[i] + vx * t);
+                    const dy = py - (ey1[i] + vy * t);
+                    return dx * dx + dy * dy;
+                }
+
+                // True where nothing else may be cut: inside one of the plates, or within
+                // the clearance of its border. The clearance is measured to the border and
+                // not to the plate's centre, so widening a marker pushes the background
+                // back by exactly as much as the marker grew.
+                function blocks(x, y) {
+                    if (x < minX || x > maxX || y < minY || y > maxY) return false;
+                    const bucket = grid.get(cellKey(colOf(x), rowOf(y)));
+                    if (!bucket) return false;
+
+                    for (let b = 0; b < bucket.length; b++) {
+                        const plate = plates[bucket[b]];
+                        if (x < plate.x0 || x > plate.x1 || y < plate.y0 || y > plate.y1) continue;
+
+                        let crossings = 0;
+                        for (let i = plate.start; i < plate.end; i++) {
+                            if (pad2 > 0 && distanceSq(x, y, i) < pad2) return true;
+                            // Even-odd along +X, as everywhere else in this program. An
+                            // open shape has no inside to be in, so it is skipped: a tick
+                            // marker is a stroke, and all it can claim is the band the
+                            // clearance gives it.
+                            if (!plate.closed) continue;
+                            const yA = ey1[i];
+                            const yB = ey2[i];
+                            if ((yA > y) === (yB > y)) continue;
+                            const t = (y - yA) / (yB - yA);
+                            if (ex1[i] + t * (ex2[i] - ex1[i]) > x) crossings++;
+                        }
+                        if ((crossings & 1) === 1) return true;
+                    }
+                    return false;
+                }
+
+                return { blocks };
+            }
+
+            return { create };
+        })();
+
         // --- Waveform ----------------------------------------------------------------
         // The cam profiles a rose engine's rubber rides on, as pure functions of phase.
         // Several patterns share them, and swapping one for another is the single biggest
@@ -2777,6 +2933,11 @@
         //                     rule in the program exists to forbid; a border is the one
         //                     thing that has to be allowed to sit there.
         //
+        // A generator may also mark individual paths `keepOut: true`. Those are shapes the
+        // rest of the dial has to stay off -- the outline of an hour marker, so a rosette
+        // does not run through the index. A layer that marks any is exempt from the rule
+        // itself, or the markers would erase each other and then themselves.
+        //
         // Every count is clamped where it is read. The parameters are free-typed numbers,
         // and a spacing of 0.001 on a 40mm dial would otherwise ask for forty thousand
         // rings before anything got a chance to notice.
@@ -2830,6 +2991,118 @@
                     if (!ctx.room()) return;
                     out.push(straightLine(ux, uy, k * step + (phase || 0), half));
                     ctx.spend(2);
+                }
+            }
+
+            // Parallel fill passes clipped to a closed polygon, in the polygon's own
+            // frame, as flat [x0,y0,x1,y1] segments.
+            //
+            // A scanline sweep rather than a proper inward offset: what gets filled here
+            // is a small convex plate a couple of millimetres long, so the crossings
+            // along any one line are a handful that pair off left to right. An offsetting
+            // fill would cost a great deal of machinery to say the same thing about
+            // shapes this simple.
+            function hatchPolygon(pts, angleDeg, spacing) {
+                const out = [];
+                const n = pts.length / 2;
+                if (n < 3) return out;
+
+                // Into the hatch's own frame, where every fill pass is horizontal and the
+                // sweep is a walk up y. Turning the shape rather than the lines is what
+                // keeps the crossing test one comparison per edge.
+                const a = angleDeg * DEG;
+                const ca = Math.cos(a);
+                const sa = Math.sin(a);
+                const rx = new Float64Array(n);
+                const ry = new Float64Array(n);
+                let minY = Infinity;
+                let maxY = -Infinity;
+                for (let i = 0; i < n; i++) {
+                    const x = pts[i * 2];
+                    const y = pts[i * 2 + 1];
+                    rx[i] = x * ca + y * sa;
+                    ry[i] = -x * sa + y * ca;
+                    if (ry[i] < minY) minY = ry[i];
+                    if (ry[i] > maxY) maxY = ry[i];
+                }
+
+                const step = Math.max(spacing, 0.02);
+                const rows = Util.clamp(Math.floor((maxY - minY) / step), 1, 4000);
+                // Centred in the plate rather than started at its edge, so the outermost
+                // pass is a pass and not a zero-length graze along a corner, and so the
+                // fill stays symmetric when the plate is not a whole number of steps wide.
+                const first = minY + ((maxY - minY) - (rows - 1) * step) / 2;
+
+                const xs = [];
+                for (let k = 0; k < rows; k++) {
+                    const y = first + k * step;
+                    xs.length = 0;
+                    for (let i = 0; i < n; i++) {
+                        const j = (i + 1) % n;
+                        const y0 = ry[i];
+                        const y1 = ry[j];
+                        // Half-open: an edge counts only if the line separates its ends.
+                        // A vertex sitting exactly on the line is then counted by one of
+                        // the two edges that meet there and not by both, which is what
+                        // stops a corner opening a spurious span.
+                        if ((y0 <= y) === (y1 <= y)) continue;
+                        const t = (y - y0) / (y1 - y0);
+                        xs.push(rx[i] + (rx[j] - rx[i]) * t);
+                    }
+                    if (xs.length < 2) continue;
+                    xs.sort((u, v) => u - v);
+                    for (let i = 0; i + 1 < xs.length; i += 2) {
+                        if (xs[i + 1] - xs[i] < 1e-9) continue;
+                        out.push([
+                            xs[i] * ca - y * sa, xs[i] * sa + y * ca,
+                            xs[i + 1] * ca - y * sa, xs[i + 1] * sa + y * ca
+                        ]);
+                    }
+                }
+                return out;
+            }
+
+            // One hour marker, drawn flat: u runs outward from the marker's inner end and
+            // v across it, so the plate occupies u in [0, length] and v in +/- half the
+            // width. Built once in this frame and then placed at each hour, which is what
+            // makes a ring of markers copies of one plate rather than a ring of near
+            // misses.
+            function markerShape(shape, length, width) {
+                const L = length;
+                const h = width / 2;
+                switch (shape) {
+                    // The one marker that is a stroke rather than a plate: it has no
+                    // inside, so there is nothing for the hatch to fill.
+                    case 'tick':
+                        return { pts: [0, 0, L, 0], closed: false };
+                    case 'dot': {
+                        const r = Math.min(h, L / 2);
+                        return circle(L / 2, 0, r, 0, TAU, Math.min(0.05, 0.06 / r));
+                    }
+                    // Apex inward, pointing at the centre of the dial -- which is the way
+                    // round a triangular index is nearly always cut.
+                    case 'triangle':
+                        return { pts: [0, 0, L, h, L, -h], closed: true };
+                    case 'diamond':
+                        return { pts: [0, 0, L / 2, h, L, 0, L / 2, -h], closed: true };
+                    case 'rounded': {
+                        // The straight flanks are whatever the two caps leave between
+                        // them, which at a length of one width is nothing at all and the
+                        // marker is simply a disc.
+                        const r = Math.min(h, L / 2);
+                        const pts = [];
+                        const cap = (cu, from) => {
+                            for (let i = 0; i <= 12; i++) {
+                                const a = from + Math.PI * (i / 12);
+                                pts.push(cu + Math.cos(a) * r, Math.sin(a) * r);
+                            }
+                        };
+                        cap(L - r, -Math.PI / 2);
+                        cap(r, Math.PI / 2);
+                        return { pts, closed: true };
+                    }
+                    default:
+                        return { pts: [0, -h, L, -h, L, h, 0, h], closed: true };
                 }
             }
 
@@ -3554,6 +3827,126 @@
                         }
                         return out;
                     }
+                },
+
+                'indices': {
+                    label: 'Hour Markers (Indices)',
+                    note: 'The hour indices of a dial: a ring of identical plates, aligned on ' +
+                          'their outer ends and pointing at the centre. Hatched, they read as ' +
+                          'metal taken out rather than as an outline drawn on.',
+                    params: [
+                        { k: 'count', label: 'Markers', type: 'number', value: 12, min: 1, max: 240, step: 1,
+                          help: 'Evenly spaced, the first at twelve o’clock and the rest running ' +
+                                'clockwise from it. The layer’s rotation turns the whole ring.' },
+                        { k: 'shape', label: 'Shape', type: 'select', value: 'baton', options: [
+                            ['baton', 'Baton'], ['rounded', 'Rounded Baton'], ['dot', 'Dot'],
+                            ['triangle', 'Triangle'], ['diamond', 'Diamond'], ['tick', 'Tick (single line)']
+                        ] },
+                        { k: 'outerRadius', label: 'Outer Radius (0 = near edge)', type: 'number', value: 0, min: 0, step: 0.5,
+                          help: 'Where the outer end of every marker sits. At zero they are set ' +
+                                'just inside the largest circle the dial holds, which is a ' +
+                                'sensible chapter ring on a dial of any size.' },
+                        { k: 'length', label: 'Length (mm)', type: 'number', value: 2.6, min: 0.05, step: 0.2,
+                          help: 'Measured inwards from the outer radius, so a longer marker grows ' +
+                                'towards the centre and the ring stays aligned at its rim.' },
+                        { k: 'width', label: 'Width (mm)', type: 'number', value: 0.9, min: 0.05, step: 0.1 },
+                        { k: 'quarters', label: 'Quarter Markers (%)', type: 'number', value: 100, min: 10, max: 400, step: 5,
+                          help: 'Lengthens or shortens the markers at twelve, three, six and ' +
+                                'nine — the usual way a dial calls out its quarters. It does ' +
+                                'nothing unless the count divides into four.' },
+                        { k: 'double', label: 'Double marker at twelve', type: 'check', value: false,
+                          help: 'Cuts the twelve as a pair side by side, the commonest way a dial ' +
+                                'says which way is up.' },
+                        { k: 'hatch', label: 'Hatch the markers', type: 'check', value: true,
+                          help: 'Fills each marker with parallel passes as well as cutting its ' +
+                                'outline, so the whole plate is engraved and not just its ' +
+                                'border. A tick has no inside and ignores this.' },
+                        { k: 'hatchSpacing', label: 'Hatch Spacing (mm)', type: 'number', value: 0.25, min: 0.02, step: 0.05,
+                          help: 'Set this at or just under the width of the cut and the passes ' +
+                                'meet, which is what clears the plate rather than combing it.' },
+                        { k: 'hatchAngle', label: 'Hatch Angle (°)', type: 'number', value: 90, step: 15,
+                          help: 'Measured against the marker itself rather than the dial, so ' +
+                                'every marker is filled the same way whatever hour it stands ' +
+                                'at. 90° lays the passes across the marker; 0° runs them along ' +
+                                'it, which on a long baton is the shorter toolpath.' }
+                    ],
+                    generate(p, ctx) {
+                        const count = Util.clamp(Math.round(p.count), 1, 240);
+                        const width = Math.max(p.width, 0.05);
+                        // Just inside the largest circle that fits, rather than on it: a
+                        // marker whose tip lands exactly on the edge is a marker the margin
+                        // trims flat, and a blunted index reads as a mistake in a way a
+                        // shortened ray never does.
+                        const outer = p.outerRadius > 0 ? p.outerRadius : ctx.fitRadius * 0.95;
+                        if (!(outer > 0)) return [];
+
+                        // Far enough apart to read as two markers and not as one wide one:
+                        // the gap between the pair is a little over half either's width.
+                        const split = width * 0.9;
+                        const quarters = count % 4 === 0 ? Util.clamp(p.quarters, 10, 400) / 100 : 1;
+
+                        const plate = (len) => {
+                            const length = Util.clamp(len, 0.05, outer);
+                            const shape = markerShape(p.shape, length, width);
+                            return {
+                                shape,
+                                inner: outer - length,
+                                fill: p.hatch && shape.closed
+                                    ? hatchPolygon(shape.pts, p.hatchAngle, p.hatchSpacing)
+                                    : []
+                            };
+                        };
+                        // Two plates at most, whatever the count: the plain marker and, where
+                        // the quarters are called out, the longer one. Everything on the dial
+                        // is one of these two placed twelve times over.
+                        const plain = plate(Math.max(p.length, 0.05));
+                        const quarter = quarters === 1 ? plain : plate(Math.max(p.length, 0.05) * quarters);
+
+                        const out = [];
+                        for (let i = 0; i < count; i++) {
+                            if (!ctx.room()) break;
+                            // Clockwise from twelve, which is where a dial counts from. Where
+                            // the ring as a whole sits is the layer's business, not the
+                            // pattern's, so nothing here reads the rotation.
+                            const a = Math.PI / 2 - (i / count) * TAU;
+                            const ca = Math.cos(a);
+                            const sa = Math.sin(a);
+                            const isQuarter = quarters !== 1 && i % (count / 4) === 0;
+                            const { shape, inner, fill } = isQuarter ? quarter : plain;
+
+                            for (const off of (p.double && i === 0) ? [-split, split] : [0]) {
+                                if (!ctx.room()) break;
+                                // The marker's own frame laid onto the dial: u outward along
+                                // the radius, v across it. Straight edges stay straight --
+                                // this places the plate, it does not bend it round the ring.
+                                const place = (src) => {
+                                    const pts = [];
+                                    for (let k = 0; k < src.length; k += 2) {
+                                        const u = inner + src[k];
+                                        const v = src[k + 1] + off;
+                                        pts.push(u * ca - v * sa, u * sa + v * ca);
+                                    }
+                                    return pts;
+                                };
+
+                                // The outline, and only the outline, is what the other
+                                // layers are held off: it is the border of the plate, so
+                                // the clearance measured from it is the clearance from the
+                                // marker. The hatch inside it would say the same thing
+                                // many times over and more slowly.
+                                const pts = place(shape.pts);
+                                out.push({ pts, closed: shape.closed, keepOut: true });
+                                ctx.spend(pts.length / 2);
+
+                                for (const segment of fill) {
+                                    if (!ctx.room()) break;
+                                    out.push({ pts: place(segment), closed: false });
+                                    ctx.spend(2);
+                                }
+                            }
+                        }
+                        return out;
+                    }
                 }
             };
 
@@ -3609,7 +4002,7 @@
             const ORDER = [
                 'rosette-spiral', 'rosette-rings', 'spirograph', 'spirograph-field',
                 'spiral-vortex', 'log-spiral', 'waves', 'sunburst', 'concentric',
-                'crosshatch', 'clous', 'basket', 'arcs', 'trace'
+                'crosshatch', 'clous', 'basket', 'arcs', 'indices', 'trace'
             ];
 
             function defaults(type) {
@@ -4883,7 +5276,7 @@
 
             // Anything here changes what is generated.
             const REGENERATE_INPUTS = [
-                'dxf-units', 'join-tol', 'edge-margin',
+                'dxf-units', 'join-tol', 'edge-margin', 'marker-clearance',
                 'layer-cx', 'layer-cy', 'layer-rot', 'layer-rmin', 'layer-rmax',
                 'layer-cutter', 'layer-depth', 'layer-angle', 'layer-radius'
             ];
@@ -4906,6 +5299,7 @@
                     units: el('dxf-units').value,
                     joinTolerance: Math.max(readNumber('join-tol', 0.05), 0),
                     margin: Math.max(readNumber('edge-margin', 0), 0),
+                    markerClearance: Math.max(readNumber('marker-clearance', 0), 0),
                     thickness: Math.max(readNumber('dial-thickness', 0.6), 0.05),
                     material: el('dial-material').value
                 };
@@ -4921,6 +5315,9 @@
                 setChoice('dxf-units', saved.units);
                 setNumber('join-tol', saved.joinTolerance);
                 setNumber('edge-margin', saved.margin);
+                // A file written before this setting existed simply leaves the field at its
+                // default, which is what setNumber does with an absent value anyway.
+                setNumber('marker-clearance', saved.markerClearance);
                 setNumber('dial-thickness', saved.thickness);
                 setChoice('dial-material', saved.material);
                 // The machining settings belong to the export dialog, which restores its
@@ -6518,6 +6915,14 @@
                 let totalLength = 0;
                 let truncated = false;
 
+                // Two passes, and the reason is the marker clearance. A layer cannot be
+                // clipped until every keep-out shape on the dial is known, and those are
+                // themselves drawn by layers -- so everything is generated and placed
+                // first, and only then does anything get cut back. Nothing else about the
+                // job wants two passes; this alone does.
+                const drawn = [];
+                const keepOuts = [];
+
                 for (const layer of Layers.list) {
                     if (!layer.enabled) continue;
                     const definition = Patterns.get(layer.type);
@@ -6554,35 +6959,17 @@
                     const local = definition.generate(Layers.ensureValues(layer), ctxFor(reach, fitRadius));
                     if (budget <= 0 && before > 0) truncated = true;
 
-                    // The containment rule, assembled: inside the outline, clear of every
-                    // edge by the margin, and inside this layer's own band. One predicate,
-                    // handed to the clipper, which is the only code that acts on it.
-                    const rMin2 = layer.rMin * layer.rMin;
-                    const rMax2 = layer.rMax * layer.rMax;
-                    const margin = settings.margin;
-                    const inside = (x, y) => {
-                        const dx = x - cx;
-                        const dy = y - cy;
-                        const d2 = dx * dx + dy * dy;
-                        if (d2 < rMin2) return false;
-                        if (layer.rMax > 0 && d2 > rMax2) return false;
-                        if (!boundary.contains(x, y)) return false;
-                        return !(margin > 0 && boundary.nearEdge(x, y, margin));
-                    };
-
+                    // Stated by the pattern itself, so the exceptional cases live in its
+                    // definition rather than as a name checked for here.
+                    const world = definition.world === true;
                     const angle = layer.rot * Math.PI / 180;
                     const ca = Math.cos(angle);
                     const sa = Math.sin(angle);
-                    const polys = [];
-
-                    // Both stated by the pattern itself, so the two exceptional cases live
-                    // in its definition rather than as a name checked for here.
-                    const world = definition.world === true;
-                    const contained = definition.contained !== false;
+                    let claims = false;
 
                     for (const path of local) {
                         // Into world coordinates, in place: the generator's output is
-                        // private to this loop and nothing else will read it. A world-space
+                        // private to this pass and nothing else will read it. A world-space
                         // pattern is already there.
                         const pts = path.pts;
                         if (!world) {
@@ -6593,16 +6980,63 @@
                                 pts[i + 1] = cy + x * sa + y * ca;
                             }
                         }
+                        // Collected before anything is clipped, and that is the point: a
+                        // marker whose tip the edge margin trims should still hold the
+                        // whole plate's clearance, or the background would creep in under
+                        // the part that was cut away.
+                        if (path.keepOut) {
+                            keepOuts.push({ pts, closed: path.closed });
+                            claims = true;
+                        }
+                    }
+
+                    drawn.push({ layer, definition, local, cx, cy, claims });
+                }
+
+                // Every keep-out on the dial is known now, so the rule can be built once
+                // and handed to every layer that has to obey it. At a clearance of zero
+                // there is no rule at all, and the background runs on under the markers --
+                // which is a dial anyone might want, and the only way to ask for it.
+                const keepout = settings.markerClearance > 0
+                    ? Keepout.create(keepOuts, settings.markerClearance)
+                    : null;
+
+                for (const { layer, definition, local, cx, cy, claims } of drawn) {
+                    // The containment rule, assembled: inside the outline, clear of every
+                    // edge by the margin, off every marker by the clearance, and inside
+                    // this layer's own band. One predicate, handed to the clipper, which is
+                    // the only code that acts on it.
+                    const rMin2 = layer.rMin * layer.rMin;
+                    const rMax2 = layer.rMax * layer.rMax;
+                    const margin = settings.margin;
+                    // A layer that drew keep-outs is exempt from them -- otherwise the
+                    // markers would clear each other, and then themselves.
+                    const blocked = keepout && !claims ? keepout.blocks : null;
+                    const inside = (x, y) => {
+                        const dx = x - cx;
+                        const dy = y - cy;
+                        const d2 = dx * dx + dy * dy;
+                        if (d2 < rMin2) return false;
+                        if (layer.rMax > 0 && d2 > rMax2) return false;
+                        if (!boundary.contains(x, y)) return false;
+                        if (blocked && blocked(x, y)) return false;
+                        return !(margin > 0 && boundary.nearEdge(x, y, margin));
+                    };
+
+                    const contained = definition.contained !== false;
+                    const polys = [];
+
+                    for (const path of local) {
                         // Collapsed here, once, rather than in the exporter: everything
                         // downstream reads `polys`, so the cut geometry, the mask, the line
                         // preview, all three exports and the statistics all get the shorter
                         // list. On a straight-line pattern that is most of the geometry
                         // budget back, not just a smaller file.
                         if (!contained) {
-                            polys.push(Util.collapseCollinear(pts, COLLINEAR_TOLERANCE));
+                            polys.push(Util.collapseCollinear(path.pts, COLLINEAR_TOLERANCE));
                             continue;
                         }
-                        for (const clipped of Clipper.clip(pts, path.closed, inside, maxStep)) {
+                        for (const clipped of Clipper.clip(path.pts, path.closed, inside, maxStep)) {
                             polys.push(Util.collapseCollinear(clipped, COLLINEAR_TOLERANCE));
                         }
                     }
@@ -6687,6 +7121,7 @@
                         units: settings.units,
                         joinTolerance: settings.joinTolerance,
                         margin: settings.margin,
+                        markerClearance: settings.markerClearance,
                         thickness: settings.thickness,
                         material: settings.material,
                         // Only what belongs to the job. The per-layer machining settings
