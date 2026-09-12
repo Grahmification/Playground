@@ -56,7 +56,7 @@
 
         <!-- Cut off rather than wrapped, to hold the bar to one line. Controls hangs
              the full text off the title attribute, where the warnings stay readable. -->
-        <p id="statusText" role="status" aria-live="polite" class="text-xs text-gray-500 flex-1 min-w-0 truncate border-l border-gray-200 pl-3">Awaiting dataset upload...</p>
+        <p id="statusText" role="status" aria-live="polite" title="Upload a time-series dataset to view spectral charts and data tables." class="text-xs text-gray-500 flex-1 min-w-0 truncate border-l border-gray-200 pl-3">Upload a time-series dataset to view spectral charts and data tables.</p>
 
         <div class="flex items-center gap-3 shrink-0">
             <!-- Export CSV Dropdown Container -->
@@ -110,12 +110,8 @@
     <div class="flex flex-1 flex-col md:flex-row">
 
     <!-- Sidebar Controls -->
-    <aside class="w-full md:w-72 bg-white border-r border-gray-200 p-4 flex flex-col justify-between shadow-sm shrink-0">
+    <aside class="w-full md:w-72 bg-white border-r border-gray-200 p-4 flex flex-col shadow-sm shrink-0">
         <div>
-            <p class="text-xs text-gray-600 mb-4">
-                Upload time-series data to view standardized spectral charts and data tables.
-            </p>
-
             <!-- Non-Power-of-2 Handling Strategy -->
             <div class="mb-4">
                 <label class="block mb-1 text-[11px] font-semibold text-gray-500" for="padStrategy">Data Framing / Length Strategy</label>
@@ -219,24 +215,20 @@
                 </div>
             </div>
         </div>
-
-        <div class="text-[10px] text-gray-400 mt-4 pt-2 border-t border-gray-100">
-            Powered by Plotly, PapaParse &amp; Native FFT
-        </div>
     </aside>
 
     <!-- Main Content Area. `isolate` keeps Plotly's modebar, which carries a z-index
          of 1001 of its own, from riding over the top bar as the page scrolls. -->
     <!-- No overflow clipping here: it would make main a scroll container and strand
          the side panel's sticky positioning. The body clips the slide-in horizontally. -->
-    <main class="flex-1 min-w-0 p-3 md:p-4 flex gap-4 w-full isolate">
-    <div class="flex-1 min-w-0 flex flex-col gap-4">
+    <main class="flex-1 min-w-0 p-2 flex gap-2 w-full isolate">
+    <div class="flex-1 min-w-0 flex flex-col gap-2">
         <!-- Tab 1: Charts View -->
-        <div id="viewCharts" role="tabpanel" aria-labelledby="tabChartsBtn" class="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1">
+        <div id="viewCharts" role="tabpanel" aria-labelledby="tabChartsBtn" class="grid grid-cols-1 xl:grid-cols-2 gap-2 flex-1">
             <!-- Time Domain Chart Card -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
                 <h3 class="text-xs font-bold text-gray-600 mb-1">Time Domain</h3>
-                <div class="relative w-full h-[380px]">
+                <div class="relative w-full h-[340px]">
                     <div id="timeChart" class="w-full h-full" role="figure" aria-label="Time domain chart: the processed input signal with any active reconstructions overlaid. The same values are listed in the Spectral Table tab."></div>
                 </div>
             </div>
@@ -251,7 +243,7 @@
                         Show PSD
                     </label>
                 </div>
-                <div class="relative w-full h-[380px]">
+                <div class="relative w-full h-[340px]">
                     <div id="fftChart" class="w-full h-full" role="figure" aria-label="FFT magnitude spectrum, with detected peaks and the magnitude threshold cutoff. Per-bin values are listed in the Spectral Table tab."></div>
                 </div>
             </div>
@@ -265,7 +257,7 @@
                         Unwrap
                     </label>
                 </div>
-                <div class="relative w-full h-[380px]">
+                <div class="relative w-full h-[340px]">
                     <div id="phaseChart" class="w-full h-full" role="figure" aria-label="Phase spectrum in radians, unwrapped or wrapped to ±π as selected. Both are listed per bin in the Spectral Table tab."></div>
                 </div>
             </div>
@@ -274,7 +266,7 @@
                  as it, so the pair reads as two views of the one set of angles. -->
             <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col">
                 <h3 class="text-xs font-bold text-gray-600 mb-1">Polar Phase</h3>
-                <div class="relative w-full h-[380px]">
+                <div class="relative w-full h-[340px]">
                     <div id="polarPhaseChart" class="w-full h-full" role="figure" aria-label="Each spectral component's phase projected onto the unit circle in the complex plane."></div>
                 </div>
             </div>
@@ -319,7 +311,7 @@
              pixels - and as a flex item that height would set main's, which the charts
              grid then stretches its rows to fill. Sticky, so it stays put while the
              column of plots beside it scrolls. -->
-        <aside id="sidePanel" class="hidden fixed z-30 top-14 right-3 bottom-3 w-[calc(100%-1.5rem)] max-w-sm xl:sticky xl:top-16 xl:right-auto xl:bottom-auto xl:w-1/2 xl:max-w-none xl:shrink-0 xl:self-start xl:h-[calc(100vh-5rem)] bg-white rounded-lg border border-gray-200 shadow-xl xl:shadow-sm flex flex-col overflow-hidden">
+        <aside id="sidePanel" class="hidden fixed z-30 top-12 right-2 bottom-2 w-[calc(100%-1rem)] max-w-sm xl:sticky xl:right-auto xl:bottom-auto xl:w-1/2 xl:max-w-none xl:shrink-0 xl:self-start xl:h-[calc(100vh-4rem)] bg-white rounded-lg border border-gray-200 shadow-xl xl:shadow-sm flex flex-col overflow-hidden">
             <div class="px-3 py-2 border-b border-gray-200 bg-gray-50 flex justify-between items-center gap-2 shrink-0">
                 <h3 class="text-xs font-bold text-gray-600">Spectral Components</h3>
                 <div class="flex items-center gap-2">
